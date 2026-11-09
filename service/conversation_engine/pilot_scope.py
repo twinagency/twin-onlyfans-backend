@@ -565,3 +565,115 @@ class ProviderRequestGuard:
                 if mock_wire is not True:
                     raise Refused('fixture scope requires a simulated provider transport')
         reserve_provider_request(self.store, self.tenant, self.account, expected_revision=self.revision)
+
+
+def authorize_stopped_backfill(store, tenant, account, *, expected_revision, actor, reason,
+                               command_key, start_date, request_limit, base):
+    """Record one bounded read-only preparation authorization before provider I/O."""
+    from sqlalchemy import func
+    from fans_api_adapter.history import ALLOWED_BASES
+    _command(command_key, actor, reason)
+    if (type(expected_revision) is not int or expected_revision < 1
+            or type(start_date) is not datetime or start_date.tzinfo is not None
+            or start_date.year < 2000 or start_date > utcnow()
+            or type(request_limit) is not int or not 2 <= request_limit <= 201
+            or base not in ALLOWED_BASES):
+        raise Refused('invalid stopped backfill authorization')
+    request_hash = _fingerprint(['stopped_backfill', tenant, account, expected_revision,
+                                 actor, reason, start_date.isoformat(), request_limit, base])
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        row, config = require(s, runtime, lock=True)
+        authorize(config, actor, 'reconcile')
+        policy = s.get(OfDeliveryPolicy, account)
+        if (row.status != 'stopped' or row.revision != expected_revision
+                or runtime.enabled or policy is None or policy.enabled):
+            raise Refused('stopped backfill requires disabled runtime and policy')
+        connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
+            OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active'))
+        if connection is None:
+            raise Refused('stopped backfill requires an active provider binding')
+        prior = s.get(OfLaunchCommand, (account, command_key))
+        if prior is not None:
+            if prior.kind != 'plan_c_backfill' or prior.request_hash != request_hash:
+                raise Refused('pilot command key conflict')
+            saved = json.loads(prior.result_json)
+        else:
+            count = s.scalar(select(func.count()).select_from(OfLaunchCommand).where(
+                OfLaunchCommand.account_id == account, OfLaunchCommand.kind.in_(('plan_c_scope', 'account_control'))))
+            saved = {'binding':runtime.binding_id, 'revision':row.revision, 'fans':config['fans'],
+                'provider_account':connection.provider_account_id, 'creator':connection.provider_creator_id,
+                'epoch':connection.epoch, 'base':base, 'start':start_date.isoformat(),
+                'request_limit':request_limit, 'requests_before':row.provider_requests_used,
+                'scope_commands':count, 'policy_revision':policy.revision}
+            s.add(OfLaunchCommand(account_id=account, command_key=command_key, binding_id=runtime.binding_id,
+                kind='plan_c_backfill', request_hash=request_hash, actor=actor, reason=reason,
+                before_json=_encoded({'status':row.status, 'revision':row.revision,
+                                      'requests':row.provider_requests_used}),
+                result_json=_encoded(saved), created_at=utcnow()))
+    return StoppedBackfillGuard(store, tenant, account, command_key, actor, saved)
+
+
+class StoppedBackfillGuard:
+    """Only identity and scoped history/financial GETs; never authorizes a send."""
+    def __init__(self, store, tenant, account, command_key, actor, evidence):
+        self.store, self.tenant, self.account = store, tenant, account
+        self.command_key, self.actor, self.evidence = command_key, actor, evidence
+        self.revision = evidence['revision']
+
+    def _check(self, s, *, mock_wire):
+        from sqlalchemy import func
+        runtime = self.store._runtime(s, self.tenant, self.account)
+        row, config = require(s, runtime, lock=True)
+        authorize(config, self.actor, 'reconcile')
+        policy = s.get(OfDeliveryPolicy, self.account)
+        receipt = s.get(OfLaunchCommand, (self.account, self.command_key))
+        count = s.scalar(select(func.count()).select_from(OfLaunchCommand).where(
+            OfLaunchCommand.account_id == self.account, OfLaunchCommand.kind.in_(('plan_c_scope', 'account_control'))))
+        conn = s.get(OfFansConnection, (self.account, self.evidence['epoch']))
+        if (receipt is None or receipt.kind != 'plan_c_backfill' or receipt.actor != self.actor
+                or receipt.result_json != _encoded(self.evidence)
+                or receipt.binding_id != runtime.binding_id or row.binding_id != self.evidence['binding']
+                or row.status != 'stopped' or row.revision != self.revision or runtime.enabled
+                or policy is None or policy.enabled or policy.revision != self.evidence['policy_revision']
+                or count != self.evidence['scope_commands']
+                or config['fans'] != self.evidence['fans'] or conn is None or conn.status != 'active'
+                or conn.binding_id != runtime.binding_id or conn.provider_account_id != self.evidence['provider_account']
+                or conn.provider_creator_id != self.evidence['creator']):
+            raise Refused('stopped backfill authorization changed')
+        if config['qualification']['mode'] == 'fixture' and mock_wire is not True:
+            raise Refused('fixture scope requires a simulated provider transport')
+        return row, config
+
+    def check_run(self, client, *, reason, start_date, pages_budget, chats):
+        if (reason != 'operator' or start_date != datetime.fromisoformat(self.evidence['start'])
+                or tuple(map(str, chats)) != tuple(map(str, self.evidence['fans']))
+                or type(pages_budget) is not int or pages_budget > self.evidence['request_limit'] - 1
+                or client.account != self.evidence['provider_account']
+                or client.creator_id != self.evidence['creator'] or client.epoch != self.evidence['epoch']
+                or client.base != self.evidence['base']):
+            raise Refused('backfill does not match stopped authorization')
+
+    def __call__(self, method, url, mock_wire=False):
+        from urllib.parse import urlsplit
+        if method != 'GET' or type(url) is not str:
+            raise Refused('stopped backfill permits only GET')
+        parts = urlsplit(url)
+        origin = urlsplit(self.evidence['base'])
+        paths = {'/api/accounts', '/api/' + self.evidence['provider_account'] + '/transactions',
+                 '/api/' + self.evidence['provider_account'] + '/chargebacks'}
+        paths.update('/api/' + self.evidence['provider_account'] + '/chats/' + str(fan) + '/messages'
+                     for fan in self.evidence['fans'])
+        if (parts.scheme != origin.scheme or parts.netloc != origin.netloc
+                or parts.path not in paths or parts.fragment or parts.username or parts.password):
+            raise Refused('provider request outside stopped backfill scope')
+        with Session(self.store.engine) as s, s.begin():
+            row, config = self._check(s, mock_wire=mock_wire)
+            limits = config['limits']
+            if (row.provider_requests_used - self.evidence['requests_before'] >= self.evidence['request_limit']
+                    or row.provider_requests_used >= limits['provider_requests']
+                    or row.provider_credits_reserved + limits['provider_credits_per_request'] > limits['provider_credit_budget']):
+                raise Refused('pilot provider request budget exhausted')
+            row.provider_requests_used += 1
+            row.provider_credits_reserved += limits['provider_credits_per_request']
+            row.updated_at = utcnow()

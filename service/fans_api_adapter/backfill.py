@@ -49,13 +49,14 @@ class FansBackfill:
         return max(seen) - OVERLAP
 
     def _pilot_guard(self, tenant, account, client, chats=()):
-        from conversation_engine.pilot_scope import current, ProviderRequestGuard
+        from conversation_engine.pilot_scope import current, ProviderRequestGuard, StoppedBackfillGuard
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
             scope, config = current(s, runtime)
             if scope is not None:
                 guard = getattr(client, '_request_guard', None)
-                if (scope.status != 'active' or type(guard) is not ProviderRequestGuard
+                if (not ((scope.status == 'active' and type(guard) is ProviderRequestGuard)
+                         or (scope.status == 'stopped' and type(guard) is StoppedBackfillGuard))
                         or guard.store is not self.store or guard.tenant != tenant or guard.account != account
                         or guard.revision != scope.revision
                         or any(str(chat) not in set(map(str, config['fans'])) for chat in chats)):
@@ -73,6 +74,18 @@ class FansBackfill:
             run = s.scalar(select(OfFansBackfill).where(OfFansBackfill.account_id == account,
                 OfFansBackfill.status.in_(('running', 'budget_exhausted'))).order_by(OfFansBackfill.started_at.desc())
                 .limit(1).with_for_update())
+            guard = getattr(client, '_request_guard', None)
+            from conversation_engine.pilot_scope import StoppedBackfillGuard
+            if type(guard) is StoppedBackfillGuard:
+                effective_start = run.start_date if run is not None else start_date
+                if start_date is not None and start_date != effective_start:
+                    raise Refused('backfill start conflicts with existing cursor')
+                guard.check_run(client, reason=reason, start_date=effective_start,
+                                pages_budget=pages_budget, chats=history_chats)
+                if run is not None and (run.reason != reason or
+                        set(json.loads(run.marker).get('chats', ())) |
+                        set(json.loads(run.marker).get('done_chats', ())) != set(map(str, history_chats))):
+                    raise Refused('existing cursor does not match stopped authorization')
             if run is None:
                 start = start_date or self.gap_start(account, now=now, silence_seconds=0)
                 if start is None:

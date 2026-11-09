@@ -47,7 +47,7 @@ def setup_history(w,env,*,recent=False,purchased=False):
      entries.append({'id':30999,'fromUser':{'id':int(CREATOR)},'isSentByMe':True,
       'text':'Earlier photo from provider history','createdAt':when,'price':3 if purchased else 0,
       'media':[{'id':11 if purchased else 13,'type':'photo'}],'isOpened':purchased})
-    next_page=None if older else f'https://app.onlyfansapi.com/api/{PROVIDER}/chats/{fan}/messages?limit=3&order=desc&id={first+1}'
+    next_page=None if older else f'{request.url.scheme}://{request.url.host}{request.url.path}?limit=3&order=desc&id={first+1}'
     return answer(200,{'data':entries,'_pagination':{'next_page':next_page}})
   return w.fans.handle(request)
  def model(request):

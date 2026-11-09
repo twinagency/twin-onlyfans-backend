@@ -53,3 +53,10 @@ allowance and lower existing stop threshold, and AI cap/reservations are unchang
 Tests distinguish mocked provider/Docker dependencies, real isolated PostgreSQL
 audit transactions and actual read-only provider evidence. No test result
 authorizes live sending by itself.
+
+The root resolution owner records an immutable marker-access audit tied to the
+DB command and original hash, then grants only group65532 read on that verified
+marker (root owner, mode0640). Bytes remain unchanged, and the worker cannot
+write marker/archive/receipt/gate. Every recorded failure creates distinct
+marker bytes under the same lock even when an older incident remains open.
+Thus old collected evidence and explicit crash-resume refuse any new failure.

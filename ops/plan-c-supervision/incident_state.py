@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import uuid
 
 APPROVED_INCIDENT='c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016725'
@@ -91,17 +92,41 @@ def retain(root,raw):
     finally:os.close(fd)
 
 def record_failure(root,payload):
-    """A fresh failure replaces only a fully resolved marker, never opens a gap."""
+    """Every failure gets distinct durable bytes, invalidating earlier evidence."""
     with locked(root) as root:
         marker=root/'outage-open.json'
         if marker.exists():
             old=marker.read_bytes()
             retain(root,old)
-            if unresolved(marker):return digest(old)
         new=encoded({**payload,'incident_id':uuid.uuid4().hex,'resolved':False})
         retain(root,new)
         atomic(marker,new)
         return digest(new)
+
+def share_verified_marker(root,marker,raw,receipt):
+    """Audited read access for this verified marker; root retains sole write."""
+    if os.geteuid()!=0:raise RuntimeError('incident resolution requires existing root owner')
+    fd=os.open(marker,os.O_RDONLY|os.O_NOFOLLOW)
+    try:
+        before=os.fstat(fd)
+        if before.st_uid!=0 or not stat.S_ISREG(before.st_mode) or os.pread(fd,len(raw)+1,0)!=raw:
+            raise RuntimeError('verified incident marker changed')
+        record=root/'incident-history'/('marker-access-'+receipt['audit_command_key']+'.json')
+        identity={'incident_sha256':digest(raw),'audit_command_key':receipt['audit_command_key'],
+                  'actor':receipt['actor'],'after':{'uid':0,'gid':65532,'mode':0o640}}
+        entry={**identity,'before':{'uid':before.st_uid,'gid':before.st_gid,'mode':stat.S_IMODE(before.st_mode)}}
+        if record.exists():
+            saved=json.loads(record.read_bytes())
+            if any(saved.get(k)!=v for k,v in identity.items()):raise RuntimeError('marker access audit conflict')
+        else:
+            out=os.open(record,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o640)
+            os.fchown(out,0,65532)
+            with os.fdopen(out,'wb') as f:f.write(encoded(entry));f.flush();os.fsync(f.fileno())
+            out=os.open(record.parent,os.O_RDONLY)
+            try:os.fsync(out)
+            finally:os.close(out)
+        os.fchown(fd,0,65532);os.fchmod(fd,0o640);os.fsync(fd)
+    finally:os.close(fd)
 
 def resolve(root,receipt,audit,*,after_audit=None):
     """Publish only after the existing DB audit commits. Crash/replay stays fenced."""
@@ -118,6 +143,7 @@ def resolve(root,receipt,audit,*,after_audit=None):
         if after_audit:after_audit()
         if marker.read_bytes()!=raw:raise RuntimeError('incident changed during resolution')
         retain(root,raw)
+        share_verified_marker(root,marker,raw,receipt)
         record=root/'incident-history'/('resolution-'+receipt['audit_command_key']+'.json')
         blob=encoded(receipt)
         if record.exists():

@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -66,6 +67,59 @@ class IncidentTests(unittest.TestCase):
   self.assertEqual(m.classify_journal(valid),'credit_monitor_unavailable')
   for raw in (b'',valid+b'\n'+valid,b'pilot_supervisor_stopped:network_check_failed'):
    with self.assertRaises(RuntimeError):m.classify_journal(raw)
+ def test_failure_before_collection_retains_each_original_and_stays_held(self):
+  first=m.record_failure(self.root,{'failure':'before_collection'})
+  second=m.record_failure(self.root,{'failure':'again'})
+  self.assertNotEqual(first,second)
+  for h in (self.h,first,second):self.assertTrue((self.root/'incident-history'/h).exists())
+  with self.assertRaises(RuntimeError):m.resolve(self.root,self.receipt,self.audit.append)
+  self.assertTrue(m.unresolved(self.marker));self.assertFalse(self.audit)
+ def test_failure_after_audit_crash_refuses_explicit_old_evidence_resume(self):
+  def crash():raise RuntimeError('after DB audit, before publication')
+  with self.assertRaises(RuntimeError):m.resolve(self.root,self.receipt,self.audit.append,after_audit=crash)
+  m.record_failure(self.root,{'failure':'after_audit_crash'})
+  with self.assertRaises(RuntimeError):m.resolve(self.root,self.receipt,self.audit.append)
+  self.assertEqual(len(self.audit),1);self.assertTrue(m.unresolved(self.marker))
+  self.assertEqual((self.root/'incident-history'/self.h).read_bytes(),self.raw)
+ def test_worker_read_only_access_and_unreadable_marker_stays_held(self):
+  os.chmod(self.root,0o750);os.chown(self.root,0,65532)
+  os.chmod(self.marker,0o600);os.chown(self.marker,0,0)
+  m.resolve(self.root,self.receipt,self.audit.append)
+  gate=self.root/'budget-state.json';m.atomic(gate,b'{}')
+  paths=[self.marker,gate,self.root/'incident-resolution.json',
+         self.root/'incident-history'/self.h,
+         self.root/'incident-history'/('resolution-'+self.receipt['audit_command_key']+'.json')]
+  def worker(expect_held):
+   pid=os.fork()
+   if pid==0:
+    try:
+     os.setgroups([]);os.setgid(65532);os.setuid(65532)
+     if m.unresolved(self.marker)!=expect_held:os._exit(1)
+     for path in paths:
+      try:fd=os.open(path,os.O_WRONLY)
+      except PermissionError:continue
+      else:os.close(fd);os._exit(2)
+     os._exit(0)
+    except BaseException:os._exit(3)
+   _,status=os.waitpid(pid,0);self.assertEqual(os.waitstatus_to_exitcode(status),0)
+  worker(False)
+  access=json.loads((self.root/'incident-history'/('marker-access-'+self.receipt['audit_command_key']+'.json')).read_bytes())
+  self.assertEqual(access['before'],{'uid':0,'gid':0,'mode':0o600})
+  self.assertEqual(access['after'],{'uid':0,'gid':65532,'mode':0o640})
+  self.assertEqual(access['incident_sha256'],self.h)
+  os.chmod(self.marker,0o600);worker(True)
+ def test_crash_before_publication_keeps_access_audit_and_replays(self):
+  original=m.atomic
+  def crash(path,raw):
+   if Path(path).name=='incident-resolution.json':raise RuntimeError('publication crash')
+   original(path,raw)
+  with patch.object(m,'atomic',side_effect=crash):
+   with self.assertRaises(RuntimeError):m.resolve(self.root,self.receipt,self.audit.append)
+  self.assertTrue(m.unresolved(self.marker))
+  access=self.root/'incident-history'/('marker-access-'+self.receipt['audit_command_key']+'.json')
+  old=access.read_bytes()
+  self.assertEqual(m.resolve(self.root,self.receipt,self.audit.append),'resolved')
+  self.assertEqual(access.read_bytes(),old);self.assertFalse(m.unresolved(self.marker))
  def test_resolved_field_alone_is_ineffective(self):
   self.marker.write_text('{"resolved": true}')
   self.assertTrue(m.unresolved(self.marker))

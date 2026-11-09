@@ -1,0 +1,86 @@
+import base64,datetime,hashlib,json,os,subprocess,sys
+from pathlib import Path
+from urllib.parse import urlencode
+ROOT=Path('/srv/projects/twin-plan-c-pilot-20261109')
+sys.path.insert(0,str(ROOT/'supervision-v11'))
+import supervisor
+from guard_core import credit_estimate
+if len(sys.argv)!=2:raise SystemExit('one exclusive collection directory is required')
+d=Path(sys.argv[1]).resolve()
+if d.parent!=ROOT/'evidence' or not d.name.startswith('monitor-incident-recovery-'):
+ raise SystemExit('invalid evidence directory')
+d.mkdir(mode=0o700)
+def sha(b):return hashlib.sha256(b).hexdigest()
+def save(name,raw):
+ fd=os.open(d/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+ with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+ return sha(raw)
+def sql(query):
+ cmd=['docker','exec','twin-plan-c-pilot-pg-20261109','psql','-X','-qAt','-U','plan_c_pilot','-d','twin_plan_c_pilot','-v','ON_ERROR_STOP=1','-c',query]
+ return subprocess.check_output(cmd,timeout=15)
+out={'state':'blocked','incident_sha256':None}
+try:
+ marker=(ROOT/'supervision-v11/outage-open.json').read_bytes();out['incident_sha256']=sha(marker)
+ if out['incident_sha256']!='c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016725':raise RuntimeError('incident changed')
+ incident=json.loads(marker);save('original-incident.json',marker)
+ state=supervisor.db_state()
+ if state['status']!='stopped' or state['revision']!=12:raise RuntimeError('stopped revision changed')
+ if subprocess.check_output(['docker','ps','-q','--filter','name=twin-plan-c-pilot-active-sender']).strip():raise RuntimeError('sender running')
+ journal=subprocess.check_output(['journalctl','-u','plan-c-pilot-supervisor.service','--since',incident['last_confirmed_healthy_utc'],'--no-pager','-o','cat'],timeout=10)
+ if b'pilot_supervisor_stopped:credit_monitor_unavailable' not in journal:raise RuntimeError('incident classification unavailable')
+ out['journal_sha256']=save('journal.txt',journal)
+ env={}
+ for line in supervisor.ENV.read_text().splitlines():
+  if line.strip() and not line.lstrip().startswith('#'):
+   k,sep,v=line.partition('=')
+   if not sep or k in env:raise RuntimeError('credential configuration invalid')
+   env[k]=v
+ if env.get('FANSAPI_BASE')!='https://api.fansapi.com' or env.get('FANSAPI_ACCT')!='acct_7bf8540de5a84f459058490fee26c47f':raise RuntimeError('provider identity changed')
+ h={'Authorization':'Bearer '+env['FANSAPI_KEY'],'Accept':'application/json','User-Agent':'Twin-Plan-C/1.0'}
+ def get(path,name):
+  status,raw=supervisor.status_request('https://api.fansapi.com'+path,headers=h)
+  save(name,raw)
+  if status!=200:raise RuntimeError('provider interval proof unavailable HTTP '+str(status))
+  j=json.loads(raw)
+  if type(j['_meta']['_credits']['used']) is not int or j['_meta']['_credits']['used']!=0:raise RuntimeError('unexpected monitored request cost')
+  return j
+ wid='wh_db5f1a0931514ef9b285c412bede5713'
+ show=get('/api/webhooks/'+wid,'subscription.json')['data']
+ expected=supervisor.readjson(ROOT/'evidence/webhook-registration.log')
+ if any(show.get(k)!=expected.get(k) for k in ('id','url','account_ids','account_scope')) or show.get('enabled') is not True or show.get('has_signing_secret') is not True or set(show.get('events',[]))!=set(expected['events']) or show.get('paused',False) is not False:raise RuntimeError('dedicated webhook changed')
+ q=urlencode({'date_start':incident['last_confirmed_healthy_utc'],'limit':100,'offset':0})
+ deliveries=get('/api/webhooks/'+wid+'/deliveries?'+q,'deliveries.json')
+ if deliveries['_pagination'].get('next_page') is not None:raise RuntimeError('provider interval is not complete within bounded page')
+ rows=deliveries['data']
+ if type(rows) is not list:raise RuntimeError('invalid interval listing')
+ local=sql("select json_build_object('receipts',(select coalesce(json_agg(json_build_object('key',w.event_key,'hash',w.payload_sha256,'raw',encode(w.raw_body,'base64'),'status',w.status,'projection',p.status)),'[]'::json) from of_fans_webhook w left join of_fans_projection p using(account_id,epoch,event_key) where w.account_id='of-323358988' and w.epoch=1),'digests',(select coalesce(json_agg(json_build_object('key',event_key,'hash',payload_sha256,'hold',safety_hold)),'[]'::json) from of_engine_pilot_webhook_digest where account_id='of-323358988' and epoch=1));")
+ save('local-receipts.json',local);local=json.loads(local)
+ receipts={r['key']:r for r in local['receipts']};digests={}
+ for r in local['digests']:digests.setdefault(r['key'],[]).append(r)
+ matched=[];missing=[]
+ for row in rows:
+  key=row.get('idempotency_key');payload=row.get('payload')
+  if row.get('succeeded') is not True or not 200<=row.get('status_code',0)<300 or row.get('url')!=supervisor.PUBLIC or type(payload) is not dict or payload.get('account_id')!=env['FANSAPI_ACCT']:
+   missing.append({'key':key,'reason':'failed_or_ambiguous_delivery'});continue
+  rec=receipts.get(key)
+  if rec:
+   raw=base64.b64decode(rec['raw'])
+   if sha(raw)!=rec['hash'] or json.loads(raw)!=payload:
+    missing.append({'key':key,'reason':'receipt_payload_mismatch'});continue
+   matched.append({'key':key,'local_kind':'receipt','raw_sha256':rec['hash'],'projection':rec['projection'],'status':rec['status']})
+  else:
+   candidates={sha(json.dumps(payload,ensure_ascii=a,sort_keys=s,separators=sep).encode()) for a in (True,False) for s in (True,False) for sep in (None,(',',':'))}
+   found=[v for v in digests.get(key,[]) if v['hash'] in candidates]
+   if len(found)!=1:missing.append({'key':key,'reason':'exact_digest_bytes_unproven'});continue
+   matched.append({'key':key,'local_kind':'digest','raw_sha256':found[0]['hash'],'hold':found[0]['hold']})
+ baseline=supervisor.readjson(supervisor.BASELINE)
+ total,balance,cost=supervisor.team_usage(baseline);outside=supervisor.external_reservations()
+ previous=supervisor.readjson(supervisor.STATE)['prior_estimate']
+ estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=state['reserved'],external_reserved=outside,prior_estimate=previous)
+ if supervisor.db_state()!=state:raise RuntimeError('scope changed during collection')
+ out.update(state='evidence_collected' if not missing else 'blocked',classification='credit_monitor_unavailable',scope_revision=state['revision'],provider_delivery_count=len(rows),matched=matched,missing=missing,credit_estimate=estimate,external_reservations=outside,scope_reserved=state['reserved'],collected_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),continuity_claim='supported delivery records reconciled only; no inferred full event completeness')
+except Exception as e:
+ out['error_type']=type(e).__name__;out['reason']=str(e)[:160] if isinstance(e,RuntimeError) else 'inspect protected source evidence'
+finally:
+ save('manifest.json',json.dumps(out,sort_keys=True).encode())
+print(json.dumps(out,sort_keys=True))

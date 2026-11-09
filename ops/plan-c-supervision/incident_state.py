@@ -1,0 +1,127 @@
+"""Serialized incident records. Resolution never creates a sender permit."""
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import uuid
+
+APPROVED_INCIDENT='c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016725'
+ACCOUNT='of-323358988'
+BINDING='01612323-b06f-5320-b623-4e032f474a6e'
+
+def digest(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+def encoded(value):
+    return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+
+def _valid_resolution(value, incident_hash):
+    return (incident_hash==APPROVED_INCIDENT and type(value) is dict and value.get('version')=='plan-c-monitor-resolution.v1'
+        and value.get('incident_sha256')==incident_hash
+        and value.get('account_id')==ACCOUNT and value.get('binding_id')==BINDING
+        and type(value.get('connection_epoch')) is int and value['connection_epoch']==1 and type(value.get('scope_revision')) is int
+        and value['scope_revision']>0 and value.get('classification')=='credit_monitor_unavailable'
+        and re.fullmatch(r'op-session:[a-f0-9]{64}',str(value.get('actor',''))) is not None
+        and all(re.fullmatch('[a-f0-9]{64}',str(value.get(k,''))) is not None
+                for k in ('audit_command_key','evidence_sha256'))
+        and type(value.get('resolved_at')) is str and bool(value['resolved_at']))
+
+def unresolved(marker):
+    marker=Path(marker)
+    if not marker.exists():
+        return False
+    try:
+        raw=marker.read_bytes()
+        resolution=json.loads((marker.parent/'incident-resolution.json').read_bytes())
+        # The immutable archive and published receipt must describe these exact bytes.
+        archived=(marker.parent/'incident-history'/digest(raw)).read_bytes()
+        immutable=(marker.parent/'incident-history'/('resolution-'+str(resolution.get('audit_command_key',''))+'.json')).read_bytes()
+        return not (_valid_resolution(resolution,digest(raw)) and archived==raw and immutable==encoded(resolution))
+    except (OSError,ValueError,TypeError):
+        return True
+
+@contextlib.contextmanager
+def locked(root):
+    root=Path(root)
+    fd=os.open(root/'incident.lock',os.O_RDWR|os.O_CREAT,0o600)
+    try:
+        fcntl.flock(fd,fcntl.LOCK_EX)
+        yield root
+    finally:
+        os.close(fd)
+
+def atomic(path,raw):
+    path=Path(path);tmp=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
+    fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o640)
+    if os.geteuid()==0:os.fchown(fd,0,65532)
+    try:
+        with os.fdopen(fd,'wb') as f:
+            f.write(raw);f.flush();os.fsync(f.fileno())
+        os.replace(tmp,path)
+        fd=os.open(path.parent,os.O_RDONLY)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+    finally:
+        if tmp.exists():tmp.unlink()
+
+def retain(root,raw):
+    archive=root/'incident-history'
+    archive.mkdir(mode=0o750,exist_ok=True)
+    if os.geteuid()==0:os.chown(archive,0,65532)
+    path=archive/digest(raw)
+    try:
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o640)
+    except FileExistsError:
+        if path.read_bytes()!=raw:raise RuntimeError('incident archive conflict')
+        return
+    if os.geteuid()==0:os.fchown(fd,0,65532)
+    with os.fdopen(fd,'wb') as f:
+        f.write(raw);f.flush();os.fsync(f.fileno())
+    fd=os.open(archive,os.O_RDONLY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+
+def record_failure(root,payload):
+    """A fresh failure replaces only a fully resolved marker, never opens a gap."""
+    with locked(root) as root:
+        marker=root/'outage-open.json'
+        if marker.exists():
+            old=marker.read_bytes()
+            retain(root,old)
+            if unresolved(marker):return digest(old)
+        new=encoded({**payload,'incident_id':uuid.uuid4().hex,'resolved':False})
+        retain(root,new)
+        atomic(marker,new)
+        return digest(new)
+
+def resolve(root,receipt,audit,*,after_audit=None):
+    """Publish only after the existing DB audit commits. Crash/replay stays fenced."""
+    with locked(root) as root:
+        marker=root/'outage-open.json';raw=marker.read_bytes();h=digest(raw)
+        if h!=APPROVED_INCIDENT or not _valid_resolution(receipt,h):
+            raise RuntimeError('wrong or unsupported monitor incident')
+        existing=root/'incident-resolution.json'
+        if existing.exists():
+            saved=json.loads(existing.read_bytes())
+            if saved!=receipt:raise RuntimeError('resolution evidence conflict')
+            if not unresolved(marker):return 'replayed'
+        audit(receipt)
+        if after_audit:after_audit()
+        if marker.read_bytes()!=raw:raise RuntimeError('incident changed during resolution')
+        retain(root,raw)
+        record=root/'incident-history'/('resolution-'+receipt['audit_command_key']+'.json')
+        blob=encoded(receipt)
+        if record.exists():
+            if record.read_bytes()!=blob:raise RuntimeError('resolution audit conflict')
+        else:
+            fd=os.open(record,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o640)
+            if os.geteuid()==0:os.fchown(fd,0,65532)
+            with os.fdopen(fd,'wb') as f:f.write(blob);f.flush();os.fsync(f.fileno())
+        fd=os.open(record.parent,os.O_RDONLY)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+        atomic(existing,blob)
+        return 'resolved'

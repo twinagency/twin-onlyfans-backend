@@ -273,18 +273,25 @@ class ModelRuntime:
                                  chain_step=chain_step)
             identity_verified = (not cfg.upstream_provider or (returned_model == model
                 and returned_provider.casefold() == cfg.upstream_reported_name.casefold()))
-            if cfg.upstream_provider:
-                # Identity is a fact about the returned response, independent of
-                # whether its conversation snapshot is still current.
-                ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=identity_verified)
-            turn.recheck()  # a stale answer still cannot be judged, planned or authorized
+            try:
+                turn.recheck()  # a stale answer still cannot be judged, planned or authorized
+            except Refused:
+                # A controlled stale-context refusal is not a lost response:
+                # preserve its actual identity verdict without accepting its text.
+                # Unexpected exceptions/crashes retain identity_pending, as before.
+                if cfg.upstream_provider:
+                    ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=identity_verified)
+                raise
             if cfg.upstream_provider and not identity_verified:
+                ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=False)
                 # Do not auto-retry or use an unverified answer; handover still
                 # requires the current conversation, as before.
                 turn.handover('model_identity_unverified', {'requested_model': model,
                     'returned_model': returned_model[:128], 'expected_provider': cfg.upstream_reported_name,
                     'returned_provider': returned_provider[:64]})
                 raise Refused('model identity is unverified; request handed to a human')
+            if cfg.upstream_provider:
+                ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=True)
             verdict = Verdict('invalid', reasons=('answer was longer than the output bound',)) if oversize else judge(text, jctx)
             recorded_outcome = 'verified_ok' if cfg.upstream_provider and verdict.outcome == 'ok' else verdict.outcome
             ledger.set_outcome(turn.account, reservation.call_id, recorded_outcome)

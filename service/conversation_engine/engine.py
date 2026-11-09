@@ -132,6 +132,7 @@ def _offer_grants(s, runtime, fan_id):
         kinds = [f.get('kind') for f in terms.get('files', [])]
         out.append({'grantId': grant.grant_id, 'itemId': str(grant.item_id),
                     'label': item.get('label') or item.get('description_for_ai'),
+                    'priceCents': terms['price_cents'], 'currency': 'USD',
                     'description': item.get('description_for_ai'), 'mediaCount': len(terms['media_ids']),
                     # Payload facts: the only quantities any text may state about this card's contents.
                     'media': {'total': len(terms['media_ids']),

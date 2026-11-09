@@ -557,7 +557,12 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
                 raise Refused('creator profile is unavailable for edit validation')
             if head.action == 'offer' and not profile.may_offer(head.catalog_item_id):
                 raise Refused('creator has not approved this offer')
-            context = JudgeContext(snapshot={'current_message': {'body': source.body}}, profile=profile)
+            from .engine import _offer_grants
+            from .offers import match as match_offers
+            reference = match_offers(s, runtime, request.fan_id, source.body, include_cards=True)
+            context = JudgeContext(snapshot={'current_message': {'body': source.body},
+                'offer_reference': reference,
+                'offer_grants': _offer_grants(s, runtime, request.fan_id)}, profile=profile)
             problems = edit_problems([part.strip() for part in parts], context)
             if problems:
                 raise Refused('edited draft violates creator or pilot rules: ' + problems[0])
@@ -566,9 +571,10 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
                                          offer_grant_id=head.offer_grant_id)
             if head.action == 'offer' and len(parts) != 1:
                 raise Refused('an offer draft has one part')
-            from .offers import match as match_offers
-            prices = {offer['priceCents'] for offer in match_offers(s, runtime, request.fan_id, source.body)['offers']}
-            check_plain_text([proposal.body, *proposal.parts], proposal, owner.sales_mode, prices)
+            prices = {offer['priceCents'] for offer in reference['offers']}
+            from .claims import grounding_from_snapshot
+            check_plain_text([proposal.body, *proposal.parts], proposal, owner.sales_mode, prices,
+                             grounding=grounding_from_snapshot(context.snapshot, proposal))
             from .journey import enforce_journey, journey_context
             enforce_journey(journey_context(s, runtime, owner, request, source), proposal)
             generation_next = generation + 1

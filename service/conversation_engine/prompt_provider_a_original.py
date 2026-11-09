@@ -34,7 +34,7 @@ RULES = (
     "request to buy reopens it. Never promise to message him later, to make customs, to meet, or to talk off the platform.\n"
     "- If he asks what he is talking to, answer only with the IDENTITY WORDING and nothing more about who reads, writes or approves "
     "the chats.\n"
-    "- Say he bought or unlocked something only if VERIFIED PURCHASES lists it; if he says he did and it isn't listed, say you'll check.")
+    "- Payment/ownership claims require VERIFIED PURCHASES. Access/unlock claims require exact accepted CARD facts with confirmed access and no review; historical or uncertain evidence never establishes present access.")
 
 CONTRACT = (
     'Reply with strict JSON only, one object:\n'
@@ -43,7 +43,7 @@ CONTRACT = (
     '"item_scope": [], "pitch": false, "price_claims": [], "purchase_claim": false}\n'
     "action offer only when APPROVED OFFER is shown and fits (whole text in body, no parts, no price). sales_signal decline when he says no "
     "to buying, not now or can't afford it; reopen (item_scope = item ids he asked about) only when he clearly asks to buy; else none. "
-    "pitch true only if your text pushes a purchase. price_claims only for the already-sent card named in THIS TURN.")
+    "pitch true only if your text pushes a purchase. For a price question, use action reply with the exact informational price shown in THIS TURN; price_claims lists only that price or the already-sent card price.")
 
 
 HARD_LINES = ("Absolute lines, whatever he asks: anyone under 18 or played as younger, family or step-family roleplay, force or "
@@ -110,6 +110,9 @@ class SpecPromptProvider:
             o = ctx.offer
             turn.append(f"APPROVED OFFER: id {o['grantId']}, {str(o.get('label', ''))[:120]}: {str(o.get('description', ''))[:400]}. "
                         f"Only if it fits; tease from that description, no price. To use it: action offer, offer_grant_id \"{o['grantId']}\".")
+            if type(o.get('priceCents')) is int and o['priceCents'] > 0 and o.get('currency') == 'USD':
+                turn.append(f"INFORMATIONAL PRICE: USD {o['priceCents'] / 100:.2f}. Answer a price question with action reply; "
+                            "this fact does not request a card. For action offer, omit the price because the application adds it.")
             media = o.get('media') or {}
             if type(media.get('total')) is int:
                 turn.append(f"CONTENTS (the only numbers you may state about this card): {media['total']} items, "

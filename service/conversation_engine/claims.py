@@ -1,8 +1,8 @@
 """Commercial-claim checks for a model proposal.
 
-A plain reply is conversation only. Prices, purchase/access statements and
-pitches must come from an application-rendered offer (verified terms), never
-from model prose. The structured fields (`pitch`, `price_claims`,
+A plain reply may state grounded informational prices and scoped access facts.
+Payment/ownership requires separately verified ownership; pitches still require
+a verified offer action. The structured fields (`pitch`, `price_claims`,
 `purchase_claim`) are the model's declaration; the text checks are a
 defence-in-depth backstop for an undeclared claim.
 
@@ -25,6 +25,9 @@ class Grounding:
     """Facts the text may rely on. Defaults are strict (nothing is grounded)."""
     quantities: frozenset = frozenset()        # media counts that are real (offer payload, sent cards, catalogue match)
     purchase_labels: tuple = ()                # labels of items the fan verifiably owns
+    media_reference: bool | None = None        # current request/reference may depend on media; never action authority
+    current_offer_prices: frozenset = frozenset()  # informational replies only; frozen eligible terms
+    access_labels: tuple = ()                  # accepted cards with confirmed access, not payment/ownership
 
 
 def grounding_from_snapshot(snapshot, proposal=None):
@@ -49,7 +52,23 @@ def grounding_from_snapshot(snapshot, proposal=None):
         if item.get('mediaIds'):
             quantities.add(len(item['mediaIds']))
     labels = tuple(str(p.get('label') or '') for p in (snapshot.get('verified_purchases') or []) if isinstance(p, dict))
-    return Grounding(frozenset(quantities), labels)
+    message = (snapshot.get('current_message') or {}).get('body')
+    media_reference = None
+    if isinstance(message, str):
+        mentions = [(clause, match.start()) for clause, _ in _clauses(message.replace('’', "'"))
+                    for match in re.finditer(r"\b" + _CONTENT_NOUN + r"\b", clause, re.I)]
+        # A negated media request is not an evidence dependency. With no noun,
+        # an already resolved card reference can ground contextual "it".
+        media_reference = (any(not _negated(clause, start) for clause, start in mentions)
+                           if mentions else bool((snapshot.get('offer_reference') or {}).get('offers')))
+    prices = frozenset(g['priceCents'] for g in (snapshot.get('offer_grants') or [])
+                       if isinstance(g, dict) and type(g.get('priceCents')) is int
+                       and g['priceCents'] > 0 and g.get('currency') == 'USD')
+    access_labels = tuple(card['label'] for card in (snapshot.get('offer_reference') or {}).get('cards') or []
+                          if isinstance(card, dict) and isinstance(card.get('label'), str)
+                          and card.get('sendState') == 'accepted' and card.get('accessState') == 'confirmed'
+                          and card.get('financialReview') is False)
+    return Grounding(frozenset(quantities), labels, media_reference, prices, access_labels)
 
 
 _NUMBER_WORDS = {'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8,
@@ -59,9 +78,9 @@ _NUMBER_WORDS = {'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5
                  'hundred': 100}
 _NUMBER_RX = r"(?:\d+|" + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True)) + r")"
 
-_PRICE = re.compile(r"(?:[$£€]\s*\d|\b(?:usd|aud|eur|gbp|cad)\b\s*\$?\s*\d|\d\s*(?:usd|aud|eur|gbp|dollars?|bucks|credits?|stars?)\b"
+_PRICE = re.compile(r"(?:[$£€]\s*\d|\b(?:usd|aud|eur|gbp|cad)\b\s*\$?\s*\d|\d\s*(?:usd|aud|eur|gbp|cad|dollars?|bucks|credits?|stars?)\b"
                     r"|\b" + _NUMBER_RX + r"[\s-]+(?:\w+[\s-]+)?(?:dollars?|bucks|credits?|stars?)\b)", re.I)
-_AMOUNT = re.compile(r"(?:(?:[$£€]|\b(?:usd|aud|eur|gbp|cad)\b)\s*\$?\s*(\d+(?:[.,]\d{1,2})?)"
+_AMOUNT = re.compile(r"(?:(?:[$£€]|\b(?:usd|aud|eur|gbp|cad)\b)\s*\$?\s*(\d+(?:[.,]\d{1,2})?)(?:\s*(?:usd|aud|eur|gbp|cad)\b)?"
                      r"|(\d+(?:[.,]\d{1,2})?)\s*(?:usd|aud|eur|gbp|cad|dollars?|bucks)\b)", re.I)
 _WORD_AMOUNT = re.compile(r"\b(" + _NUMBER_RX + r")(?:[\s-]+(" + _NUMBER_RX + r"))?\s+(?:dollars?|bucks)\b", re.I)
 
@@ -112,23 +131,32 @@ def _norm(value):
 
 
 # --- purchase / access claims -----------------------------------------------------------------------------------
-_PURCHASE_PATTERNS = (
-    re.compile(r"\byou(?:'ve|\s+have|\s+had)?\s+(?:already\s+|just\s+|now\s+)?(?:purchased|bought|paid|unlocked)\b", re.I),
-    re.compile(r"\b(?:already|just)\s+(?:purchased|bought|paid\s+for|unlocked)\b", re.I),
-    re.compile(r"\bthank(?:s|\s+you)?\s+(?:so\s+much\s+)?for\s+(?:buying|purchasing|unlocking|paying|the\s+purchase|your\s+(?:purchase|payment|order|support))\b", re.I),
-    re.compile(r"\b(?:got|received|have|saw|see|seen|noticed|love|appreciate|confirmed?)\s+your\s+(?:purchase|payment|order|unlock)\b", re.I),
-    re.compile(r"\byour\s+(?:purchase|payment|order|unlock)\s+(?:went|came|is|was|has|have|been|done|confirmed|complete|success|received|through)\b", re.I),
-    re.compile(r"\b(?:it|that|this|they|these)(?:'s|\s+is|'re|\s+are)\s+(?:already\s+)?unlocked\b", re.I),
-    re.compile(r"\byou\s+(?:now\s+|already\s+)?(?:own|have\s+access\s+to)\b", re.I),
+_FINANCIAL_PATTERNS = (
+    re.compile(r"\byou(?:'ve|\s+have|\s+had)?\s+(?:already\s+|just\s+|now\s+)?(?:purchased|bought|paid)\b", re.I),
+    re.compile(r"\b(?:already|just)\s+(?:purchased|bought|paid\s+for)\b", re.I),
+    re.compile(r"\bthank(?:s|\s+you)?\s+(?:so\s+much\s+)?for\s+(?:buying|purchasing|paying|the\s+purchase|your\s+(?:purchase|payment|order|support))\b", re.I),
+    re.compile(r"\b(?:got|received|have|saw|see|seen|noticed|love|appreciate|confirmed?)\s+your\s+(?:purchase|payment|order)\b", re.I),
+    re.compile(r"\byour\s+(?:purchase|payment|order)\s+(?:went|came|is|was|has|have|been|done|confirmed|complete|success|received|through)\b", re.I),
+    re.compile(r"\byou\s+(?:now\s+|already\s+)?own\b", re.I),
 )
+_ACCESS_PATTERNS = (
+    re.compile(r"\byou(?:'ve|\s+have|\s+had)?\s+(?:already\s+|just\s+|now\s+)?unlocked\b", re.I),
+    re.compile(r"\b(?:already|just)\s+unlocked\b", re.I),
+    re.compile(r"\bthank(?:s|\s+you)?\s+(?:so\s+much\s+)?for\s+unlocking\b", re.I),
+    re.compile(r"\b(?:got|received|have|saw|see|seen|noticed|love|appreciate|confirmed?)\s+your\s+unlock\b", re.I),
+    re.compile(r"\byour\s+unlock\s+(?:went|came|is|was|has|have|been|done|confirmed|complete|success|received|through)\b", re.I),
+    re.compile(r"\b(?:it|that|this|they|these)(?:'s|\s+is|'re|\s+are)\s+(?:already\s+)?unlocked\b", re.I),
+    re.compile(r"\byou\s+(?:now\s+|already\s+)?have\s+access\s+to\b", re.I),
+)
+_PURCHASE_PATTERNS = _FINANCIAL_PATTERNS + _ACCESS_PATTERNS
 
 
-def _purchase_claims(text):
+def _purchase_claims(text, patterns=_PURCHASE_PATTERNS):
     """Yield clauses that assert a purchase/payment/unlock/access as fact."""
     for clause, question in _clauses(text):
         if question:
             continue
-        for rx in _PURCHASE_PATTERNS:
+        for rx in patterns:
             for match in rx.finditer(clause):
                 window = _window(clause, match.start())
                 if _NEGATION.search(window) or _CONDITIONAL.search(window) or _FUTURE_CUE.search(window):
@@ -247,6 +275,33 @@ def _check_quantities(texts, grounding):
         raise Refused('content quantity not supported by the payload')
 
 
+# An inventory fact is not a source of conversational permission. Check the
+# explicit causal claim, not a blanket refusal vocabulary. Truthful media
+# unavailability and creator/privacy restrictions remain separate checks.
+_CHAT_DENIAL = re.compile(r"\b(?:i|we)\s+(?:cannot|can not|can't|won't|do not|don't|are unable to|am unable to)\s+(?:discuss|talk(?:\s+about)?|chat(?:\s+about)?)\b", re.I)
+_MEDIA_ABSENCE = re.compile(
+    r"\b(?:no|without|missing|don't have|do not have|haven't got)\b[^.!?,]{0,60}\b(?:photos?|pictures?|pics?|videos?|clips?|media|content)\b"
+    r"|\b(?:photos?|pictures?|pics?|videos?|clips?|media|content)\b[^.!?,]{0,30}\b(?:unavailable|not available|aren't available|are not available)\b", re.I)
+
+
+def _inventory_conversation_claim(text):
+    for clause, question in _clauses(text.replace('’', "'")):
+        if question:
+            continue
+        for link in re.finditer(r"\b(because|since|so|means)\b", clause, re.I):
+            before, after = clause[:link.start()], clause[link.end():]
+            if link[1].lower() == 'because':
+                if _CHAT_DENIAL.search(before) and _MEDIA_ABSENCE.search(after):
+                    return True
+            elif link[1].lower() == 'since':
+                reason, comma, result = after.partition(',')
+                if comma and _MEDIA_ABSENCE.search(reason) and _CHAT_DENIAL.search(result):
+                    return True
+            elif _MEDIA_ABSENCE.search(before) and _CHAT_DENIAL.search(after):
+                return True
+    return False
+
+
 def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), grounding=None):
     """Refuse unsupported commercial content in model-written text.
 
@@ -254,11 +309,16 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
     signal. `verified_prices` are cents from an already-sent offer that the
     engine matched for this message; only those may be restated in prose.
     `grounding` (optional, strict by default) lists payload quantities and
-    verified-purchase labels the text may rely on. Factual answers that carry
+    verified-purchase labels and current media-reference context. Media absence
+    cannot establish a general conversation prohibition, but may truthfully
+    limit analysis of a particular requested item. Factual answers that carry
     none of these claims are untouched.
     """
     grounding = grounding or Grounding()
+    if proposal.action == 'reply':
+        verified_prices = set(verified_prices) | set(grounding.current_offer_prices)
     labels = [label for label in (_norm(l) for l in grounding.purchase_labels) if len(label) >= 3]
+    access_labels = labels + [label for label in (_norm(l) for l in grounding.access_labels) if len(label) >= 3]
     if any(cents not in verified_prices for cents in proposal.price_claims):
         raise Refused('unsupported price claim in model text')
     if proposal.purchase_claim and not any(label in _norm(text) for label in labels for text in texts):
@@ -269,11 +329,18 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
         raise Refused('sales are paused')
     _check_quantities(texts, grounding)
     for text in texts:
+        if grounding.media_reference is False and _inventory_conversation_claim(text):
+            raise Refused('media availability does not determine conversation permission; follow the documented creator limits')
         if _PRICE.search(text) and not (_cents(text) and _cents(text) <= set(verified_prices)
-                                        and not re.search(r"\b(?:credits?|stars?)\b", text, re.I)):
+                                        and not re.search(r"\b(?:credits?|stars?)\b", text, re.I)
+                                        and not any(re.search(r"[£€]|\b(?:aud|eur|gbp|cad)\b", amount.group(0), re.I)
+                                                    for amount in _AMOUNT.finditer(text))):
             raise Refused('unsupported price claim in model text')
         for clause in _purchase_claims(text):
-            if not any(label in _norm(clause) for label in labels):
+            # Access evidence never proves payment or ownership, including a
+            # mixed clause containing both access and a financial assertion.
+            supported = labels if next(_purchase_claims(clause, _FINANCIAL_PATTERNS), None) else access_labels
+            if not any(label in _norm(clause) for label in supported):
                 raise Refused('unsupported purchase claim in model text')
         if sales_mode == 'paused' and next(_pitch_clauses(text), None) is not None:
             raise Refused('sales are paused')

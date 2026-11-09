@@ -595,7 +595,7 @@ class FansEventIntake:
         return result
 
     def ingest_history_item(self, tenant, account, chat_id, item, *, source='backfill'):
-        """One history message: inbound text joins canonical ingress; a purchased PPV (isOpened with a price) is unlock evidence.
+        """One history message: canonical text/media context plus separate PPV unlock evidence.
         Old creator replies are deliberately NOT takeover evidence."""
         fan_id = ev.numeric(chat_id)
         sender = item.get('fromUser') if type(item.get('fromUser')) is dict else {}
@@ -606,10 +606,33 @@ class FansEventIntake:
         message_id = ev.numeric(item.get('id'))
         after = []
         with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account, lock=True)
             connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
-                OfFansConnection.status == 'active'))
+                OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active'))
             if connection is None:
                 raise Refused('no active provider connection')
+            sender_id = ev.numeric(sender['id']) if sender.get('id') is not None else None
+            if (item.get('isSentByMe') is False
+                    or sender_id is not None and str(sender_id) != connection.provider_creator_id
+                    or sender_id is None and item.get('isSentByMe') is not True):
+                raise Refused('outgoing history creator or direction is unverified')
+            text = item.get('text')
+            if text is None:
+                text = ''
+            media = item.get('media', [])
+            if type(text) is not str or type(media) is not list or any(type(m) is not dict for m in media):
+                raise Refused('outgoing history text or media is malformed')
+            price = item.get('price')
+            if type(price) is bool:
+                raise Refused('outgoing history price is malformed')
+            price_cents = 0 if price in (None, 0) else ev.cents(price)
+            event = Event(fan_id, message_id, item.get('createdAt'), 'out', text,
+                          tuple(ev.numeric(m.get('id')) for m in media), price_cents).normalized()
+            # Historical creator context does not trigger live work or takeover.
+            # Use the existing immutable ingress and its duplicate/conflict fences.
+            recorded = self.store._record(s, runtime, event, event.payload(), 'import', now)
+            if recorded == 'backpressure':
+                raise Refused('outgoing history requires intake capacity before completion')
             digest = ev.digest(item)
             price = item.get('price')
             if item.get('isOpened') is True and price not in (None, 0) and float(price) > 0:

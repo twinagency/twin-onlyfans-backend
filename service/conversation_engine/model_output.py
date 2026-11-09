@@ -83,7 +83,7 @@ def _sexual_problems(texts, ctx):
 
 # Platform-safety and accuracy backstops. Being sexual or explicit is NOT itself a rule here (see _sexual_problems).
 _RULES = (
-    ('promises to meet', re.compile(r"\b(meet (up|you|irl)|come over|my place|your place|see you (irl|in person)|take me out)\b", re.I)),
+    ('promises to meet', re.compile(r"\b(meet (up|you|irl)|come over|my place|your place|see you (irl|in person)|take me out|(?:i|we)\s+(?:offer|arrange)\s+meetups)\b", re.I)),
     ('contact details or socials', re.compile(r"[\w.+-]+@[\w-]+\.\w{2,}|(?<!\d)\+?\d[\d\s().-]{8,}\d(?!\d)|(?<![\w@])@[a-z][\w.]{2,}|"
                                               r"\b(insta(gram)?|snap(chat)?|discord|kik|wechat|signal|whatsapp|telegram)\b[: ]+@?\w", re.I)),
     ('off-platform payment or contact', re.compile(r"\b(venmo|cash ?app|paypal|zelle|my number|text me at|add me on|my snap)\b", re.I)),

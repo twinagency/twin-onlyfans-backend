@@ -425,7 +425,15 @@ def _history_rows(snapshot, budget):
         text = (row.get('body') or '').strip()
         if row['direction'] == 'out' and (row.get('media_count') or row.get('price_cents')):
             if (row.get('price_cents') or 0) > 0:
-                label = '[paid card; access/unlock recorded; financial settlement not established here]' if row.get('paid') else '[paid card; access/unlock unconfirmed]'
+                cards = [card for card in (snapshot.get('offer_reference') or {}).get('cards', [])
+                         if str(card.get('messageId')) == str(row.get('id')) and card.get('sendState') == 'accepted']
+                card = cards[0] if len(cards) == 1 else None
+                if card is not None and card.get('financialReview'):
+                    label = '[paid card; access/unlock requires review; financial settlement not established here]'
+                elif card is not None and card.get('accessState') in ('confirmed', 'revoked'):
+                    label = '[paid card; access/unlock ' + card['accessState'] + '; financial settlement not established here]'
+                else:
+                    label = '[paid card; access/unlock recorded; financial settlement not established here]' if row.get('paid') else '[paid card; access/unlock unconfirmed]'
             elif row.get('price_cents') == 0:
                 label = '[free media; no paid unlock required]'
             else:

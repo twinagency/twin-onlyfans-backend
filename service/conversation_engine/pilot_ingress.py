@@ -15,7 +15,7 @@ def _review_key(binding, event_key):
     return sha256(('plan-c-ingress-review:' + binding + ':' + event_key).encode()).hexdigest()
 
 
-def _unreviewed(runtime, scope, config):
+def _unreviewed(runtime, scope, config, *, status='applied', sources=('ws', 'catchup')):
     # Keyed receipts avoid a time cursor: late application/commit or an older
     # source message cannot land behind a cursor and escape classification.
     key = func.encode(func.sha256(func.convert_to(
@@ -27,8 +27,8 @@ def _unreviewed(runtime, scope, config):
     stamp = cast(metadata.op('->>')('created_at'), DateTime())
     direction = metadata.op('->>')('direction')
     return select(OfIngress).where(OfIngress.account_id==runtime.account_id,
-        OfIngress.binding_id==runtime.binding_id,OfIngress.fan_id.in_(config['fans']),OfIngress.status=='applied',
-        OfIngress.source=='ws',OfIngress.received_at>=scope.created_at,
+        OfIngress.binding_id==runtime.binding_id,OfIngress.fan_id.in_(config['fans']),OfIngress.status==status,
+        OfIngress.source.in_(sources),OfIngress.received_at>=scope.created_at,
         or_(stamp.is_(None), stamp>=scope.created_at),
         or_(direction.is_(None), direction=='in'),~reviewed)
 
@@ -39,7 +39,12 @@ def review_pending(s, runtime, scope, config, fan_id):
     A scheduler's earlier review cannot authorize a later, unclassified input.
     A deleted display message also cannot erase a received opt-out.
     """
-    return s.scalar(_unreviewed(runtime, scope, config).where(
+    if s.scalar(_unreviewed(runtime, scope, config).where(
+        OfIngress.fan_id == fan_id).limit(1)) is not None:
+        return True
+    # Backfill writes catch-up ingress directly, without a webhook projection.
+    # Until it is applied, it may contain an unclassified contact stop.
+    return s.scalar(_unreviewed(runtime, scope, config, status='pending', sources=('catchup',)).where(
         OfIngress.fan_id == fan_id).limit(1)) is not None
 
 
@@ -118,5 +123,6 @@ def preserve_contact_stops(store, tenant, account, *, limit=100):
     with Session(store.engine) as s:
         runtime=store._runtime(s,tenant,account,lock=False)
         scope,config=require(s,runtime)
-        pending=s.scalar(_unreviewed(runtime,scope,config).limit(1)) is not None
+        pending=(s.scalar(_unreviewed(runtime,scope,config).limit(1)) is not None or
+                 s.scalar(_unreviewed(runtime,scope,config,status='pending',sources=('catchup',)).limit(1)) is not None)
     return {'reviewed':reviewed_count,'pending':pending}

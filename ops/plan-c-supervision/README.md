@@ -60,3 +60,13 @@ marker (root owner, mode0640). Bytes remain unchanged, and the worker cannot
 write marker/archive/receipt/gate. Every recorded failure creates distinct
 marker bytes under the same lock even when an older incident remains open.
 Thus old collected evidence and explicit crash-resume refuse any new failure.
+
+The existing receive-only installation uses receive_only.py explicitly. It
+validates worker/tenant/account/durable binding and the protected secret, then
+constructs only the existing IntakeOnlyPilot and loopback create_app server.
+It never delegates to the active factory, even after an active-scope restart or
+model-related environment changes. No model or provider credential is required.
+The installation's existing worker.sh can embed these exact reviewed bytes in
+its Python heredoc, preserving its current file mount and intake continuity.
+Record the entrypoint and wrapper hashes and preserve the prior wrapper. Any
+embedded copy must equal this file; it is not a separate implementation.

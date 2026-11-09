@@ -16,6 +16,7 @@ from db.onlyfans_fans_intake_models import OfFansLink
 from db.onlyfans_models import OfRecovery, OfRuntime
 from model_transport.pilot_supervised import build_supervised_pilot
 from onlyfans_runtime.launch_operations import account_state, control_account
+from onlyfans_runtime.launch_operations_models import OfLaunchCommand
 from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.text_delivery import TextAuthority
 from test_engine_real_worker_pg import world, FAN2, PROVIDER, CREATOR
@@ -92,6 +93,11 @@ def test_stopped_real_path_activates_once_and_sends_one_mock_text(stopped_text):
         assert s.get(OfRuntime,ACCOUNT).enabled and policy.enabled and not policy.media_enabled
         assert policy.limit_units > 0 and policy.daily_limit_units > 0
         assert s.get(OfProviderConnection,ACCOUNT) is None
+        audit=s.get(OfLaunchCommand,(ACCOUNT,key(31002)))
+        proof=json.loads(audit.before_json)['textActivation']
+        assert proof['connectionEpoch']==1 and proof['providerAccountId']==PROVIDER
+        assert {x['fan'] for x in proof['fanRecovery']}=={FAN,FAN2}
+        assert proof['policyRevisionAfter']==proof['policyRevisionBefore']+1
     pilot=build_supervised_pilot(w.store,env,model_transport=model,fans_transport=w.fans.transport)
     stage(pilot, 31003, 'hello')
     assert pilot.tick()['dispatched'] == ['accepted']

@@ -528,6 +528,7 @@ def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
     if (conn is None or conn.epoch < 1 or link is None or link.state != 'connected' or link.send_blocked
             or link.provider_account_id != conn.provider_account_id):
         raise Refused('verified pilot connection unavailable')
+    fan_recovery = []
     for fan_id in config['fans']:
         rec = s.get(OfRecovery, (runtime.account_id, fan_id))
         fan = s.get(Fan, (runtime.account_id, fan_id))
@@ -539,6 +540,8 @@ def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
             raise Refused('pilot fan history unavailable')
         if state is None or fan is None:
             raise Refused('pilot conversation unavailable')
+        fan_recovery.append({'fan': fan_id, 'completedAt': rec.last_complete_at.isoformat(),
+                             'controlRevision': state.revision})
         if (hold_reason(s, runtime.account_id, fan_id, state, fan,
                         unresolved=store._unresolved(s, runtime.account_id, fan_id, state)) is not None
                 or delivery_block(s, runtime, fan_id) is not None):
@@ -547,11 +550,16 @@ def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
             or row.provider_credits_reserved + config['limits']['provider_credits_per_request']
             > config['limits']['provider_credit_budget']):
         raise Refused('pilot provider budget is exhausted')
+    previous_policy_revision = policy.revision
     TextAuthority(store)._configure_in_session(s, runtime, expected_revision=policy.revision,
         enabled=True, limit_units=send_limit, daily_limit_units=daily_limit,
         throttle_seconds=throttle, media_enabled=False, transport_kind='fansapi',
         actor=actor, reason=reason)
     runtime.enabled = True
+    return {'runtimeEnabledBefore': False, 'policyRevisionBefore': previous_policy_revision,
+            'policyRevisionAfter': policy.revision, 'connectionEpoch': conn.epoch,
+            'providerAccountId': conn.provider_account_id, 'providerCreatorId': conn.provider_creator_id,
+            'fanRecovery': fan_recovery}
 
 
 def set_status(store, tenant, account, status, *, expected_revision, command_key, actor, reason):
@@ -568,6 +576,7 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
         authorize(config, actor, 'activate' if status == 'active' else 'stop')
         if row.revision != expected_revision:
             raise Refused('pilot revision conflict')
+        activation_evidence = None
         if status == 'active':
             if config['qualification']['mode'] == 'fixture' and os.environ.get('TWIN_PLAN_C_FIXTURE_ONLY') != '1':
                 raise Refused('fixture scope cannot activate outside an isolated test')
@@ -577,7 +586,7 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
             if not _product_current(s, account, config['product']) or connection is None or connection.binding_id != runtime.binding_id:
                 raise Refused('pilot activation prerequisites are not met')
             if config.get('delivery_mode') == 'text_only':
-                _activate_text_only(s, store, runtime, row, config, actor=actor, reason=reason)
+                activation_evidence = _activate_text_only(s, store, runtime, row, config, actor=actor, reason=reason)
                 policy = s.get(OfDeliveryPolicy, account)
             if not runtime.enabled or not policy_matches(policy, config, enabled=True):
                 raise Refused('pilot activation prerequisites are not met')
@@ -586,6 +595,8 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
                     > config['limits']['provider_credit_budget']):
                 raise Refused('pilot provider budget is exhausted')
         before = {'revision':row.revision, 'status':row.status, 'fingerprint':row.fingerprint}
+        if activation_evidence is not None:
+            before['textActivation'] = activation_evidence
         if row.status != status:
             row.revision += 1
             row.status, row.updated_at = status, utcnow()

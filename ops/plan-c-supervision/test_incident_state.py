@@ -61,6 +61,11 @@ class IncidentTests(unittest.TestCase):
   m.resolve(self.root,self.receipt,self.audit.append)
   (self.root/'incident-history'/('resolution-'+self.receipt['audit_command_key']+'.json')).unlink()
   self.assertTrue(m.unresolved(self.marker))
+ def test_additional_or_different_failure_cannot_use_original_resolution(self):
+  valid=b'pilot_supervisor_stopped:credit_monitor_unavailable'
+  self.assertEqual(m.classify_journal(valid),'credit_monitor_unavailable')
+  for raw in (b'',valid+b'\n'+valid,b'pilot_supervisor_stopped:network_check_failed'):
+   with self.assertRaises(RuntimeError):m.classify_journal(raw)
  def test_resolved_field_alone_is_ineffective(self):
   self.marker.write_text('{"resolved": true}')
   self.assertTrue(m.unresolved(self.marker))

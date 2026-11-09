@@ -12,6 +12,12 @@ APPROVED_INCIDENT='c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016
 ACCOUNT='of-323358988'
 BINDING='01612323-b06f-5320-b623-4e032f474a6e'
 
+def classify_journal(raw):
+    failures=re.findall(rb'pilot_supervisor_stopped:([A-Za-z0-9_]+)',raw)
+    if failures != [b'credit_monitor_unavailable']:
+        raise RuntimeError('additional or different supervisor failure requires its own evidence')
+    return 'credit_monitor_unavailable'
+
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 

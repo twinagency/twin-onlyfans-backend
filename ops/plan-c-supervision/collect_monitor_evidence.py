@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 ROOT=Path('/srv/projects/twin-plan-c-pilot-20261109')
 sys.path.insert(0,str(ROOT/'supervision-v11'))
 import supervisor
+from incident_state import classify_journal
 from guard_core import credit_estimate
 if len(sys.argv)!=2:raise SystemExit('one exclusive collection directory is required')
 d=Path(sys.argv[1]).resolve()
@@ -27,7 +28,7 @@ try:
  if state['status']!='stopped' or state['revision']!=12:raise RuntimeError('stopped revision changed')
  if subprocess.check_output(['docker','ps','-q','--filter','name=twin-plan-c-pilot-active-sender']).strip():raise RuntimeError('sender running')
  journal=subprocess.check_output(['journalctl','-u','plan-c-pilot-supervisor.service','--since',incident['last_confirmed_healthy_utc'],'--no-pager','-o','cat'],timeout=10)
- if b'pilot_supervisor_stopped:credit_monitor_unavailable' not in journal:raise RuntimeError('incident classification unavailable')
+ classify_journal(journal)
  out['journal_sha256']=save('journal.txt',journal)
  env={}
  for line in supervisor.ENV.read_text().splitlines():

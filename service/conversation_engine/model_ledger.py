@@ -136,8 +136,10 @@ class ModelLedger:
         return int(s.scalar(query) or 0)
 
     def reserve(self, *, account, request_id, generation, fan_id, binding_id, owner_epoch, chain_pos, chain_step,
-                model, prefixed, snapshot_sha256, prompt_sha256, worker_id, provider):
+                model, prefixed, snapshot_sha256, prompt_sha256, worker_id, provider, expected_seq=None):
         cfg = self.config
+        if expected_seq is not None and (type(expected_seq) is not int or expected_seq < -1):
+            raise Refused('invalid model ledger sequence')
         bound = cfg.call_bound_microusd(model)
         if bound <= 0:
             raise Refused('model price and token bounds are not configured')
@@ -154,9 +156,18 @@ class ModelLedger:
             existing = list(s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
                 OfEngineModelCall.request_id == request_id, OfEngineModelCall.generation == generation)
                 .order_by(OfEngineModelCall.seq).with_for_update()))
+            if expected_seq is not None and expected_seq != (existing[-1].seq if existing else -1):
+                raise ModelBusy('model call state changed; reread the ledger before reserving')
             self._expire(s, existing, now)
             if any(r.status in ('reserved', 'calling') for r in existing):
                 raise ModelBusy('a model call is already in flight for this request')
+            # A peer may finish between propose()'s cache read and this lock.
+            # Re-enter the existing cache/judge path; do not bill identical work twice.
+            if any(r.response_text is not None and r.snapshot_sha256 == snapshot_sha256
+                   and r.prompt_sha256 == prompt_sha256 and r.provider == provider and r.model == model
+                   and r.chain_pos == chain_pos and r.chain_step == chain_step and r.prefixed == prefixed
+                   for r in existing):
+                raise ModelBusy('a matching model result became available; reread it before reserving')
             remaining = cfg.max_calls_per_generation - len(existing)
             if remaining < 1:
                 raise Refused('model call limit reached for this request')

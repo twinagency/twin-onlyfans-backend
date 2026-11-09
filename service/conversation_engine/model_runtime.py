@@ -157,9 +157,7 @@ class ModelRuntime:
         profile = self._preflight(turn)
         ledger.sweep(turn.account, turn.request_id, turn.generation)
         rows = ledger.rows(turn.account, turn.request_id, turn.generation)
-        if len(rows) >= cfg.max_calls_per_generation:
-            turn.handover('model_call_limit', {'outcomes': [r.outcome or r.status for r in rows]})
-            raise Refused('model call limit reached; request handed to a human')
+        observed_seq = rows[-1].seq if rows else -1
         jctx = self._judge_context(turn, profile)
         chain = [(i, step, model, prefixed) for i, (step, model, prefixed) in enumerate(cfg.chain())]
         pos, dead, content_failed, fix, outcomes, refused = 0, set(), False, [], [], False
@@ -201,6 +199,9 @@ class ModelRuntime:
                 if now - row.updated_at < timedelta(seconds=cfg.transport_retry_seconds):
                     dead.add(row.model)  # a recent failure: don't hammer that model
                     pos = max(pos, row.chain_pos + 1)
+        if len(rows) >= cfg.max_calls_per_generation:
+            turn.handover('model_call_limit', {'outcomes': [r.outcome or r.status for r in rows]})
+            raise Refused('model call limit reached; request handed to a human')
         if refused:
             # A refusal (or the silent empty completion DeepSeek/OpenRouter return for one) is not re-asked in other
             # words or on another model/provider route: it is human work.
@@ -228,7 +229,8 @@ class ModelRuntime:
             reservation = ledger.reserve(account=turn.account, request_id=turn.request_id, generation=turn.generation,
                 fan_id=turn.fan_id, binding_id=turn.binding_id, owner_epoch=turn.owner_epoch, chain_pos=chain_pos,
                 chain_step=chain_step, model=model, prefixed=prefixed, snapshot_sha256=turn.snapshot_sha256,
-                prompt_sha256=rendered.sha256, worker_id=self.worker_id, provider=cfg.provider)
+                prompt_sha256=rendered.sha256, worker_id=self.worker_id, provider=cfg.provider, expected_seq=observed_seq)
+            observed_seq = reservation.seq
             ledger.mark_calling(turn.account, reservation.call_id, self.worker_id)
             request = ChatRequest(model=model, messages=rendered.messages, max_tokens=cfg.max_tokens,
                                   temperature=cfg.temperature, json_mode=True, timeout_seconds=cfg.timeout_seconds)

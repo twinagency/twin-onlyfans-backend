@@ -94,10 +94,11 @@ def preserve_contact_stops(store, tenant, account, *, limit=100):
             event=Event(**json.loads(row.payload)).normalized()
             if '\x00' in event.body:
                 continue  # Keep malformed evidence unreviewed and held for this fan.
+            stop = explicit_stop(event.body)
         except (ValueError, TypeError, KeyError, UnicodeError, Refused):
             continue
         key=None
-        if explicit_stop(event.body):
+        if stop:
             digest=sha256(json.dumps([account,row.fan_id,row.message_id],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
             key='engine-stop:'+digest[:52]
             for attempt in range(3):

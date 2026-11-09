@@ -44,7 +44,20 @@ def reason(s, account_id, fan_id, state, fan, *, unresolved, commercial=False):
 
 def explicit_stop(body):
     """Narrow, unambiguous opt-out; broader interpretation needs an approved model."""
-    if type(body) is not str or len(body) > 4000:
+    if type(body) is not str:
+        return False
+    # FansAPI may wrap visible text in provider HTML. Keep immutable ingress
+    # unchanged and hold unsupported formatting rather than reviewing it.
+    if re.search(r'<\s*/?\s*[A-Za-z]', body):
+        from onlyfans_runtime.native_protocol import history_text, NativeProtocolError
+        from onlyfans_runtime.store import Refused
+        try:
+            body = history_text(body)
+        except NativeProtocolError:
+            raise Refused('contact_stop_format_unclassified') from None
+        if len(body) > 4000:
+            raise Refused('contact_stop_format_unclassified')
+    elif len(body) > 4000:
         return False
     value = re.sub(r"\s+", " ", body.strip().lower()).replace("’", "'")
     return re.fullmatch(r"(?:please )?(?:stop (?:contacting|messaging|texting) me|(?:do not|don't) (?:contact|message|text) me(?: again)?)[.! ]*", value) is not None

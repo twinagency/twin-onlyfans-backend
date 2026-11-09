@@ -32,7 +32,7 @@ def bind(s, runtime, decision, source, view, fingerprint, offer_fingerprint):
         source_sha256=sha256(source.body.encode('utf-8')).hexdigest(), status=view['state'], fingerprint=fingerprint, offer_fingerprint=offer_fingerprint, created_at=utcnow()))
 
 
-def references_fingerprint(account, policy, offer_view, catalogue_view, *, s=None):
+def references_fingerprint(account, policy, offer_view, catalogue_view, *, s=None, source_body=None):
     """Bind real-pilot context to the creator profile used when the draft was made."""
     data = {'offers': offer_view, 'catalogue': catalogue_view}
     if policy is not None and policy.transport_kind == 'fansapi':
@@ -46,7 +46,7 @@ def references_fingerprint(account, policy, offer_view, catalogue_view, *, s=Non
             from db.onlyfans_models import OfRuntime
             from .engine import _price_information
             runtime = s.get(OfRuntime, account)
-            data['price_information'] = _price_information(s, runtime) if runtime is not None else []
+            data['price_information'] = _price_information(s, runtime, source_body) if runtime is not None else []
 
     canonical = json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str)
     return sha256(canonical.encode()).hexdigest()
@@ -72,6 +72,6 @@ def current(s, runtime, decision):
     policy = s.get(OfDeliveryPolicy, runtime.account_id)
     if policy is None:
         return False
-    offer_fingerprint = references_fingerprint(runtime.account_id, policy, offer_view, catalogue_view, s=s)
+    offer_fingerprint = references_fingerprint(runtime.account_id, policy, offer_view, catalogue_view, s=s, source_body=source.body)
     return (binding.status == view['state'] and binding.fingerprint == fingerprint
             and binding.offer_fingerprint == offer_fingerprint)

@@ -562,7 +562,7 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
             reference = match_offers(s, runtime, request.fan_id, source.body, include_cards=True)
             context = JudgeContext(snapshot={'current_message': {'body': source.body},
                 'offer_reference': reference,
-                'price_information': _price_information(s, runtime),
+                'price_information': _price_information(s, runtime, source.body),
                 'offer_grants': _offer_grants(s, runtime, request.fan_id)}, profile=profile)
             problems = edit_problems([part.strip() for part in parts], context)
             if problems:

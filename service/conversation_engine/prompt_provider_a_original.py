@@ -12,7 +12,7 @@ Written for this repository from the pilot handoff. Nothing is copied from FASTT
 """
 import re
 from .prompt_registry import register_prompt_provider
-from .writer_context import PromptBudget, RenderedPrompt, digest_messages
+from .writer_context import PromptBudget, RenderedPrompt, digest_messages, is_price_question
 from onlyfans_runtime.store import Refused
 
 # Rules 1-6 as a few natural lines. Rules 7-12 (account separation, memory, catalogue and ownership, purchase and
@@ -108,7 +108,7 @@ class SpecPromptProvider:
         if ctx.turn_kind == 'role_question':
             turn.append('He is asking what he is talking to: reply with the IDENTITY WORDING, then carry on.')
         price = ctx.offer or (ctx.price_information[0] if len(ctx.price_information) == 1 else None)
-        price = price if re.search(r"\b(?:prices?|costs?|how\s+much)\b", ctx.fan_text, re.I) else None
+        price = price if is_price_question(ctx.fan_text) else None
         if ctx.offer:
             o = ctx.offer
             turn.append(f"APPROVED OFFER: id {o['grantId']}, {str(o.get('label', ''))[:120]}: {str(o.get('description', ''))[:400]}. "

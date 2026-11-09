@@ -17,6 +17,11 @@ from onlyfans_runtime.store import Refused
 TURN_KINDS = ('chat', 'content_request', 'role_question')
 
 
+def is_price_question(text):
+    """The existing informational-price prompt boundary, shared with dependencies."""
+    return type(text) is str and bool(re.search(r'\b(?:prices?|costs?|how\s+much)\b', text, re.I))
+
+
 # ---- creator facts ---------------------------------------------------------------
 EXPLICIT_LEVELS = ('explicit', 'suggestive', 'none')
 

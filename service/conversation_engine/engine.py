@@ -142,11 +142,13 @@ def _offer_grants(s, runtime, fan_id):
 
 
 
-def _price_information(s, runtime):
+def _price_information(s, runtime, source_body=None):
     """Current approved listing fact only; never a grant or sale availability."""
     from .pilot_scope import current, current_offer_coverage
-    from .writer_context import active_profile
+    from .writer_context import active_profile, is_price_question
     from .commerce import _real_catalogue_terms
+    if source_body is not None and not is_price_question(source_body):
+        return []
     pilot, config = current(s, runtime)
     if pilot is None or pilot.status != 'active':
         return []
@@ -403,7 +405,7 @@ class EngineService:
                 from .catalogue import search_context
                 catalogue_view = search_context(s, runtime, fan_id, message)
                 from .memory import references_fingerprint
-                offer_fingerprint = references_fingerprint(account, policy, offer_match, catalogue_view, s=s)
+                offer_fingerprint = references_fingerprint(account, policy, offer_match, catalogue_view, s=s, source_body=message.body)
                 request_text = dict(s.execute(select(Message.message_id, Message.body).where(
                     Message.account_id == account, Message.fan_id == fan_id,
                     Message.message_id.in_([r.source_message_id for r in open_rows]),
@@ -435,7 +437,7 @@ class EngineService:
                 if type(self.model).__name__ == 'ModelRuntime':
                     # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
                     snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)
-                    snapshot['price_information'] = _price_information(s, runtime)
+                    snapshot['price_information'] = _price_information(s, runtime, message.body)
                     snapshot['verified_purchases'] = _verified_purchases(s, runtime, fan_id)
                 # JOURNEY-HOOK-1 (A7): deterministic journey facts for the model; no-op unless the account is 'fansapi'.
                 from .journey import journey_context
@@ -565,7 +567,7 @@ class EngineService:
             from .catalogue import search_context
             from .memory import references_fingerprint
             if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body, include_cards=True),
-                                      search_context(s, runtime, fan_id, source), s=s) != offer_fingerprint:
+                                      search_context(s, runtime, fan_id, source), s=s, source_body=source.body) != offer_fingerprint:
                 raise Refused('catalogue, offer or creator profile changed during generation')
             generation = 0 if observed_generation is None else observed_generation + 1
             if observed_generation is not None:
@@ -640,7 +642,7 @@ class EngineService:
             from .catalogue import search_context
             from .memory import references_fingerprint
             if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body, include_cards=True),
-                                      search_context(s, runtime, fan_id, source), s=s) != offer_fingerprint:
+                                      search_context(s, runtime, fan_id, source), s=s, source_body=source.body) != offer_fingerprint:
                 raise Refused('catalogue, offer or creator profile changed during generation')
 
     def _handover_model(self, tenant, account, request_id, target, reason='model_handover', detail=None):

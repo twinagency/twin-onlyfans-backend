@@ -190,7 +190,7 @@ class ModelLedger:
                     raise ModelBudgetExhausted('pilot total model budget exhausted')
             seq = (existing[-1].seq + 1) if existing else 0
             call_id = str(uuid.uuid4())
-            s.add(OfEngineModelCall(account_id=account, call_id=call_id, request_id=request_id, generation=generation,
+            row=OfEngineModelCall(account_id=account, call_id=call_id, request_id=request_id, generation=generation,
                 seq=seq, chain_pos=chain_pos, chain_step=chain_step, fan_id=fan_id, binding_id=binding_id,
                 owner_epoch=owner_epoch, provider=provider, model=model, prefixed=prefixed, status='reserved',
                 reserved_microusd=bound, usage_known=False, lease_owner=worker_id,
@@ -198,7 +198,12 @@ class ModelLedger:
                 snapshot_sha256=snapshot_sha256, prompt_sha256=prompt_sha256, cost_day=day,
                 pilot_scope_revision=pilot_stamp[0] if pilot_stamp else None,
                 pilot_scope_fingerprint=pilot_stamp[1] if pilot_stamp else None,
-                created_at=now, updated_at=now))
+                created_at=now, updated_at=now)
+            s.add(row)
+            if pilot_stamp and provider == 'openrouter':
+                from .model_mapping import capture_call_pin
+                endpoint=sha256((cfg.base_url.rstrip('/')+'/chat/completions').encode()).hexdigest()
+                capture_call_pin(s,row,pilot_stamp,endpoint,now)
             return Reservation(call_id, seq, day)
 
     # ---- transitions -------------------------------------------------------------

@@ -17,7 +17,7 @@ from decimal import Decimal
 import os
 import re
 import stat
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 
 import httpx
 
@@ -101,6 +101,42 @@ class OpenRouterClient:
         if type(ident) is str and re.fullmatch(r'[A-Za-z0-9._:-]{1,255}', ident):
             return ident, self.endpoint_fingerprint()
         return '', ''
+
+    def lookup_canonical_model(self, requested_model, *, timeout_seconds=30):
+        """Authenticated provider mapping read; no generation or inferred alias."""
+        from onlyfans_runtime.store import Refused
+        if (type(requested_model) is not str or len(requested_model)>128 or
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:-]*",requested_model)):
+            raise Refused("invalid model mapping identity")
+        author,slug=requested_model.split("/",1)
+        url=self._url.removesuffix("/chat/completions")+"/model/"+quote(author,safe="")+"/"+quote(slug,safe=":")
+        try:
+            with httpx.Client(transport=self._transport,timeout=httpx.Timeout(timeout_seconds),
+                    follow_redirects=False,trust_env=False) as client:
+                response=client.get(url,headers={"Authorization":"Bearer "+self._key})
+        except httpx.HTTPError:
+            raise Refused("provider model mapping is unavailable") from None
+        if response.status_code!=200 or len(response.content)>1_000_000:
+            raise Refused("provider model mapping is unavailable")
+        def unique(pairs):
+            result={}
+            for key,value in pairs:
+                if key in result:raise ValueError("duplicate mapping field")
+                result[key]=value
+            return result
+        try:
+            raw=json.loads(response.content,object_pairs_hook=unique)
+            data=raw["data"]
+            canonical=data["canonical_slug"]
+            if (type(data) is not dict or data.get("id")!=requested_model or
+                    type(canonical) is not str or len(canonical)>128 or
+                    not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}",canonical)):
+                raise ValueError("invalid provider model mapping")
+        except (ValueError,TypeError,KeyError,AttributeError,UnicodeError,RecursionError):
+            raise Refused("provider model mapping is incomplete or conflicting") from None
+        return {"requestedModel":requested_model,"canonicalModel":canonical,
+                "endpointSha256":self.endpoint_fingerprint(),
+                "mappingReceiptSha256":sha256(response.content).hexdigest()}
 
     def lookup_generation(self, generation_id, *, timeout_seconds=30):
         """One manual authenticated metadata read; no generation, retry or inferred zero cost."""

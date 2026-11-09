@@ -19,3 +19,14 @@ No implementation of either new execution path has been made. The decision affec
 Decision received from Jesse: use the existing worker owner for the manual reconciliation command. Implement only that path. No API model credential, automatic polling, administrator-supplied cost or provider-ID attachment, or release of unknown outcomes. The implementation and tests remain uncommitted/unqualified until recorded below.
 
 Approved implementation checkpoint: existing-worker manual command and additive correlation migration are implemented, not exposed to the API or polling. Intermediate model-billing-v2 passed 121 affected checks, including late-cost overwrite fencing; final committed-image qualification remains required. No real provider metadata call was made.
+
+
+## Canonical model evidence for future calls
+
+The approved worker-owner command can record an authenticated provider mapping before any new model reservation:
+
+    python -m tools.plan_c_reconcile_model --pin-canonical --tenant TENANT --account ACCOUNT --actor ACTOR --reason "provider mapping qualification" --expected-pilot-revision REVISION
+
+Run it using the existing worker role and credential configuration, with real identifiers and the current approved revision. It reads provider metadata and records an immutable scope-bound audit; it does not make a generation call or authorize sending. Each subsequent reservation snapshots that mapping in the same database transaction. Reconciliation may accept a differently named provider model only if the exact saved generation's authenticated billing record agrees with that pre-reservation snapshot. Missing, late, conflicting or ambiguous evidence keeps the reservation. A current catalogue mapping cannot retrofit an earlier call. Existing unknown-output and sending holds remain unchanged.
+
+Pilot preflight calls made before a usable per-call mapping remain reserved unless separate call-specific evidence supports settlement. Their full reservation must be included in the ceiling. The AWS isolated preflight currently holds $0.20 outside the application ledger, so the app's independent maximum must be set to at most $4.80 and actually enforced before activation; this operating condition is not satisfied merely by this note.

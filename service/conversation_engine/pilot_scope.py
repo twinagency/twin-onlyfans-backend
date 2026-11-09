@@ -49,8 +49,10 @@ def _exact(obj, keys):
 
 def validate(config):
     required = {'fans', 'product', 'operator', 'model', 'limits', 'qualification', 'authorization_mode', 'creator_profile'}
-    if type(config) is not dict or not required <= set(config) <= required | {'offer_coverage'}:
+    if type(config) is not dict or not required <= set(config) <= required | {'offer_coverage', 'delivery_mode'}:
         raise Refused('invalid pilot configuration fields')
+    if 'delivery_mode' in config and config['delivery_mode'] not in ('text_only', 'full'):
+        raise Refused('invalid pilot delivery mode')
     coverage = config.get('offer_coverage')
     if 'offer_coverage' in config:
         fields = {'account_id', 'binding_id', 'complete', 'evidence_ref', 'valid_until', 'snapshot_hash'}
@@ -136,6 +138,8 @@ def validate(config):
                       'provider_credits_per_request':per_request}}
     if 'offer_coverage' in config:
         result['offer_coverage'] = dict(coverage)
+    if 'delivery_mode' in config:
+        result['delivery_mode'] = config['delivery_mode']
     return result
 
 
@@ -146,6 +150,8 @@ def current_offer_coverage(s, runtime, config):
     reading an expired policy remains possible for stop/recovery operations.
     """
     from .catalogue import VaultCatalogueCoverage, _catalogue_version
+    if config.get('delivery_mode') == 'text_only':
+        raise Refused('pilot_text_only')
     raw = config.get('offer_coverage')
     if raw is None:
         raise Refused('offer_coverage_missing')
@@ -345,6 +351,8 @@ def delivery_block(s, runtime, fan, *, commercial=False):
     pilot, config = current(s, runtime)
     if pilot is None:
         return None
+    if commercial and config.get('delivery_mode') == 'text_only':
+        return 'pilot_text_only'
     from .pilot_ingress import review_pending
     if review_pending(s, runtime, pilot, config, fan):
         return 'pilot_contact_review_pending'
@@ -387,7 +395,7 @@ def delivery_block(s, runtime, fan, *, commercial=False):
 def policy_matches(policy, config, *, enabled):
     limits = config['limits']
     return bool(policy is not None and policy.transport_kind == 'fansapi'
-                and policy.enabled is enabled and policy.media_enabled is True
+                and policy.enabled is enabled and policy.media_enabled is (config.get('delivery_mode') != 'text_only')
                 and 0 < policy.limit_units <= limits['send_units']
                 and policy.daily_limit_units is not None and 0 < policy.daily_limit_units <= limits['daily_send_units']
                 and policy.throttle_seconds >= limits['throttle_seconds'])
@@ -438,6 +446,8 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
         policy = s.get(OfDeliveryPolicy, account)
         if policy is None or policy.enabled is not False or policy.transport_kind != 'fansapi':
             raise Refused('disable the fansapi policy before configuring the pilot')
+        if config.get('delivery_mode') == 'text_only' and policy.media_enabled:
+            raise Refused('disable media before configuring text-only pilot')
         if row is not None and row.status == 'active':
             raise Refused('stop the pilot before reconfiguring it')
         if row is not None:
@@ -455,7 +465,7 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
                     raise Refused('resolve retained fan delivery before removing the fan')
         if not _product_current(s, account, config['product']):
             raise Refused('pilot product or price is unavailable')
-        if 'offer_coverage' in config:
+        if 'offer_coverage' in config and config.get('delivery_mode') != 'text_only':
             current_offer_coverage(s, runtime, config)
         if row is not None and (row.provider_requests_used > config['limits']['provider_requests']
                 or row.provider_credits_reserved > config['limits']['provider_credit_budget']):
@@ -480,6 +490,65 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
         return {**result, 'replayed':False}
 
 
+def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
+    """Activate only the existing two-fan text pilot under the runtime lock."""
+    from db.models import Fan, OfConversationState
+    from db.onlyfans_models import OfIngress, OfRecovery
+    from db.onlyfans_delivery_models import OfTextIntent
+    from db.onlyfans_engine_models import OfEngineIndependentAdmission
+    from db.onlyfans_fans_intake_models import OfFansLink
+    from onlyfans_runtime.text_delivery import TextAuthority
+    from .controls import reason as hold_reason
+
+    if runtime.enabled or row.status not in ('configured', 'stopped'):
+        raise Refused('text-only activation requires stopped runtime')
+    policy = s.scalar(select(OfDeliveryPolicy).where(
+        OfDeliveryPolicy.account_id == runtime.account_id).with_for_update())
+    if policy is None or policy.enabled or policy.transport_kind != 'fansapi' or policy.media_enabled:
+        raise Refused('text-only activation requires disabled fansapi policy')
+    if policy.active_intent_id or policy.queued_count or policy.used_units >= config['limits']['send_units']:
+        raise Refused('delivery allowance or queue unavailable')
+    unresolved = s.scalar(select(OfTextIntent.intent_id).where(
+        OfTextIntent.account_id == runtime.account_id,
+        OfTextIntent.status.in_(('queued', 'dispatching', 'unknown'))).limit(1))
+    independent = s.scalar(select(OfEngineIndependentAdmission.attempt_id).where(
+        OfEngineIndependentAdmission.account_id == runtime.account_id,
+        OfEngineIndependentAdmission.status.in_(('dispatching', 'unknown'))).limit(1))
+    if unresolved is not None or independent is not None:
+        raise Refused('unresolved delivery holds activation')
+    conn = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == runtime.account_id,
+        OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active').with_for_update())
+    link = s.get(OfFansLink, (runtime.account_id, conn.provider_creator_id)) if conn else None
+    if (conn is None or conn.epoch < 1 or link is None or link.state != 'connected' or link.send_blocked
+            or link.provider_account_id != conn.provider_account_id):
+        raise Refused('verified pilot connection unavailable')
+    for fan_id in config['fans']:
+        rec = s.get(OfRecovery, (runtime.account_id, fan_id))
+        fan = s.get(Fan, (runtime.account_id, fan_id))
+        state = s.get(OfConversationState, (runtime.account_id, fan_id))
+        pending = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == runtime.account_id,
+            OfIngress.fan_id == fan_id, OfIngress.status.in_(('pending', 'quarantined'))).limit(1))
+        if (rec is None or rec.status != 'complete' or rec.last_complete_at is None
+                or rec.last_complete_at < conn.created_at or pending is not None):
+            raise Refused('pilot fan history unavailable')
+        if state is None or fan is None:
+            raise Refused('pilot conversation unavailable')
+        if (hold_reason(s, runtime.account_id, fan_id, state, fan,
+                        unresolved=store._unresolved(s, runtime.account_id, fan_id, state)) is not None
+                or delivery_block(s, runtime, fan_id) is not None):
+            raise Refused('pilot fan control or evidence holds activation')
+    if (row.provider_requests_used >= config['limits']['provider_requests']
+            or row.provider_credits_reserved + config['limits']['provider_credits_per_request']
+            > config['limits']['provider_credit_budget']):
+        raise Refused('pilot provider budget is exhausted')
+    limits = config['limits']
+    TextAuthority(store)._configure_in_session(s, runtime, expected_revision=policy.revision,
+        enabled=True, limit_units=limits['send_units'], daily_limit_units=limits['daily_send_units'],
+        throttle_seconds=limits['throttle_seconds'], media_enabled=False, transport_kind='fansapi',
+        actor=actor, reason=reason)
+    runtime.enabled = True
+
+
 def set_status(store, tenant, account, status, *, expected_revision, command_key, actor, reason):
     _command(command_key, actor, reason)
     if status not in ('active', 'stopped') or type(expected_revision) is not int or expected_revision < 1:
@@ -500,9 +569,12 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
             policy = s.get(OfDeliveryPolicy, account)
             connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
                                                                   OfFansConnection.status == 'active'))
-            if (not runtime.enabled or not policy_matches(policy, config, enabled=True)
-                    or not _product_current(s, account, config['product']) or connection is None
-                    or connection.binding_id != runtime.binding_id):
+            if not _product_current(s, account, config['product']) or connection is None or connection.binding_id != runtime.binding_id:
+                raise Refused('pilot activation prerequisites are not met')
+            if config.get('delivery_mode') == 'text_only':
+                _activate_text_only(s, store, runtime, row, config, actor=actor, reason=reason)
+                policy = s.get(OfDeliveryPolicy, account)
+            if not runtime.enabled or not policy_matches(policy, config, enabled=True):
                 raise Refused('pilot activation prerequisites are not met')
             if (row.provider_requests_used >= config['limits']['provider_requests']
                     or row.provider_credits_reserved + config['limits']['provider_credits_per_request']

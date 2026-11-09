@@ -209,6 +209,9 @@ class TextAuthority:
     def _media_current(s, row, policy, now):
         from conversation_engine.delivery import media_current as engine_media_current
         runtime = s.get(OfRuntime, row.account_id)
+        # Apply the shared media switch before any engine-specific shortcut.
+        if row.catalog_item_id is not None and (policy is None or not policy.media_enabled):
+            return False
         engine_result = engine_media_current(s, runtime, row)
         if engine_result is not None:
             return engine_result
@@ -246,6 +249,19 @@ class TextAuthority:
     def configure(self, tenant_id, account_id, *, expected_revision, enabled,
                   limit_units, throttle_seconds, actor, reason, media_enabled=None,
                   transport_kind=None):
+        with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant_id, account_id)
+            return self._configure_in_session(s, runtime, expected_revision=expected_revision,
+                enabled=enabled, limit_units=limit_units, throttle_seconds=throttle_seconds,
+                actor=actor, reason=reason, media_enabled=media_enabled, transport_kind=transport_kind)
+
+    def _configure_in_session(self, s, runtime, *, expected_revision, enabled, limit_units,
+                              throttle_seconds, actor, reason, media_enabled=None,
+                              transport_kind=None, daily_limit_units=None):
+        """Shared policy owner; caller holds the runtime lock and transaction."""
+        account_id = runtime.account_id
+        if (daily_limit_units is not None and (type(daily_limit_units) is not int or not 1 <= daily_limit_units <= 20000)):
+            raise Refused("invalid delivery policy")
         if (type(expected_revision) is not int or expected_revision < 0 or type(enabled) is not bool
                 or type(limit_units) is not int or not 0 <= limit_units <= 10000
                 or type(throttle_seconds) is not int or not 1 <= throttle_seconds <= 86400
@@ -254,53 +270,68 @@ class TextAuthority:
                 or media_enabled is not None and type(media_enabled) is not bool
                 or transport_kind is not None and transport_kind not in {"synthetic", "native", "fansapi"}):
             raise Refused("invalid delivery policy")
-        with Session(self.engine) as s, s.begin():
-            runtime = self.store._runtime(s, tenant_id, account_id)
-            from conversation_engine.pilot_scope import current as current_pilot, authorize
-            pilot, config = current_pilot(s, runtime)
-            if pilot is not None:
-                safe_disable = actor == 'fans-webhook' and not enabled
-                if not safe_disable:
-                    authorize(config, actor, 'activate' if enabled else 'stop')
-                if (limit_units > config['limits']['send_units'] or throttle_seconds < config['limits']['throttle_seconds']
-                        or transport_kind is not None and transport_kind != 'fansapi'):
-                    raise Refused('delivery policy exceeds the durable pilot scope')
-            policy = s.scalar(select(OfDeliveryPolicy).where(
-                OfDeliveryPolicy.account_id == account_id).with_for_update())
-            if policy is None:
-                if expected_revision != 0:
-                    raise Refused("policy revision conflict")
-                policy = OfDeliveryPolicy(account_id=account_id)
-                s.add(policy)
-                s.flush()
-            if policy.revision != expected_revision:
+        from conversation_engine.pilot_scope import current as current_pilot, authorize
+        pilot, config = current_pilot(s, runtime)
+        if pilot is not None:
+            safe_disable = actor == 'fans-webhook' and not enabled
+            if not safe_disable:
+                authorize(config, actor, 'activate' if enabled else 'stop')
+            if (limit_units > config['limits']['send_units'] or throttle_seconds < config['limits']['throttle_seconds']
+                    or transport_kind is not None and transport_kind != 'fansapi'):
+                raise Refused('delivery policy exceeds the durable pilot scope')
+            if config.get('delivery_mode') == 'text_only' and enabled and media_enabled is True:
+                raise Refused('text-only pilot cannot enable media')
+            if daily_limit_units is not None and daily_limit_units > config['limits']['daily_send_units']:
+                raise Refused('daily limit exceeds the durable pilot scope')
+        policy = s.scalar(select(OfDeliveryPolicy).where(
+            OfDeliveryPolicy.account_id == account_id).with_for_update())
+        if policy is None:
+            if expected_revision != 0:
                 raise Refused("policy revision conflict")
-            if pilot is not None and safe_disable and (limit_units != policy.limit_units or
-                    throttle_seconds != policy.throttle_seconds or media_enabled not in (None, policy.media_enabled) or
-                    transport_kind not in (None, policy.transport_kind)):
-                raise Refused('provider safety stop cannot change pilot limits')
-            if transport_kind is not None and transport_kind != policy.transport_kind:
-                if (policy.active_intent_id or policy.queued_count or s.scalar(select(OfTextIntent.intent_id).where(
-                        OfTextIntent.account_id == account_id, OfTextIntent.status.in_(("dispatching", "unknown"))).limit(1))):
-                    raise Refused("delivery mode cannot change with active or queued work")
-                if {transport_kind, policy.transport_kind} == {"fansapi", "native"}:
-                    # The legacy Moxy sender and the engine's real provider never swap directly.
-                    raise Refused("delivery mode cannot switch between native and fansapi")
-            before = self._policy_values(policy)
-            if throttle_seconds > policy.throttle_seconds and policy.next_dispatch_at is not None:
-                policy.next_dispatch_at = max(policy.next_dispatch_at,
-                    self._db_now(s) + timedelta(seconds=throttle_seconds))
-            policy.revision += 1
-            policy.enabled, policy.limit_units, policy.throttle_seconds = enabled, limit_units, throttle_seconds
-            if media_enabled is not None:
-                policy.media_enabled = media_enabled
-            if transport_kind is not None:
-                policy.transport_kind = transport_kind
-            # Policy changes never reset used units, holds, throttle or queue.
-            s.add(OfDeliveryPolicyChange(account_id=account_id, revision=policy.revision,
-                                         actor=actor, reason=reason, before_json=_json(before),
-                                         after_json=_json(self._policy_values(policy)), created_at=utcnow()))
-            return policy.revision
+            policy = OfDeliveryPolicy(account_id=account_id)
+            s.add(policy)
+            s.flush()
+        if policy.revision != expected_revision:
+            raise Refused("policy revision conflict")
+        if pilot is not None and config.get('delivery_mode') == 'text_only':
+            effective_media = policy.media_enabled if media_enabled is None else media_enabled
+            unchanged_safety_stop = safe_disable and not enabled and effective_media is policy.media_enabled
+            if effective_media and not unchanged_safety_stop:
+                raise Refused('text-only pilot cannot enable media')
+        if pilot is not None and safe_disable and (limit_units != policy.limit_units or
+                throttle_seconds != policy.throttle_seconds or media_enabled not in (None, policy.media_enabled) or
+                transport_kind not in (None, policy.transport_kind)):
+            raise Refused('provider safety stop cannot change pilot limits')
+        if transport_kind is not None and transport_kind != policy.transport_kind:
+            if (policy.active_intent_id or policy.queued_count or s.scalar(select(OfTextIntent.intent_id).where(
+                    OfTextIntent.account_id == account_id, OfTextIntent.status.in_(("dispatching", "unknown"))).limit(1))):
+                raise Refused("delivery mode cannot change with active or queued work")
+            if {transport_kind, policy.transport_kind} == {"fansapi", "native"}:
+                # The legacy Moxy sender and the engine's real provider never swap directly.
+                raise Refused("delivery mode cannot switch between native and fansapi")
+        before = self._policy_values(policy)
+        if daily_limit_units is not None:
+            before["daily_limit_units"] = policy.daily_limit_units
+        if throttle_seconds > policy.throttle_seconds and policy.next_dispatch_at is not None:
+            policy.next_dispatch_at = max(policy.next_dispatch_at,
+                self._db_now(s) + timedelta(seconds=throttle_seconds))
+        policy.revision += 1
+        policy.enabled, policy.limit_units, policy.throttle_seconds = enabled, limit_units, throttle_seconds
+        if daily_limit_units is not None:
+            policy.daily_limit_units = daily_limit_units
+        if media_enabled is not None:
+            policy.media_enabled = media_enabled
+        if transport_kind is not None:
+            policy.transport_kind = transport_kind
+        # Policy changes never reset used units, holds, throttle or queue.
+        after = self._policy_values(policy)
+        if daily_limit_units is not None:
+            after["daily_limit_units"] = policy.daily_limit_units
+        s.add(OfDeliveryPolicyChange(account_id=account_id, revision=policy.revision,
+                                     actor=actor, reason=reason, before_json=_json(before),
+                                     after_json=_json(after), created_at=utcnow()))
+        return policy.revision
+
 
     @staticmethod
     def _action(row):
@@ -385,6 +416,8 @@ class TextAuthority:
             return "delivery_disabled"
         if not runtime.enabled:
             return "account_disabled"
+        if action == 'commercial' and not policy.media_enabled:
+            return "media_delivery_disabled"
         # Explicitly selected attachments are authored and priced by the operator.
         # Purchase/ownership checks still run for paid media at every boundary.
         # Text-only messages and automated origins retain their archive gates.

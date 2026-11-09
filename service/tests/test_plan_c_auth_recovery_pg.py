@@ -576,3 +576,177 @@ def test_reconnect_receipt_survives_restart_and_serializes_concurrent_recovery(s
     finally:
         release.set()
         restarted.close()
+
+
+def stop_for_reconnect(w):
+    from onlyfans_runtime.text_delivery import TextAuthority
+    with Session(w.database[1]) as s:
+        policy=s.get(OfDeliveryPolicy,ACCOUNT)
+        revision,limit,throttle=policy.revision,policy.limit_units,policy.throttle_seconds
+    TextAuthority(w.store).configure(TENANT,ACCOUNT,expected_revision=revision,enabled=False,
+        limit_units=limit,throttle_seconds=throttle,actor=ACTOR,reason="verify changed provider account")
+
+
+@pytest.mark.parametrize("supervised", ["autonomous"], indirect=True)
+def test_unchallenged_changed_account_is_held_then_verified_and_activated(supervised):
+    import hashlib
+    from pathlib import Path
+    from fans_api_adapter.auth_recovery import recover_reconnected_challenge
+    from db.onlyfans_engine_models import OfFansConnection,OfEnginePilotReconnectReceipt
+    from conversation_engine.pilot_scope import unresolved_webhook_digests
+    from test_engine_real_worker_pg import SECRET
+    w,env,_,_,_=supervised
+    pilot,_,_,model=normal_pilot(w,env,selecting=False)
+    old=stage(pilot,23800,"hello before account changed")
+    raw,sig=new_candidate(pilot,key="unchallenged-verified")
+    # Repeat the exact receipt; it cannot mint a binding or duplicate a receipt.
+    raw_again,sig_again=new_candidate(pilot,key="unchallenged-verified")
+    assert raw_again==raw and sig_again==sig
+    digest=hashlib.sha256(raw).hexdigest()
+    with Session(w.database[1]) as s:
+        assert s.get(OfFansConnection,(ACCOUNT,1)).status=="active"
+        assert s.get(OfFansConnection,(ACCOUNT,2)) is None
+        assert s.get(OfEnginePilotReconnectReceipt,(ACCOUNT,1,"unchallenged-verified",digest)) is not None
+        runtime=w.store._runtime(s,TENANT,ACCOUNT,lock=False)
+        assert [x.event_key for x in s.scalars(unresolved_webhook_digests(runtime))]==["unchallenged-verified"]
+    try: pilot.worker.send_approved(TENANT,ACCOUNT,old["decisionId"])
+    except Refused: pass
+    assert w.fans.posts==[]
+    stop_for_reconnect(w)
+    client,calls=candidate_client(w,pilot)
+    kwargs=dict(expected_revision=pilot.scope_revision,event_epoch=1,event_key="unchallenged-verified",
+        payload_sha256=digest,secret=SECRET,command_key="b"*64,actor=ACTOR,reason="verify changed account")
+    result=recover_reconnected_challenge(w.store,TENANT,ACCOUNT,client,**kwargs)
+    assert result["sendBlocked"] and result["connectionEpoch"]==2
+    assert recover_reconnected_challenge(w.store,TENANT,ACCOUNT,client,**kwargs)["replayed"]
+    with Session(w.database[1]) as s:
+        link=s.get(OfFansLink,(ACCOUNT,str(CREATOR)))
+        assert link.send_blocked and link.block_reason=="provider_reconnect_verified"
+        runtime=w.store._runtime(s,TENANT,ACCOUNT,lock=False)
+        assert not list(s.scalars(unresolved_webhook_digests(runtime)))
+    pilot.worker.intake.release_send_block(TENANT,ACCOUNT,str(CREATOR),actor=ACTOR,reason="operator activates verified account")
+    try: pilot.worker.send_approved(TENANT,ACCOUNT,old["decisionId"])
+    except Refused: pass
+    assert w.fans.posts==[]
+    Path(env["TWIN_ENGINE_FANSAPI_ENV_FILE"]).write_text("FANSAPI_KEY=fixture-key\nFANSAPI_ACCT=acct_new_challenged\n")
+    def provider(req):
+        if req.method=="GET" and req.url.path=="/api/accounts":
+            return answer(200,[{"id":"acct_new_challenged","onlyfans_id":CREATOR,"is_authenticated":True}])
+        return w.fans.handle(req)
+    fresh=build_supervised_pilot(w.store,env,model_transport=model,fans_transport=httpx.MockTransport(provider))
+    stage(fresh,23801,"hello after verified account");fresh.tick()
+    assert len(w.fans.posts)==1 and "/acct_new_challenged/" in w.fans.posts[0]["path"]
+    assert calls==["/api/accounts"]
+
+
+@pytest.mark.parametrize("supervised", ["autonomous"], indirect=True)
+def test_unchallenged_reconnect_rejects_wrong_provider_and_new_challenge_during_proof(supervised):
+    import hashlib
+    from fans_api_adapter.auth_recovery import recover_reconnected_challenge
+    from test_engine_real_worker_pg import SECRET
+    w,env,_,_,_=supervised
+    pilot,_,_,_=normal_pilot(w,env,selecting=False)
+    raw,_=new_candidate(pilot,key="unchallenged-proof-race")
+    stop_for_reconnect(w)
+    client,calls=candidate_client(w,pilot,callback=lambda:challenge(pilot,"unchallenged-racing-challenge"))
+    kwargs=dict(expected_revision=pilot.scope_revision,event_epoch=1,event_key="unchallenged-proof-race",
+        payload_sha256=hashlib.sha256(raw).hexdigest(),secret=SECRET,command_key="c"*64,
+        actor=ACTOR,reason="verify unchanged challenge state")
+    wrong,_=candidate_client(w,pilot)
+    wrong.creator_id="wrong-creator"
+    with pytest.raises(Refused,match="identity conflicts"):
+        recover_reconnected_challenge(w.store,TENANT,ACCOUNT,wrong,**kwargs)
+    with pytest.raises(Refused,match="challenge|binding|reconnect hold"):
+        recover_reconnected_challenge(w.store,TENANT,ACCOUNT,client,**kwargs)
+    from db.onlyfans_engine_models import OfFansConnection
+    with Session(w.database[1]) as s:
+        assert s.get(OfFansConnection,(ACCOUNT,2)) is None
+        assert s.get(OfFansLink,(ACCOUNT,str(CREATOR))).send_blocked
+        assert s.get(OfDeliveryPolicy,ACCOUNT).enabled is False
+    assert calls==["/api/accounts"] and w.fans.posts==[]
+
+
+@pytest.mark.parametrize("supervised", ["autonomous"], indirect=True)
+def test_unchallenged_reconnect_concurrent_proof_preserves_other_hold(supervised):
+    import hashlib,threading
+    from concurrent.futures import ThreadPoolExecutor
+    from fans_api_adapter.auth_recovery import recover_reconnected_challenge
+    from conversation_engine.pilot_scope import unresolved_webhook_digests
+    from test_engine_real_worker_pg import SECRET
+    w,env,_,_,_=supervised
+    pilot,_,_,_=normal_pilot(w,env,selecting=False)
+    raw,_=new_candidate(pilot,key="concurrent-unchallenged")
+    new_candidate(pilot,key="unrelated-unchallenged",account="acct_other_unknown")
+    stop_for_reconnect(w)
+    entered,release=threading.Event(),threading.Event()
+    def block():
+        entered.set()
+        assert release.wait(20)
+    client,calls=candidate_client(w,pilot,callback=block)
+    kwargs=dict(expected_revision=pilot.scope_revision,event_epoch=1,event_key="concurrent-unchallenged",
+        payload_sha256=hashlib.sha256(raw).hexdigest(),secret=SECRET,command_key="9"*64,
+        actor=ACTOR,reason="verify concurrent changed account")
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first=pool.submit(recover_reconnected_challenge,w.store,TENANT,ACCOUNT,client,**kwargs)
+            assert entered.wait(20)
+            second=pool.submit(recover_reconnected_challenge,w.store,TENANT,ACCOUNT,client,**kwargs)
+            with pytest.raises(Refused,match="already in progress"):second.result(timeout=20)
+            release.set()
+            assert first.result(timeout=20)["sendBlocked"]
+        assert recover_reconnected_challenge(w.store,TENANT,ACCOUNT,client,**kwargs)["replayed"]
+        with Session(w.database[1]) as s:
+            runtime=w.store._runtime(s,TENANT,ACCOUNT,lock=False)
+            assert [x.event_key for x in s.scalars(unresolved_webhook_digests(runtime))]==["unrelated-unchallenged"]
+            assert s.get(OfDeliveryPolicy,ACCOUNT).enabled is False
+        assert calls==["/api/accounts"] and w.fans.posts==[]
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("supervised", ["autonomous"], indirect=True)
+def test_unchallenged_reconnect_rejects_stale_epoch_and_wrong_provider_creator(supervised):
+    import hashlib
+    from fans_api_adapter.auth_recovery import recover_reconnected_challenge
+    from test_engine_real_worker_pg import SECRET
+    w,env,_,_,_=supervised
+    pilot,_,_,_=normal_pilot(w,env,selecting=False)
+    raw,_=new_candidate(pilot,key="stale-unchallenged")
+    stop_for_reconnect(w)
+    calls=[]
+    def wrong_wire(req):
+        calls.append(req.url.path)
+        return answer(200,[{"id":"acct_new_challenged","onlyfans_id":999999,"is_authenticated":True}])
+    guard=ProviderRequestGuard(w.store,TENANT,ACCOUNT,pilot.scope_revision)
+    wrong=FansApiClient(account="acct_new_challenged",creator_id=CREATOR,epoch=1,token="fixture-token",
+        http=FansHttpsTransport(enabled=True,transport=httpx.MockTransport(wrong_wire)),
+        timeout=5,enabled=True,request_guard=guard)
+    kwargs=dict(expected_revision=pilot.scope_revision,event_epoch=1,event_key="stale-unchallenged",
+        payload_sha256=hashlib.sha256(raw).hexdigest(),secret=SECRET,command_key="6"*64,
+        actor=ACTOR,reason="verify provider creator")
+    with pytest.raises(Refused,match="authentication could not be verified"):
+        recover_reconnected_challenge(w.store,TENANT,ACCOUNT,wrong,**kwargs)
+    good,good_calls=candidate_client(w,pilot)
+    assert recover_reconnected_challenge(w.store,TENANT,ACCOUNT,good,**kwargs)["sendBlocked"]
+    assert http_event(pilot,{"event":"accounts.disconnected","account_id":"acct_new_challenged",
+        "payload":{"onlyfans_id":str(CREATOR)}},"new-account-disconnect")[0].status_code==202
+    with pytest.raises(Refused,match="epoch is stale"):
+        recover_reconnected_challenge(w.store,TENANT,ACCOUNT,good,**{**kwargs,"command_key":"5"*64})
+    assert calls==["/api/accounts"] and good_calls==["/api/accounts"] and w.fans.posts==[]
+
+
+@pytest.mark.parametrize("supervised", ["autonomous"], indirect=True)
+def test_unchallenged_same_account_refresh_does_not_require_recovery(supervised):
+    from db.onlyfans_engine_models import OfFansConnection,OfEnginePilotWebhookDigest
+    w,env,_,_,_=supervised
+    pilot,_,_,_=normal_pilot(w,env,selecting=False)
+    response,_=http_event(pilot,{"event":"accounts.reconnected","account_id":PROVIDER,
+        "payload":{"onlyfans_id":str(CREATOR),"state":"authenticated"}},"same-account-refresh")
+    assert response.status_code==202
+    with Session(w.database[1]) as s:
+        assert s.get(OfFansConnection,(ACCOUNT,1)).status=="active"
+        assert s.get(OfFansConnection,(ACCOUNT,2)) is None
+        assert s.get(OfDeliveryPolicy,ACCOUNT).enabled is True
+        assert not list(s.scalars(select(OfEnginePilotWebhookDigest).where(
+            OfEnginePilotWebhookDigest.event_key=="same-account-refresh")))
+    assert w.fans.posts==[]

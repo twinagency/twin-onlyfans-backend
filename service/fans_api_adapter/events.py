@@ -233,16 +233,18 @@ class FansEventIntake:
             return None  # unknown or ambiguous creator: never invent a binding
         account = accounts.pop()
         latest = prior[0]
+        binding = s.get(OfCreatorBinding, latest.binding_id)
+        runtime = self.store._runtime(s, binding.tenant_id, account)
+        from conversation_engine.pilot_scope import current as current_pilot
+        pilot, _ = current_pilot(s, runtime)
         existing_link = s.get(OfFansLink, (account, creator), with_for_update=True)
-        if existing_link is not None and existing_link.block_reason == 'auth_challenge':
-            # A webhook can arrive late. A current provider identity check is
-            # needed before a new account binding can recover this hold.
+        if pilot is not None or (existing_link is not None and existing_link.block_reason == 'auth_challenge'):
+            # A signed event alone does not prove a changed provider identity.
+            # The pilot records a held receipt and requires current provider proof.
             raise Refused('authentication challenge recovery is unverified')
         policy = s.get(OfDeliveryPolicy, account)
         if policy is None or policy.transport_kind not in ALLOWED_TRANSPORTS:
             raise Refused('webhook intake is limited to the synthetic lab')
-        binding = s.get(OfCreatorBinding, latest.binding_id)
-        runtime = self.store._runtime(s, binding.tenant_id, account)
         for row in s.scalars(select(OfFansConnection).where(OfFansConnection.account_id == account,
                 OfFansConnection.status == 'active').with_for_update()):
             row.status = 'retired'

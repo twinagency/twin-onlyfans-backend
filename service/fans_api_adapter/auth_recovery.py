@@ -181,12 +181,21 @@ def _recover_reconnected_evidence(store, tenant, account, client, *, expected_re
                 link = s.get(OfFansLink, (account, str(creator)), with_for_update=True)
                 policy = s.get(OfDeliveryPolicy, account)
                 retained = s.get(OfEnginePilotWebhookDigest, (account, event_epoch, event_key, digest))
+                challenge_hold = (link is not None and link.block_reason == "auth_challenge"
+                                  and link.send_blocked and link.state in ("auth_failed", "disconnected"))
+                ordinary_link = (link is None or
+                    (link.state == "connected" and not link.send_blocked and link.block_reason is None) or
+                    (link.state in ("disconnected", "auth_failed") and link.send_blocked
+                     and link.block_reason == link.state))
                 if (anchor is None or anchor.binding_id != runtime.binding_id or
                         anchor.provider_creator_id != str(creator) or client.account == anchor.provider_account_id or
-                        link is None or link.block_reason != "auth_challenge" or not link.send_blocked or
-                        link.state not in ("auth_failed", "disconnected") or
+                        not (challenge_hold or ordinary_link) or
                         policy is None or policy.enabled is not False or retained is None or not retained.safety_hold):
                     raise Refused("exact retained reconnect hold is unavailable")
+                latest_epoch = s.scalar(select(func.max(OfFansConnection.epoch)).where(
+                    OfFansConnection.account_id == account))
+                if latest_epoch != event_epoch:
+                    raise Refused("retained reconnect epoch is stale")
                 guard = getattr(client, "_request_guard", None)
                 if (type(guard) is not ProviderRequestGuard or guard.store is not store or
                         (guard.tenant, guard.account, guard.revision) != (tenant, account, expected_revision) or
@@ -220,7 +229,7 @@ def _recover_reconnected_evidence(store, tenant, account, client, *, expected_re
                 if uncertain is not None or independent is not None:
                     raise Refused("unresolved delivery prevents provider rebind")
                 snapshot = _challenge_snapshot(s, account, event_epoch)
-                if not snapshot[0] or snapshot[3] is not None:
+                if (challenge_hold and not snapshot[0]) or snapshot[3] is not None:
                     raise Refused("challenge event is not safely projected")
                 active = s.scalar(select(OfFansConnection).where(
                     OfFansConnection.account_id == account, OfFansConnection.status == "active"))
@@ -229,8 +238,10 @@ def _recover_reconnected_evidence(store, tenant, account, client, *, expected_re
                                            active.epoch != event_epoch):
                     raise Refused("active provider connection changed")
                 stamp = (runtime.binding_id, anchor.provider_account_id, anchor.status,
-                         link.updated_at, link.state, policy.revision, snapshot,
-                         active.epoch if active is not None else None, resolution_key)
+                         link.updated_at if link is not None else None, link.state if link is not None else None,
+                         policy.revision, snapshot, active.epoch if active is not None else None, resolution_key,
+                         link.block_reason if link is not None else None,
+                         link.send_blocked if link is not None else None, latest_epoch)
                 if expected is not None and stamp != expected:
                     raise Refused("challenge or binding changed during provider verification")
                 return stamp, None
@@ -261,8 +272,15 @@ def _recover_reconnected_evidence(store, tenant, account, client, *, expected_re
                     provider_account_id=client.account, provider_creator_id=str(creator),
                     status="active", created_at=now))
                 link = s.get(OfFansLink, (account, str(creator)), with_for_update=True)
+                if link is None:
+                    link = OfFansLink(account_id=account, creator_id=str(creator),
+                        provider_account_id=client.account, state="connected", send_blocked=True,
+                        session_refreshes=0, reconnect_count=0, updated_at=now)
+                    s.add(link)
                 link.provider_account_id, link.state = client.account, "connected"
-                link.block_reason, link.send_blocked, link.updated_at = "auth_challenge_verified", True, now
+                link.block_reason = ("auth_challenge_verified" if stamp[9] == "auth_challenge"
+                                     else "provider_reconnect_verified")
+                link.send_blocked, link.updated_at = True, now
                 link.reconnect_count += 1
                 result = {"status":"provider_verified_reconnect", "sendBlocked":True,
                           "oldEpoch":event_epoch, "connectionEpoch":new_epoch, "scopeRevision":expected_revision}

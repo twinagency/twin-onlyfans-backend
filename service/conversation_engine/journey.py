@@ -24,7 +24,7 @@ model snapshot and ``enforce_journey`` rejects a proposal that breaks a rule. ``
 a list, so the model judge can send a violation back for ONE corrected draft instead of losing the turn.
 """
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 import unicodedata
 from hashlib import sha256
 import json
@@ -263,14 +263,49 @@ def backfill_complete(s, account, fan_id):
     finished (`done_chats`). A fan that no finished run covers has history and payments we may not know about,
     so a paid offer to him waits. Plain replies are not gated.
     """
+    from db.onlyfans_models import OfRuntime
+    from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection
+    from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+    runtime = s.get(OfRuntime, account)
+    pilot = s.get(OfEnginePilotScope, 1)
+    scoped = pilot is not None and pilot.account_id == account
     for run in s.scalars(select(OfFansBackfill).where(OfFansBackfill.account_id == account,
                                                       OfFansBackfill.status == 'complete')):
         try:
             state = json.loads(run.marker or '{}')
-        except (TypeError, ValueError):
-            continue
-        if str(fan_id) in {str(v) for v in state.get('done_chats', [])}:
+            if str(fan_id) not in {str(v) for v in state.get('done_chats', [])}:
+                continue
+            if not scoped:
+                return True
+            # The provider defaults transactions to 30 days. 2016-01-01 is
+            # before OnlyFans' founding in 2016, not an inferred account date:
+            # https://www.prnewswire.com/news-releases/onlyfans-appoints-amrapali-gan-as-chief-executive-officer-301448653.html
+            # Pagination must still reach its actual end; a truncated window is
+            # never coverage. This does not itself prove provider retention.
+            if runtime is None or pilot.binding_id != runtime.binding_id or run.start_date > datetime(2016, 1, 1):
+                continue
+            coverage = state['pilot_coverage']
+            if (coverage['kind'] != 'provider_history_end.v1'
+                    or coverage['binding'] != runtime.binding_id
+                    or str(fan_id) not in set(state['exhausted_chats'])):
+                continue
+            receipt = s.get(OfLaunchCommand, (account, coverage['command']))
+            conn = s.get(OfFansConnection, (account, coverage['epoch']))
+            if (receipt is None or receipt.kind != 'plan_c_backfill' or receipt.binding_id != runtime.binding_id
+                    or conn is None or conn.status != 'active' or conn.binding_id != runtime.binding_id
+                    or conn.provider_account_id != coverage['provider_account']):
+                continue
+            evidence = json.loads(receipt.result_json)
+            config = json.loads(pilot.config_json)
+            if (evidence['binding'] != runtime.binding_id or evidence['epoch'] != conn.epoch
+                    or evidence['provider_account'] != conn.provider_account_id
+                    or evidence['creator'] != conn.provider_creator_id or evidence['product'] != config['product']
+                    or evidence['start'] != run.start_date.isoformat()
+                    or fan_id not in evidence['fans'] or fan_id not in config['fans']):
+                continue
             return True
+        except (TypeError, ValueError, KeyError, AttributeError):
+            continue
     return False
 
 

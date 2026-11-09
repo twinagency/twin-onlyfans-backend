@@ -92,6 +92,11 @@ class FansBackfill:
                     raise Refused('an explicit start date is required when no webhook was ever seen')
                 state = {'phase': 'tx', 'tx_marker': None, 'cb_offset': 0,
                          'chats': [str(ev.numeric(c)) for c in history_chats], 'hist_next': None}
+                if type(guard) is StoppedBackfillGuard:
+                    state['pilot_coverage'] = {'kind':'provider_history_end.v1',
+                        'command':guard.command_key, 'binding':guard.evidence['binding'],
+                        'epoch':guard.evidence['epoch'], 'provider_account':guard.evidence['provider_account']}
+                    state['exhausted_chats'] = []
                 run = OfFansBackfill(account_id=account, run_id=str(uuid.uuid4()), reason=reason, start_date=start,
                     status='running', pages_used=0, pages_budget=pages_budget, marker=json.dumps(state),
                     rows_seen=0, rows_new=0, started_at=now, updated_at=now)
@@ -161,14 +166,17 @@ class FansBackfill:
             oldest_in_window = False
             for item in result.data:
                 created = ev.stamp(item.get('createdAt'))
-                if created < start:
+                if created < start and 'pilot_coverage' not in state:
                     oldest_in_window = True
                     continue
                 seen += 1
                 if self.intake.ingest_history_item(tenant, account, chat, item) in ('accepted', 'ok'):
                     new += 1
             if result.next_page is None or oldest_in_window:
-                state.setdefault('done_chats', []).append(state['chats'].pop(0))
+                finished_chat = state['chats'].pop(0)
+                state.setdefault('done_chats', []).append(finished_chat)
+                if 'pilot_coverage' in state and result.next_page is None:
+                    state['exhausted_chats'].append(finished_chat)
                 state['hist_next'] = None
                 if not state['chats']:
                     state['phase'] = 'done'

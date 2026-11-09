@@ -64,23 +64,53 @@ def setup_history(w,env,*,recent=False,purchased=False):
   return httpx.Response(200,json={'model':'m/primary','choices':[{'message':{'content':json.dumps(proposal)},'finish_reason':'stop'}],
    'usage':{'prompt_tokens':100,'completion_tokens':20,'cost':0.0001},
    'openrouter_metadata':{'endpoints':{'available':[{'provider':'Fixture Provider','selected':True}]}}})
- pilot=build_supervised_pilot(w.store,env,model_transport=httpx.MockTransport(model),fans_transport=httpx.MockTransport(provider))
+ # Prepare through the real stopped, explicitly authorized coverage path.
+ from db.onlyfans_delivery_models import OfDeliveryPolicy
+ from db.onlyfans_models import OfRuntime
+ from fans_api_adapter.real_transport import RealFansConfig, build_client
+ from test_plan_c_scope_pg import ACTOR, activate, key
+ current=pilot_scope.describe(w.store,TENANT,ACCOUNT)
+ stopped=pilot_scope.set_status(w.store,TENANT,ACCOUNT,'stopped',expected_revision=current['revision'],
+  command_key=key(8001),actor=ACTOR,reason='history fixture preparation')
+ with Session(w.database[1]) as s:
+  policy=s.get(OfDeliveryPolicy,ACCOUNT);rev,limit,throttle=policy.revision,policy.limit_units,policy.throttle_seconds
+ w.authority.configure(TENANT,ACCOUNT,expected_revision=rev,enabled=False,limit_units=limit,
+  throttle_seconds=throttle,actor=ACTOR,reason='history fixture preparation')
+ with Session(w.database[1]) as s,s.begin():s.get(OfRuntime,ACCOUNT).enabled=False
+ guard=pilot_scope.authorize_stopped_backfill(w.store,TENANT,ACCOUNT,expected_revision=stopped['revision'],
+  actor=ACTOR,reason='history fixture preparation',command_key=key(8002),
+  start_date=datetime(2015,1,1),request_limit=10,base='https://api.fansapi.com')
+ def preparation_provider(request):
+  if recent and request.url.path.endswith('/messages'):
+   return answer(200,{'data':[],'_pagination':{'next_page':None}})
+  return provider(request)
+ history_client=build_client(RealFansConfig('fixture-token',PROVIDER,'https://api.fansapi.com',5),
+  creator_id=CREATOR,epoch=1,transport=httpx.MockTransport(preparation_provider),request_guard=guard)
  with Session(w.database[1]) as s:
   assert not list(s.scalars(select(OfEngineOfferGrant)))
   assert not list(s.scalars(select(OfEngineApproval)))
   assert not list(s.scalars(select(Transaction)))
  raw,headers=signed({'event':'accounts.connected','account_id':PROVIDER,'payload':{'onlyfans_id':CREATOR}},key='joined-account-connected')
- with TestClient(create_app(pilot,run_loop=False)) as client:
-  assert client.post('/onlyfans/webhooks/plan-c',content=raw,headers=headers).status_code==202
- pilot.worker.intake.reproject_pending(ACCOUNT)
- backfill=FansBackfill(pilot.worker.intake)
- first=backfill.run(TENANT,ACCOUNT,pilot.worker.transport.client,reason='operator',
+ w.intake.accept(raw,headers['Signature'],b'real-worker-secret',headers['X-OFAPI-Idempotency-Key'],
+  expected_tenant=TENANT,expected_account=ACCOUNT)
+ w.intake.reproject_pending(ACCOUNT)
+ backfill=FansBackfill(w.intake)
+ first=backfill.run(TENANT,ACCOUNT,history_client,reason='operator',
   start_date=datetime(2015,1,1),pages_budget=3,history_chats=(FAN,FAN2))
- assert first['status']=='budget_exhausted' and first['rows']>0
+ assert first['status']=='budget_exhausted' and (recent or first['rows']>0)
  assert not seen and not w.fans.posts
- final=backfill.run(TENANT,ACCOUNT,pilot.worker.transport.client,reason='operator',pages_budget=4,history_chats=(FAN,FAN2))
- assert final['status']=='complete' and final['rows']>=8 and len(pages)==4
+ final=backfill.run(TENANT,ACCOUNT,history_client,reason='operator',pages_budget=4,history_chats=(FAN,FAN2))
+ assert final['status']=='complete' and (recent or final['rows']>=8 and len(pages)==4)
  assert not seen and not w.fans.posts
+ with Session(w.database[1]) as s,s.begin():s.get(OfRuntime,ACCOUNT).enabled=True
+ activate(w,revision=stopped['revision'],n=8003)
+ pilot=build_supervised_pilot(w.store,env,model_transport=httpx.MockTransport(model),fans_transport=httpx.MockTransport(provider))
+ if recent:
+  # This is a separate gap after activation, not the stopped preparation.
+  when=datetime.now(timezone.utc).isoformat()
+  final=FansBackfill(pilot.worker.intake).run(TENANT,ACCOUNT,pilot.worker.transport.client,
+   reason='operator',start_date=datetime(2015,1,1),pages_budget=7,history_chats=(FAN,FAN2))
+  assert final['status']=='complete' and final['rows']>=8 and len(pages)==4
  return pilot,seen,pages,final
 
 def polls(w,pilot,n=3):

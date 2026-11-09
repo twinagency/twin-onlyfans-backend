@@ -605,7 +605,7 @@ def authorize_stopped_backfill(store, tenant, account, *, expected_revision, act
                 'provider_account':connection.provider_account_id, 'creator':connection.provider_creator_id,
                 'epoch':connection.epoch, 'base':base, 'start':start_date.isoformat(),
                 'request_limit':request_limit, 'requests_before':row.provider_requests_used,
-                'scope_commands':count, 'policy_revision':policy.revision}
+                'scope_commands':count, 'policy_revision':policy.revision, 'product':config['product']}
             s.add(OfLaunchCommand(account_id=account, command_key=command_key, binding_id=runtime.binding_id,
                 kind='plan_c_backfill', request_hash=request_hash, actor=actor, reason=reason,
                 before_json=_encoded({'status':row.status, 'revision':row.revision,

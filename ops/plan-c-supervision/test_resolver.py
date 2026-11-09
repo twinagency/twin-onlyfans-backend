@@ -86,3 +86,19 @@ class ResolverTests(unittest.TestCase):
   with self.assertRaises(RuntimeError):r.main()
   self.assertFalse(any(x[0]==r.sys.executable for x in self.calls))
 if __name__=='__main__':unittest.main()
+
+class ThirdResolverTests(unittest.TestCase):
+ setUp=ResolverTests.setUp
+ tearDown=ResolverTests.tearDown
+ write=ResolverTests.write
+ fake=ResolverTests.fake
+ def test_third_manual_command_keeps_scope20_and_no_new_permission(self):
+  with patch.object(st,'APPROVED_INCIDENT','e'*64),patch.object(st,'REPEATED_WEBHOOK_INCIDENT',self.h):
+   r.main();self.assertFalse(st.unresolved(self.sup/'outage-open.json'))
+   evidence=next(p for p in (self.root/'evidence').iterdir() if p.is_dir())
+   receipt=json.loads((evidence/'receipt.json').read_bytes())
+   self.assertEqual((receipt['classification'],receipt['scope_revision']),('provider_webhook_health_unavailable',20))
+   calls=len(self.calls);r.main()
+   self.assertEqual(len([a for a in self.calls[calls:] if a[0]==r.sys.executable]),0)
+   budget=json.loads((self.sup/'budget-state.json').read_bytes())
+   self.assertEqual(budget['scope_status'],'stopped');self.assertEqual(budget['last_ok_monotonic'],0)

@@ -39,10 +39,10 @@ def notify(message):
  if not name:raise GuardFailure('systemd_notify_unavailable')
  if name.startswith('@'):name='\0'+name[1:]
  with socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM) as sock:sock.sendto(message.encode(),name)
-def status_request(url,method='GET',headers=None):
+def status_request(url,method='GET',headers=None,*,timeout=6):
  req=urllib.request.Request(url,headers=headers or {},method=method)
  try:
-  with OPENER.open(req,timeout=6) as r:return r.status,r.read(2_000_001)
+  with OPENER.open(req,timeout=timeout) as r:return r.status,r.read(2_000_001)
  except urllib.error.HTTPError as e:return e.code,e.read(2_000_001)
  except Exception:raise GuardFailure('network_check_failed') from None
 def status_json(url):
@@ -125,7 +125,7 @@ def webhook_health():
   intent=ROOT/'evidence'/'webhook-enable-v2'/'put-intent.json'
   start=datetime.datetime.fromtimestamp(intent.stat().st_mtime,datetime.timezone.utc).isoformat()
   query=urlencode({'date_start':start,'limit':100,'offset':0})
-  status,body=status_request('https://api.fansapi.com/api/webhooks/'+wid+'/deliveries?'+query,headers=headers)
+  status,body=status_request('https://api.fansapi.com/api/webhooks/'+wid+'/deliveries?'+query,headers=headers,timeout=12)
   if status!=200 or len(body)>2000000:raise ValueError()
   obj=json.loads(body);rows=obj['data'];page=obj['_pagination']
   if (type(obj['_meta']['_credits']['used']) is not int or obj['_meta']['_credits']['used']!=0) or type(rows) is not list or not rows or page.get('next_page') is not None:raise ValueError()
@@ -143,6 +143,7 @@ def sender_identity():
   if cid not in Path('/proc').joinpath(str(pid),'cgroup').read_text():raise ValueError()
  except Exception:raise GuardFailure('sender_identity_unavailable') from None
 def check(state):
+ started=time.monotonic()
  baseline=readjson(BASELINE);row=db_state();outside=external_reservations()
  public,_=status_request(PUBLIC,'POST');local,_=status_request(LOCAL+'/onlyfans/webhooks/plan-c','POST')
  intake=intake_readiness(row['status'])
@@ -162,6 +163,9 @@ def check(state):
  webhook_health()
  total,balance,cost=team_usage(baseline)
  estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=row['reserved'],external_reserved=outside,prior_estimate=state['prior_estimate'])
+ # Bound proof age before the caller can publish STATE; request timeouts are
+ # socket/request limits, not a whole-check wall-clock guarantee.
+ if time.monotonic()-started>30:raise GuardFailure('monitor_check_too_old')
  result={'prior_estimate':estimate,'last_ok_utc':now(),'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'last_ok_monotonic':time.monotonic(),'scope_status':'transition' if pending else row['status'],'scope_revision':row['revision']}
  if pending:result['transition_start']=transition_start
  return result

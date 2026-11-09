@@ -86,3 +86,17 @@ A second approved resolution preserves the first immutable incident and audit
 receipt; only the current pointer is replaced after the new DB audit commits.
 Missing prior history, a subsequent failure or a class/revision/hash mix-up
 stays held. Both cases use the same existing audited owner and actor checks.
+
+The third explicitly approved case is
+ df20805ad9525b3ccc54b5dba161940cbdca78bda053d916d0578bbb42a27f33,
+ provider_webhook_health_unavailable, CURRENT stopped scope20 (the intervening
+ ten-text cap configuration is authorized; stale stopped18 is refused).
+Use the full monitoring-period and separate incident listing as for case2.
+The original 20:13 exception was not retained. A separate read-only reproduction
+at 20:33 captured TimeoutError opening the delivery-log request at6.013s;
+a neighboring successful response took6.363s. This does not establish the
+historical exception. Only delivery-log GETs now use12s socket/request timeout;
+all others remain6s. No retry or moving window is introduced. A complete check
+older than30 monotonic seconds fails before STATE publication. The existing10s
+cadence,45s wire lease,90s watchdog/start timeout and30s start grace are unchanged.
+A third recovery preserves BOTH prior immutable histories and does not activate.

@@ -169,3 +169,30 @@ class IncidentTests(unittest.TestCase):
   self.assertTrue(m.unresolved(self.marker))
 
 if __name__=='__main__':unittest.main()
+
+class ThirdIncidentTests(unittest.TestCase):
+ setUp=IncidentTests.setUp
+ tearDown=IncidentTests.tearDown
+ def test_three_histories_and_audits_survive_third_then_unlisted_failure(self):
+  m.resolve(self.root,self.receipt,self.audit.append)
+  h2=m.record_failure(self.root,{'failure':'provider_webhook_health_unavailable','case':2})
+  r2={**self.receipt,'incident_sha256':h2,'classification':'provider_webhook_health_unavailable','scope_revision':16,'audit_command_key':'d'*64}
+  with patch.object(m,'WEBHOOK_INCIDENT',h2):
+   m.resolve(self.root,r2,self.audit.append)
+   h3=m.record_failure(self.root,{'failure':'provider_webhook_health_unavailable','case':3})
+   r3={**r2,'incident_sha256':h3,'scope_revision':20,'audit_command_key':'e'*64}
+   with patch.object(m,'REPEATED_WEBHOOK_INCIDENT',h3):
+    for field,value in [('scope_revision',18),('scope_revision',16),('classification','credit_monitor_unavailable')]:
+     with self.assertRaises(RuntimeError):m.resolve(self.root,{**r3,field:value},self.audit.append)
+    def crash():raise RuntimeError('after third DB audit')
+    with self.assertRaises(RuntimeError):m.resolve(self.root,r3,self.audit.append,after_audit=crash)
+    self.assertTrue(m.unresolved(self.marker))
+    m.resolve(self.root,r3,self.audit.append)
+    self.assertEqual(m.resolve(self.root,r3,self.audit.append),'replayed')
+    self.assertFalse(m.unresolved(self.marker));self.assertFalse((self.root/'budget-state.json').exists())
+    for receipt in (self.receipt,r2,r3):
+     self.assertTrue((self.root/'incident-history'/receipt['incident_sha256']).exists())
+     self.assertEqual((self.root/'incident-history'/('resolution-'+receipt['audit_command_key']+'.json')).read_bytes(),m.encoded(receipt))
+    m.record_failure(self.root,{'failure':'unlisted fourth'})
+    with self.assertRaises(RuntimeError):m.resolve(self.root,r3,self.audit.append)
+    self.assertTrue(m.unresolved(self.marker))

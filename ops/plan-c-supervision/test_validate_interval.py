@@ -72,3 +72,24 @@ class IntervalTests(unittest.TestCase):
   self.recent['_pagination']['next_page']='more'
   with self.assertRaises(RuntimeError):self.run_case()
 if __name__=='__main__':unittest.main()
+
+class ThirdIntervalTests(unittest.TestCase):
+ setUp=IntervalTests.setUp
+ tearDown=IntervalTests.tearDown
+ run_case=IntervalTests.run_case
+ def third_case(self):
+  IntervalTests.second_case(self)
+  self.manifest_extra.update(incident_sha256=v.REPEATED_WEBHOOK_INCIDENT,scope_revision=20)
+ def test_full_anchor_and_separate_incident_window_for_stopped20(self):
+  self.third_case();r=self.run_case()
+  self.assertEqual(r['reported_incident_window_count'],0)
+  self.assertEqual(r['original_failure_subcause'],'not retained')
+  self.rows=[]
+  with self.assertRaises(RuntimeError):self.run_case()
+ def test_stale18_or_wrong_case_and_unmatched_incident_refuse(self):
+  self.third_case();self.manifest_extra['scope_revision']=18
+  with self.assertRaises(RuntimeError):self.run_case()
+  self.manifest_extra['scope_revision']=20
+  row=copy.deepcopy(self.row);row['idempotency_key']='new'
+  self.recent['data']=[row];self.manifest_extra['incident_delivery_count']=1
+  with self.assertRaises(RuntimeError):self.run_case()

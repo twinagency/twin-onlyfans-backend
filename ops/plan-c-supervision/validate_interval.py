@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from model_transport.pilot_supervised import _event_fan
-from incident_state import WEBHOOK_INCIDENT,incident_spec
+from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec
 FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
 PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
@@ -26,9 +26,9 @@ def validate(root):
         spec=incident_spec(manifest['incident_sha256'])
         if spec is None or manifest.get('classification')!=spec['classification'] or manifest.get('scope_revision')!=spec['scope_revision']:
             raise RuntimeError('incident hash, classification or scope changed')
-    current_case=manifest.get('incident_sha256')==WEBHOOK_INCIDENT
+    current_case=manifest.get('incident_sha256') in (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT)
     if current_case:
-        spec=incident_spec(WEBHOOK_INCIDENT)
+        spec=incident_spec(manifest['incident_sha256'])
         if manifest.get('classification')!=spec['classification'] or manifest.get('scope_revision')!=spec['scope_revision']:
             raise RuntimeError('incident classification or scope changed')
         recent=json.loads((root/'incident-deliveries.json').read_bytes())

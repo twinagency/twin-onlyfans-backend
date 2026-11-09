@@ -88,3 +88,27 @@ def test_second_case_cannot_mix_old_case_or_stale_authority(webhook_incident,fie
  w,proof=webhook_incident;before=pilot_scope.describe(w.store,TENANT,ACCOUNT)
  with pytest.raises(Refused):record(w,{**proof,field:value})
  assert pilot_scope.describe(w.store,TENANT,ACCOUNT)==before
+
+@pytest.fixture
+def repeated_webhook_incident(incident):
+ w,proof=incident;advance_stopped(w,20)
+ return w,{**proof,'incident_sha256':recovery.REPEATED_WEBHOOK_INCIDENT,'scope_revision':20,
+  'classification':'provider_webhook_health_unavailable','audit_command_key':key(33003),
+  'resolved_at':utcnow().isoformat()+'+00:00'}
+
+def test_third_incident_preserves_stopped_authority_holds_and_spending(repeated_webhook_incident):
+ w,proof=repeated_webhook_incident
+ with Session(w.database[1]) as s,s.begin():s.get(OfConversationState,(ACCOUNT,FAN)).mode='no_contact'
+ before=pilot_scope.describe(w.store,TENANT,ACCOUNT)
+ first=record(w,proof);assert record(w,proof)==first
+ assert first['sendingEnabled'] is False and first['holdsReleased'] is False
+ assert pilot_scope.describe(w.store,TENANT,ACCOUNT)==before
+ with Session(w.database[1]) as s:
+  assert s.get(OfConversationState,(ACCOUNT,FAN)).mode=='no_contact'
+  assert not s.get(OfRuntime,ACCOUNT).enabled and not s.get(OfDeliveryPolicy,ACCOUNT).enabled
+
+@pytest.mark.parametrize('field,value',[('incident_sha256',recovery.WEBHOOK_INCIDENT),('incident_sha256','f'*64),('classification','credit_monitor_unavailable'),('scope_revision',18),('scope_revision',16),('connection_epoch',2),('actor',OTHER),('resolved_at','2000-01-01T00:00:00+00:00')])
+def test_third_incident_refuses_stale_stop18_and_other_incident_authority(repeated_webhook_incident,field,value):
+ w,proof=repeated_webhook_incident;before=pilot_scope.describe(w.store,TENANT,ACCOUNT)
+ with pytest.raises(Refused):record(w,{**proof,field:value})
+ assert pilot_scope.describe(w.store,TENANT,ACCOUNT)==before

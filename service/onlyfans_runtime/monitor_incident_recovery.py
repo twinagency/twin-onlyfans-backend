@@ -13,11 +13,15 @@ from .store import Refused, utcnow
 INCIDENT='c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016725'
 WEBHOOK_INCIDENT='c240c781574ad075939782179ab926c9f0a69cc3fc40a292f81f7d3f57e3ad14'
 
+REPEATED_WEBHOOK_INCIDENT='df20805ad9525b3ccc54b5dba161940cbdca78bda053d916d0578bbb42a27f33'
+
 def incident_spec(incident_hash):
     if incident_hash==INCIDENT:
         return {'classification':'credit_monitor_unavailable','scope_revision':12}
     if incident_hash==WEBHOOK_INCIDENT:
         return {'classification':'provider_webhook_health_unavailable','scope_revision':16}
+    if incident_hash==REPEATED_WEBHOOK_INCIDENT:
+        return {'classification':'provider_webhook_health_unavailable','scope_revision':20}
     return None
 
 ACCOUNT='of-323358988'

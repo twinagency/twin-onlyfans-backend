@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 ROOT=Path('/srv/projects/twin-plan-c-pilot-20261109')
 sys.path.insert(0,str(ROOT/'supervision-v11'))
 import supervisor
-from incident_state import classify_journal,incident_spec,WEBHOOK_INCIDENT
+from incident_state import classify_journal,incident_spec,WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT
 from guard_core import credit_estimate
 if len(sys.argv)!=2:raise SystemExit('one exclusive collection directory is required')
 d=Path(sys.argv[1]).resolve()
@@ -40,7 +40,7 @@ try:
  if env.get('FANSAPI_BASE')!='https://api.fansapi.com' or env.get('FANSAPI_ACCT')!='acct_7bf8540de5a84f459058490fee26c47f':raise RuntimeError('provider identity changed')
  h={'Authorization':'Bearer '+env['FANSAPI_KEY'],'Accept':'application/json','User-Agent':'Twin-Plan-C/1.0'}
  def get(path,name):
-  status,raw=supervisor.status_request('https://api.fansapi.com'+path,headers=h)
+  status,raw=supervisor.status_request('https://api.fansapi.com'+path,headers=h,timeout=12 if path.startswith('/api/webhooks/'+wid+'/deliveries?') else 6)
   save(name,raw)
   if status!=200:raise RuntimeError('provider interval proof unavailable HTTP '+str(status))
   j=json.loads(raw)
@@ -51,7 +51,7 @@ try:
  expected=supervisor.readjson(ROOT/'evidence/webhook-registration.log')
  if any(show.get(k)!=expected.get(k) for k in ('id','url','account_ids','account_scope')) or show.get('enabled') is not True or show.get('has_signing_secret') is not True or set(show.get('events',[]))!=set(expected['events']) or show.get('paused',False) is not False:raise RuntimeError('dedicated webhook changed')
  interval_start=incident['last_confirmed_healthy_utc']
- if out['incident_sha256']==WEBHOOK_INCIDENT:
+ if out['incident_sha256'] in (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT):
   intent=ROOT/'evidence/webhook-enable-v2/put-intent.json'
   interval_start=datetime.datetime.fromtimestamp(intent.stat().st_mtime,datetime.timezone.utc).isoformat()
  q=urlencode({'date_start':interval_start,'limit':100,'offset':0})
@@ -59,7 +59,7 @@ try:
  if deliveries['_pagination'].get('next_page') is not None:raise RuntimeError('provider interval is not complete within bounded page')
  rows=deliveries['data']
  if type(rows) is not list:raise RuntimeError('invalid interval listing')
- if out['incident_sha256']==WEBHOOK_INCIDENT:
+ if out['incident_sha256'] in (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT):
   recent=get('/api/webhooks/'+wid+'/deliveries?'+urlencode({'date_start':incident['last_confirmed_healthy_utc'],'limit':100,'offset':0}),'incident-deliveries.json')
   if recent['_pagination'].get('next_page') is not None or type(recent['data']) is not list:
    raise RuntimeError('incident window listing incomplete')

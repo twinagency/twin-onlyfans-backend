@@ -207,6 +207,7 @@ class PromptContext:
     sales_scope: tuple = ()           # item ids when reopened_scoped
     scope_items: tuple = ()           # ({'itemId','label'}) for those ids when known
     offer: dict | None = None         # {grantId, itemId, label, description}: the ONE approved offer for this turn
+    price_information: tuple = ()     # scoped current listing facts; no grant or availability
     outstanding_card: dict | None = None   # a card already sent that his message refers to: {label, priceCents}
     purchases: tuple | None = None    # verified purchases (labels); None = records unavailable
     identity_line: str = ''           # the APPROVED identity wording; '' = none (identity questions go to a human)
@@ -506,6 +507,7 @@ def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, bud
         history=_history_rows(snapshot, budget), memory_lines=lines, memory_excerpts=excerpts, memory_available=available,
         request_context=request_context_from(snapshot, budget),
         sales_mode=snapshot.get('sales_mode', 'open'), sales_scope=scope, scope_items=scope_items, offer=offer,
+        price_information=tuple(i for i in snapshot.get('price_information', []) if profile.may_offer(i['itemId'])),
         outstanding_card=matched[0] if matched else None,
         purchases=tuple(p['label'] for p in purchases[:budget.purchases]) if isinstance(purchases, list) else None,
         identity_line=identity_line, recent_questions=recent_her_questions(snapshot),

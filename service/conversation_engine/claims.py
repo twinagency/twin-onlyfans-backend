@@ -61,7 +61,7 @@ def grounding_from_snapshot(snapshot, proposal=None):
         # an already resolved card reference can ground contextual "it".
         media_reference = (any(not _negated(clause, start) for clause, start in mentions)
                            if mentions else bool((snapshot.get('offer_reference') or {}).get('offers')))
-    prices = frozenset(g['priceCents'] for g in (snapshot.get('offer_grants') or [])
+    prices = frozenset(g['priceCents'] for g in [*(snapshot.get('offer_grants') or []), *(snapshot.get('price_information') or [])]
                        if isinstance(g, dict) and type(g.get('priceCents')) is int
                        and g['priceCents'] > 0 and g.get('currency') == 'USD')
     access_labels = tuple(card['label'] for card in (snapshot.get('offer_reference') or {}).get('cards') or []

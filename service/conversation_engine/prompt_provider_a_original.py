@@ -10,6 +10,7 @@ the questions she already asked, and asks for the engine's structured proposal.
 
 Written for this repository from the pilot handoff. Nothing is copied from FASTT or Build B (licences unverified).
 """
+import re
 from .prompt_registry import register_prompt_provider
 from .writer_context import PromptBudget, RenderedPrompt, digest_messages
 from onlyfans_runtime.store import Refused
@@ -106,13 +107,12 @@ class SpecPromptProvider:
         turn = [self._sales_state(ctx), f"TURN KIND: {ctx.turn_kind}. At most {ctx.max_texts} texts."]
         if ctx.turn_kind == 'role_question':
             turn.append('He is asking what he is talking to: reply with the IDENTITY WORDING, then carry on.')
+        price = ctx.offer or (ctx.price_information[0] if len(ctx.price_information) == 1 else None)
+        price = price if re.search(r"\b(?:prices?|costs?|how\s+much)\b", ctx.fan_text, re.I) else None
         if ctx.offer:
             o = ctx.offer
             turn.append(f"APPROVED OFFER: id {o['grantId']}, {str(o.get('label', ''))[:120]}: {str(o.get('description', ''))[:400]}. "
                         f"Only if it fits; tease from that description, no price. To use it: action offer, offer_grant_id \"{o['grantId']}\".")
-            if type(o.get('priceCents')) is int and o['priceCents'] > 0 and o.get('currency') == 'USD':
-                turn.append(f"INFORMATIONAL PRICE: USD {o['priceCents'] / 100:.2f}. Answer a price question with action reply; "
-                            "this fact does not request a card. For action offer, omit the price because the application adds it.")
             media = o.get('media') or {}
             if type(media.get('total')) is int:
                 turn.append(f"CONTENTS (the only numbers you may state about this card): {media['total']} items, "
@@ -120,7 +120,13 @@ class SpecPromptProvider:
             else:
                 turn.append('CONTENTS: counts unavailable, so state no numbers of pictures or videos.')
         else:
-            turn.append("APPROVED OFFER: none this turn (mention no unlocking, bundles or prices).")
+            turn.append("APPROVED OFFER: none this turn (no card or pitch; a listed price fact is information only)."
+                        if price else "APPROVED OFFER: none this turn (mention no unlocking, bundles or prices).")
+        if price and type(price.get('priceCents')) is int and price['priceCents'] > 0 and price.get('currency') == 'USD':
+            turn.append(f"INFORMATIONAL PRICE: USD {price['priceCents'] / 100:.2f} for {str(price.get('label', ''))[:120]}. "
+                        "Listing fact only, not availability or permission to send. Answer a price question with action reply. "
+                        "For action offer, omit price; the application adds it.")
+
         if ctx.outstanding_card:
             c = ctx.outstanding_card
             turn.append(f"HE IS ASKING ABOUT A CARD ALREADY SENT: {str(c.get('label', ''))[:120]}, {c.get('priceCents', 0)} cents. "

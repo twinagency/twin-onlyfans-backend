@@ -42,6 +42,12 @@ def references_fingerprint(account, policy, offer_view, catalogue_view, *, s=Non
             from onlyfans_runtime.store import Refused
             raise Refused('creator profile is unavailable')
         data['creator_profile'] = asdict(profile) if profile is not None else None
+        if s is not None:
+            from db.onlyfans_models import OfRuntime
+            from .engine import _price_information
+            runtime = s.get(OfRuntime, account)
+            data['price_information'] = _price_information(s, runtime) if runtime is not None else []
+
     canonical = json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str)
     return sha256(canonical.encode()).hexdigest()
 

@@ -141,6 +141,32 @@ def _offer_grants(s, runtime, fan_id):
     return out
 
 
+
+def _price_information(s, runtime):
+    """Current approved listing fact only; never a grant or sale availability."""
+    from .pilot_scope import current, current_offer_coverage
+    from .writer_context import active_profile
+    from .commerce import _real_catalogue_terms
+    pilot, config = current(s, runtime)
+    if pilot is None or pilot.status != 'active':
+        return []
+    product = config['product']
+    profile = active_profile(runtime.account_id, session=s)
+    if profile is None or not profile.may_offer(product['id']):
+        return []
+    try:
+        current_offer_coverage(s, runtime, config)
+        terms = _real_catalogue_terms(s, runtime.account_id, product['id'], lock=False)
+    except Refused:
+        return []
+    if (terms['price_cents'] != product['price_cents'] or terms['media_ids'] != product['media_ids']
+            or terms['preview_ids'] != product['preview_ids']):
+        return []
+    item = terms['item']
+    return [{'itemId': str(product['id']), 'label': item.get('label') or item.get('description_for_ai'),
+             'priceCents': terms['price_cents'], 'currency': 'USD'}]
+
+
 def _verified_purchases(s, runtime, fan_id):
     """Catalogue items whose every media file the fan verifiably owns; None when ownership evidence is unavailable."""
     from db.models import CatalogItem
@@ -409,6 +435,7 @@ class EngineService:
                 if type(self.model).__name__ == 'ModelRuntime':
                     # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
                     snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)
+                    snapshot['price_information'] = _price_information(s, runtime)
                     snapshot['verified_purchases'] = _verified_purchases(s, runtime, fan_id)
                 # JOURNEY-HOOK-1 (A7): deterministic journey facts for the model; no-op unless the account is 'fansapi'.
                 from .journey import journey_context

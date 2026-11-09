@@ -13,12 +13,18 @@ from db.onlyfans_engine_models import OfEngineOfferGrant,OfEngineRequest
 from plan_c_worker import create_app
 
 @pytest.mark.parametrize('supervised',['autonomous'],indirect=True)
-def test_price_question_gets_verified_answer_without_a_paid_card(supervised):
+@pytest.mark.parametrize('question',[
+ 'How much is the photo?',
+ 'What does the photo cost?',
+ 'Can you send the price for the photo?',
+ 'How much would it cost to buy the photo?',
+])
+def test_price_question_gets_verified_answer_without_a_paid_card(supervised,question):
  w,env,_,_,_=supervised
  normal_pilot(w,env,selecting=False)
  with Session(w.database[1]) as s:assert not list(s.scalars(select(OfEngineOfferGrant)))
  pilot,seen,_=writer(w,env,choose=lambda latest,original:{'body':'The photo is USD 3.00.'})
- raw,headers=signed(inbound(24200,'How much is the photo?'),key='price-answer-required')
+ raw,headers=signed(inbound(24200,question),key='price-answer-required')
  with TestClient(create_app(pilot,run_loop=False)) as client:
   assert client.post('/onlyfans/webhooks/plan-c',content=raw,headers=headers).status_code==202
  assert not seen and not w.fans.posts

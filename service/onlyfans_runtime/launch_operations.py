@@ -80,6 +80,38 @@ def account_state(s, runtime):
     return {**value, "fingerprint": digest(value)}
 
 
+def stop_runtime_in_session(s, runtime, *, command_key, actor, request_hash, now):
+    """Shared stop owner; caller holds the account runtime lock and transaction."""
+    account = runtime.account_id
+    runtime.enabled = False
+    # Invalidate planner claims and waiting work in the same transaction.
+    for work in s.scalars(select(OfWork).where(OfWork.account_id == account,
+            OfWork.status.in_(("waiting", "claimed")))):
+        work.generation += 1
+        work.status, work.lease_token, work.lease_until = "blocked", None, None
+    for plan in s.scalars(select(OfNativePlan).where(OfNativePlan.account_id == account,
+            OfNativePlan.status.in_(("generating", "ready")))):
+        plan.status, plan.reason = "stale", "account_stopped"
+    policy = s.get(OfDeliveryPolicy, account)
+    for intent in s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == account,
+            OfTextIntent.status == "queued")):
+        intent.status, intent.reason, intent.updated_at = "cancelled", "account_stopped", now
+        if policy is not None:
+            policy.queued_count -= 1
+    from .launch_engagement.service import invalidate
+    invalidate(s, runtime, reason="pause", actor=actor, now=now)
+    from db.onlyfans_campaign_models import OfCampaign, OfCampaignChange
+    for campaign in s.scalars(select(OfCampaign).where(OfCampaign.account_id == account,
+            OfCampaign.status.in_(("scheduled", "running")))):
+        previous = {"status": campaign.status, "revision": campaign.revision}
+        campaign.status, campaign.revision, campaign.updated_at = "paused", campaign.revision + 1, now
+        s.add(OfCampaignChange(account_id=account, campaign_id=campaign.campaign_id,
+            revision=campaign.revision, command_key=digest([command_key, campaign.campaign_id]),
+            command_hash=request_hash, action="pause", actor=actor,
+            before_json=canonical(previous), after_json=canonical({"status": "paused", "revision": campaign.revision}),
+            created_at=now))
+
+
 def control_account(store, tenant, account, *, action, command_key, actor, reason, expected_fingerprint,
                     credential_reader=None):
     command_identity(command_key, actor, reason, expected_fingerprint)
@@ -109,33 +141,8 @@ def control_account(store, tenant, account, *, action, command_key, actor, reaso
                 raise Refused("account readiness prerequisites unavailable")
             runtime.enabled = True
         else:
-            runtime.enabled = False
-            # Invalidate planner claims and waiting work in the same transaction.
-            for work in s.scalars(select(OfWork).where(OfWork.account_id == account,
-                    OfWork.status.in_(("waiting", "claimed")))):
-                work.generation += 1
-                work.status, work.lease_token, work.lease_until = "blocked", None, None
-            for plan in s.scalars(select(OfNativePlan).where(OfNativePlan.account_id == account,
-                    OfNativePlan.status.in_(("generating", "ready")))):
-                plan.status, plan.reason = "stale", "account_stopped"
-            policy = s.get(OfDeliveryPolicy, account)
-            for intent in s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == account,
-                    OfTextIntent.status == "queued")):
-                intent.status, intent.reason, intent.updated_at = "cancelled", "account_stopped", now
-                if policy is not None:
-                    policy.queued_count -= 1
-            from .launch_engagement.service import invalidate
-            invalidate(s, runtime, reason="pause", actor=actor, now=now)
-            from db.onlyfans_campaign_models import OfCampaign, OfCampaignChange
-            for campaign in s.scalars(select(OfCampaign).where(OfCampaign.account_id == account,
-                    OfCampaign.status.in_(("scheduled", "running")))):
-                previous = {"status": campaign.status, "revision": campaign.revision}
-                campaign.status, campaign.revision, campaign.updated_at = "paused", campaign.revision + 1, now
-                s.add(OfCampaignChange(account_id=account, campaign_id=campaign.campaign_id,
-                    revision=campaign.revision, command_key=digest([command_key, campaign.campaign_id]),
-                    command_hash=request_hash, action="pause", actor=actor,
-                    before_json=canonical(previous), after_json=canonical({"status": "paused", "revision": campaign.revision}),
-                    created_at=now))
+            stop_runtime_in_session(s, runtime, command_key=command_key, actor=actor,
+                                    request_hash=request_hash, now=now)
         result = {"recorded": True, "action": action, "enabled": runtime.enabled,
             "revision": before["revision"] + 1, "unresolvedOutgoing": before["unresolvedOutgoing"],
             "oldWorkResumed": False, "commandKey": command_key}

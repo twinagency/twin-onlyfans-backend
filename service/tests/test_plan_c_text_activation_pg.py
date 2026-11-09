@@ -233,3 +233,60 @@ def test_zero_existing_daily_limit_remains_stopped(stopped_text):
     with Session(w.database[1]) as s:
         policy=s.get(OfDeliveryPolicy,ACCOUNT)
         assert not policy.enabled and policy.daily_limit_units==0
+
+
+def stop_scope(w, active, command=32001):
+    return pilot_scope.set_status(w.store,TENANT,ACCOUNT,'stopped',expected_revision=active['revision'],
+        command_key=key(command),actor=ACTOR,reason='normal text-only stop')
+
+
+def test_normal_stop_disables_and_fresh_resume_sends_once(stopped_text):
+    w,env,model,seen,first=stopped_text
+    active=start(w,first['revision'])
+    pilot=build_supervised_pilot(w.store,env,model_transport=model,fans_transport=w.fans.transport)
+    stale=stage(pilot,32002,'hello before stop')
+    stopped=stop_scope(w,active)
+    with Session(w.database[1]) as s:
+        assert not s.get(OfRuntime,ACCOUNT).enabled
+        assert not s.get(OfDeliveryPolicy,ACCOUNT).enabled
+    start(w,stopped['revision'],command=32003)
+    restarted=build_supervised_pilot(w.store,env,model_transport=model,fans_transport=w.fans.transport)
+    try:
+        if stale.get('decisionId'): restarted.worker.send_approved(TENANT,ACCOUNT,stale['decisionId'])
+    except Refused:
+        pass
+    assert not w.fans.posts
+    stage(restarted,32004,'fresh hello')
+    assert restarted.tick()['dispatched']==['accepted']
+    assert restarted.tick()['dispatched']==[]
+    assert len(w.fans.posts)==1
+
+
+def test_emergency_stop_then_eligible_text_restart(stopped_text):
+    w,_,_,_,first=stopped_text
+    active=start(w,first['revision'])
+    with Session(w.database[1]) as s:
+        runtime=w.store._runtime(s,TENANT,ACCOUNT,lock=False)
+        fingerprint=account_state(s,runtime)['fingerprint']
+    control_account(w.store,TENANT,ACCOUNT,action='emergency_stop',command_key=key(32005),
+        actor=ACTOR,reason='emergency stop fixture',expected_fingerprint=fingerprint)
+    stopped=stop_scope(w,active,32006)
+    assert start(w,stopped['revision'],command=32007)['status']=='active'
+
+
+@pytest.mark.parametrize('hold',['takeover','contact','allowance'])
+def test_intervening_hold_blocks_resume(stopped_text,hold):
+    w,_,_,_,first=stopped_text
+    stopped=stop_scope(w,start(w,first['revision']),32008)
+    if hold=='allowance':
+        with Session(w.database[1]) as s,s.begin():
+            policy=s.get(OfDeliveryPolicy,ACCOUNT)
+            policy.used_units=policy.limit_units
+    else:
+        with Session(w.database[1]) as s: rev=s.get(OfConversationState,(ACCOUNT,FAN)).revision
+        w.store.control(TENANT,ACCOUNT,FAN,mode='human_controlled' if hold=='takeover' else 'no_contact',
+            expected_revision=rev,command_key='resume-hold-'+hold,actor=ACTOR,reason='intervening hold',
+            action='request_takeover' if hold=='takeover' else 'mark_no_contact')
+    with pytest.raises(Refused):start(w,stopped['revision'],command=32009)
+    with Session(w.database[1]) as s:
+        assert not s.get(OfRuntime,ACCOUNT).enabled and not s.get(OfDeliveryPolicy,ACCOUNT).enabled

@@ -201,3 +201,29 @@ def test_legacy_config_is_not_rewritten_with_a_new_default(configured_draft):
     assert 'delivery_mode' not in read['config']
     assert read['fingerprint']==first['fingerprint']
     assert install(w,cfg)['replayed']
+
+
+def test_activation_retains_lower_existing_limits_and_throttle(stopped_text):
+    w, _, _, _, first=stopped_text
+    with Session(w.database[1]) as s, s.begin():
+        policy=s.get(OfDeliveryPolicy,ACCOUNT)
+        # Fixture establishes existing stricter limits, not send authority.
+        policy.limit_units=3
+        policy.daily_limit_units=2
+        policy.throttle_seconds=max(60,policy.throttle_seconds)
+        previous_throttle=policy.throttle_seconds
+    start(w,first['revision'])
+    with Session(w.database[1]) as s:
+        policy=s.get(OfDeliveryPolicy,ACCOUNT)
+        assert (policy.limit_units,policy.daily_limit_units,policy.throttle_seconds)==(3,2,previous_throttle)
+
+
+def test_zero_existing_daily_limit_remains_stopped(stopped_text):
+    w, _, _, _, first=stopped_text
+    with Session(w.database[1]) as s, s.begin():
+        s.get(OfDeliveryPolicy,ACCOUNT).daily_limit_units=0
+    with pytest.raises(Refused,match='allowance'):
+        start(w,first['revision'])
+    with Session(w.database[1]) as s:
+        policy=s.get(OfDeliveryPolicy,ACCOUNT)
+        assert not policy.enabled and policy.daily_limit_units==0

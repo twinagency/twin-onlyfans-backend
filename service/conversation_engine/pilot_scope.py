@@ -506,7 +506,13 @@ def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
         OfDeliveryPolicy.account_id == runtime.account_id).with_for_update())
     if policy is None or policy.enabled or policy.transport_kind != 'fansapi' or policy.media_enabled:
         raise Refused('text-only activation requires disabled fansapi policy')
-    if policy.active_intent_id or policy.queued_count or policy.used_units >= config['limits']['send_units']:
+    limits = config['limits']
+    send_limit = min(policy.limit_units, limits['send_units']) if policy.limit_units else limits['send_units']
+    daily_limit = (min(policy.daily_limit_units, limits['daily_send_units'])
+                   if policy.daily_limit_units is not None else limits['daily_send_units'])
+    throttle = max(policy.throttle_seconds, limits['throttle_seconds'])
+    if (policy.active_intent_id or policy.queued_count or policy.used_units >= send_limit
+            or not policy.limit_units and policy.used_units or daily_limit <= 0):
         raise Refused('delivery allowance or queue unavailable')
     unresolved = s.scalar(select(OfTextIntent.intent_id).where(
         OfTextIntent.account_id == runtime.account_id,
@@ -541,10 +547,9 @@ def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
             or row.provider_credits_reserved + config['limits']['provider_credits_per_request']
             > config['limits']['provider_credit_budget']):
         raise Refused('pilot provider budget is exhausted')
-    limits = config['limits']
     TextAuthority(store)._configure_in_session(s, runtime, expected_revision=policy.revision,
-        enabled=True, limit_units=limits['send_units'], daily_limit_units=limits['daily_send_units'],
-        throttle_seconds=limits['throttle_seconds'], media_enabled=False, transport_kind='fansapi',
+        enabled=True, limit_units=send_limit, daily_limit_units=daily_limit,
+        throttle_seconds=throttle, media_enabled=False, transport_kind='fansapi',
         actor=actor, reason=reason)
     runtime.enabled = True
 

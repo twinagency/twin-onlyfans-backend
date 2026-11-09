@@ -20,7 +20,7 @@ from conversation_engine.pilot_scope import require, require_model, require_prof
 from conversation_engine.real_worker import RealConversationWorker
 from conversation_engine.writer_context import JsonFileCreatorProfiles
 from db.onlyfans_delivery_models import OfDeliveryPolicy
-from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfEnginePilotWebhookDigest
+from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfEnginePilotWebhookDigest, OfEnginePilotReconnectReceipt
 from db.onlyfans_fans_intake_models import OfFansProjection
 from db.onlyfans_models import OfIngress
 from fans_api_adapter.events import FansEventIntake, _parse as parse_event
@@ -37,12 +37,17 @@ def _event_fan(raw):
         event, payload = body['event'], body['payload']
         if event == 'messages.received': value = payload['fromUser']['id']
         elif event == 'messages.sent': value = payload['toUser']['id']
+        elif event == 'messages.deleted':
+            from fans_api_adapter.payment_evidence import numeric
+            numeric(payload['id'])
+            return event, None
         elif event == 'messages.ppv.unlocked': value = payload['chat_id']
-        elif event == 'subscriptions.new': value = payload['fan']['id']
+        elif event in {'subscriptions.new', 'subscriptions.renewed', 'subscriptions.expired'}: value = payload['fan']['id']
         elif event == 'transactions.new': value = (payload.get('fan') or payload['user'])['id']
         elif event == 'chargebacks.new': value = payload['payment']['user']['id']
         elif event in {'accounts.connected','accounts.reconnected','accounts.disconnected',
-                       'accounts.session_expired','accounts.authentication_failed'}:
+                       'accounts.session_expired','accounts.authentication_failed',
+                       'accounts.otp_code_required','accounts.face_otp_required'}:
             return event, None
         else:
             raise ValueError('unsupported event')
@@ -65,8 +70,10 @@ def _known_irrelevant(raw):
         return False
 
 
-def _record_outside_digest(store, tenant, account, raw, event_key, *, safety_hold=False):
-    """Persist only a hash under the active epoch lock so a racing duplicate cannot be lost."""
+def _record_outside_digest(store, tenant, account, raw, event_key, *, signature, secret, safety_hold=False):
+    """Persist held digest and, for an unbound reconnect, the authenticated receipt atomically."""
+    if not verify_signature(raw, signature, secret):
+        raise Refused("webhook authentication failed")
     if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
         raise Refused('invalid webhook identity')
     digest = sha256(raw).hexdigest()
@@ -75,8 +82,14 @@ def _record_outside_digest(store, tenant, account, raw, event_key, *, safety_hol
         require(s, runtime)  # Retained intake evidence grants no model or send rights.
         active = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
             OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active'))
+        # A provider disconnect retires the active connection. Retain later
+        # signed uncertainty against the latest binding epoch; this grants no
+        # permission and does not revive the retired account.
+        if active is None:
+            active = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
+                OfFansConnection.binding_id == runtime.binding_id).order_by(OfFansConnection.epoch.desc()).limit(1))
         active_epoch = active.epoch if active is not None else None
-        if active is None or active.binding_id != runtime.binding_id or active.status != 'active':
+        if active is None or active.binding_id != runtime.binding_id:
             raise Refused('pilot connection changed')
         # A reconnect may legitimately reuse event keys. Resolve a known provider account
         # to its own epoch; malformed/unknown envelopes are conservatively scoped to active.
@@ -101,6 +114,19 @@ def _record_outside_digest(store, tenant, account, raw, event_key, *, safety_hol
             # No old rows are deleted or compacted. Storage/backup remains an operational gate.
             s.add(OfEnginePilotWebhookDigest(account_id=account, epoch=epoch, event_key=event_key,
                 payload_sha256=digest, safety_hold=bool(safety_hold or conflict or matched is None), received_at=utcnow()))
+            s.flush()
+        # An unbound reconnect is not a verified connection. Preserve its exact
+        # signed bytes under the prior epoch, in the same transaction as the hold.
+        try:
+            envelope = parse_event(raw)
+        except Refused:
+            envelope = {}
+        if (safety_hold and matched is None and
+                envelope.get('event') in ('accounts.connected', 'accounts.reconnected')):
+            key = (account, epoch, event_key, digest)
+            if s.get(OfEnginePilotReconnectReceipt, key) is None:
+                s.add(OfEnginePilotReconnectReceipt(account_id=account, epoch=epoch, event_key=event_key,
+                    payload_sha256=digest, raw_body=raw, signature=signature, received_at=utcnow()))
         return bool(conflict)
 
 
@@ -142,9 +168,9 @@ class SupervisedPilot:
             require_profile(config, profile)
             return scope.active_since
 
-    def _record_outside_digest(self, raw, event_key, *, safety_hold=False):
+    def _record_outside_digest(self, raw, event_key, *, signature, safety_hold=False):
         return _record_outside_digest(self.worker.engine.store, self.tenant, self.account,
-                                      raw, event_key, safety_hold=safety_hold)
+                                      raw, event_key, signature=signature, secret=self.secret, safety_hold=safety_hold)
 
     def handle(self, raw, signature, event_key, *, ingest_only=False):
         if type(ingest_only) is not bool:
@@ -174,7 +200,7 @@ class SupervisedPilot:
         except Refused:
             outside, malformed = True, not _known_irrelevant(raw)
         if outside:
-            if self._record_outside_digest(raw, event_key, safety_hold=malformed):
+            if self._record_outside_digest(raw, event_key, signature=signature, safety_hold=malformed):
                 return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
             return {'outcome':'outside_pilot_scope'}
         if planning:
@@ -182,16 +208,28 @@ class SupervisedPilot:
             from conversation_engine.pilot_ingress import preserve_contact_stops
             preserve_contact_stops(self.worker.engine.store, self.tenant, self.account)
         if not planning:
-            result = self.worker.intake.accept(raw, signature, self.secret, event_key,
-                expected_tenant=self.tenant, expected_account=self.account)
+            try:
+                result = self.worker.intake.accept(raw, signature, self.secret, event_key,
+                    expected_tenant=self.tenant, expected_account=self.account)
+            except Refused as exc:
+                if str(exc) not in ('authentication challenge recovery is unverified', 'provider account is not bound'):
+                    raise
+                conflict = self._record_outside_digest(raw, event_key, signature=signature, safety_hold=True)
+                return {'outcome':'quarantined' if conflict else 'held', 'planning':'held'}
             if result.get('outcome') == 'quarantined':
                 self.worker.engine.fence_conflicted_sources(self.tenant, self.account)
             self.worker.engine.store.drain(self.tenant, self.account)
             from conversation_engine.pilot_ingress import preserve_contact_stops
             preserve_contact_stops(self.worker.engine.store, self.tenant, self.account)
             return {**result, 'planning':'held'}
-        result = self.worker.handle(self.tenant, self.account, raw_body=raw, signature=signature,
-                                    secret=self.secret, event_key=event_key)
+        try:
+            result = self.worker.handle(self.tenant, self.account, raw_body=raw, signature=signature,
+                                        secret=self.secret, event_key=event_key)
+        except Refused as exc:
+            if str(exc) not in ('authentication challenge recovery is unverified', 'provider account is not bound'):
+                raise
+            conflict = self._record_outside_digest(raw, event_key, signature=signature, safety_hold=True)
+            return {'outcome':'quarantined' if conflict else 'held', 'planning':'held'}
         self.validate()
         return result
 
@@ -438,10 +476,15 @@ class IntakeOnlyPilot:
         except Refused:
             outside,malformed=True,not _known_irrelevant(raw)
         if outside:
-            conflict=_record_outside_digest(self.store,self.tenant,self.account,raw,event_key,safety_hold=malformed)
+            conflict=_record_outside_digest(self.store,self.tenant,self.account,raw,event_key,signature=signature,secret=self.secret,safety_hold=malformed)
             return {'outcome':'quarantined' if conflict else 'outside_pilot_scope','planning':'held'}
-        result=FansEventIntake(self.store).accept(raw,signature,self.secret,event_key,
-            expected_tenant=self.tenant,expected_account=self.account)
+        try:
+            result=FansEventIntake(self.store).accept(raw,signature,self.secret,event_key,
+                expected_tenant=self.tenant,expected_account=self.account)
+        except Refused as exc:
+            if str(exc) not in ('authentication challenge recovery is unverified','provider account is not bound'):raise
+            conflict=_record_outside_digest(self.store,self.tenant,self.account,raw,event_key,signature=signature,secret=self.secret,safety_hold=True)
+            return {'outcome':'quarantined' if conflict else 'held','planning':'held'}
         self.tick()
         return {**result,'planning':'held'}
 

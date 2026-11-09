@@ -23,6 +23,13 @@ def retained_event(pilot, monkeypatch, key, event='messages.unread_count_updated
     # Reproduce the old classifier through actual signed HTTP intake; no authority is seeded.
     with monkeypatch.context() as legacy:
         legacy.setattr('model_transport.pilot_supervised._known_irrelevant', lambda raw: False)
+        if event == 'messages.deleted':
+            # Earlier releases classified deletion as unknown; preserve that
+            # historical digest path even though current intake recognizes it.
+            from onlyfans_runtime.store import Refused
+            def legacy_unknown(raw):
+                raise Refused('unsupported legacy event')
+            legacy.setattr('model_transport.pilot_supervised._event_fan', legacy_unknown)
         response, raw = http_event(pilot, {'event':event, 'account_id':PROVIDER,
             'payload': {'count':0} if payload is None else payload}, key)
         assert response.status_code == 202

@@ -67,7 +67,7 @@ def grounding_from_snapshot(snapshot, proposal=None):
     access_labels = tuple(card['label'] for card in (snapshot.get('offer_reference') or {}).get('cards') or []
                           if isinstance(card, dict) and isinstance(card.get('label'), str)
                           and card.get('sendState') == 'accepted' and card.get('accessState') == 'confirmed'
-                          and card.get('financialReview') is False)
+                          and card.get('financialReview') is False and card.get('messageDeleted') is not True)
     return Grounding(frozenset(quantities), labels, media_reference, prices, access_labels)
 
 

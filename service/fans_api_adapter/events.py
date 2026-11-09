@@ -32,9 +32,11 @@ from .intake import _message, _nonfinite, _unique_object
 from .webhooks import verify_signature
 
 ACCOUNT_EVENTS = {'accounts.connected', 'accounts.reconnected', 'accounts.session_expired',
-                  'accounts.authentication_failed', 'accounts.disconnected'}
-SUPPORTED = ACCOUNT_EVENTS | {'messages.received', 'messages.sent', 'messages.ppv.unlocked',
-                              'transactions.new', 'chargebacks.new', 'subscriptions.new'}
+                  'accounts.authentication_failed', 'accounts.disconnected',
+                  'accounts.otp_code_required', 'accounts.face_otp_required'}
+SUPPORTED = ACCOUNT_EVENTS | {'messages.received', 'messages.sent', 'messages.deleted', 'messages.ppv.unlocked',
+                              'transactions.new', 'chargebacks.new', 'subscriptions.new',
+                              'subscriptions.renewed', 'subscriptions.expired'}
 # Only the offline lab transport may be driven by this intake until the live
 # transport owner registers a Fans transport kind with the delivery policy.
 ALLOWED_TRANSPORTS = ENGINE_TRANSPORT_KINDS
@@ -60,7 +62,12 @@ def _pilot_fan_allowed(s, runtime, raw, event):
     pilot, config = current(s, runtime)
     if pilot is None:
         return True
-    fan = s.scalar(select(event_fan(literal(event), literal(raw))))
+    if event in ('subscriptions.renewed', 'subscriptions.expired'):
+        # The schema-owned fan function predates these event types. Recheck the
+        # actual fan both at intake and at projection; NULL must not widen scope.
+        fan = ev.numeric(_parse(raw)['payload']['fan']['id'])
+    else:
+        fan = s.scalar(select(event_fan(literal(event), literal(raw))))
     return fan is None or int(fan) in config['fans']
 
 
@@ -131,7 +138,74 @@ class FansEventIntake:
                 outcome = 'accepted'
         # Raw evidence is durable. Everything below is repairable projection.
         status = self._project(account, epoch, event_key)
+        if status == 'projected' and event in ('accounts.otp_code_required', 'accounts.face_otp_required'):
+            self._resolve_projected_challenge_digest(account, epoch, event_key)
         return {'outcome': outcome, 'account': account, 'epoch': epoch, 'projection': status}
+
+    def _resolve_projected_challenge_digest(self, account, epoch, event_key):
+        # A challenge first seen on an unbound provider account was retained as
+        # a digest. Once the exact signed bytes arrive again through a verified
+        # active binding and the stop has actually applied, classify only the
+        # identical older digest. Never clear a conflict or another event.
+        from conversation_engine.pilot_scope import current as current_pilot, digest_resolution_key
+        from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
+        from db.onlyfans_models import OfRuntime
+        from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+        with Session(self.engine) as s, s.begin():
+            runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == account).with_for_update())
+            if runtime is None:
+                return
+            pilot, _ = current_pilot(s, runtime)
+            if pilot is None:
+                return
+            connection = s.get(OfFansConnection, (account, epoch))
+            raw = s.get(OfFansWebhook, (account, epoch, event_key))
+            projection = s.get(OfFansProjection, (account, epoch, event_key))
+            if (connection is None or connection.status != 'active' or connection.binding_id != runtime.binding_id or
+                    raw is None or raw.status != 'accepted' or
+                    raw.event_type not in ('accounts.otp_code_required', 'accounts.face_otp_required') or
+                    projection is None or projection.status != 'projected' or
+                    _parse(raw.raw_body).get('account_id') != connection.provider_account_id):
+                return
+            link = s.get(OfFansLink, (account, connection.provider_creator_id), with_for_update=True)
+            policy = s.get(OfDeliveryPolicy, account)
+            if (link is None or link.state != 'auth_failed' or not link.send_blocked or
+                    link.block_reason != 'auth_challenge' or policy is None or policy.enabled is not False):
+                return
+            candidates = s.execute(select(OfEnginePilotWebhookDigest, OfFansConnection).join(OfFansConnection,
+                and_(OfFansConnection.account_id == OfEnginePilotWebhookDigest.account_id,
+                     OfFansConnection.epoch == OfEnginePilotWebhookDigest.epoch)).where(
+                OfEnginePilotWebhookDigest.account_id == account,
+                OfEnginePilotWebhookDigest.epoch != epoch,
+                OfEnginePilotWebhookDigest.event_key == event_key,
+                OfEnginePilotWebhookDigest.payload_sha256 == raw.payload_sha256,
+                OfEnginePilotWebhookDigest.safety_hold.is_(True),
+                OfFansConnection.binding_id == runtime.binding_id,
+                OfFansConnection.provider_creator_id == connection.provider_creator_id)).all()
+            for retained, old_connection in candidates:
+                other = s.scalar(select(OfEnginePilotWebhookDigest.payload_sha256).where(
+                    OfEnginePilotWebhookDigest.account_id == account,
+                    OfEnginePilotWebhookDigest.epoch == retained.epoch,
+                    OfEnginePilotWebhookDigest.event_key == event_key,
+                    OfEnginePilotWebhookDigest.payload_sha256 != raw.payload_sha256).limit(1))
+                old_raw = s.get(OfFansWebhook, (account, retained.epoch, event_key))
+                conflict = s.scalar(select(OfFansWebhookConflict.payload_sha256).where(
+                    OfFansWebhookConflict.account_id == account, OfFansWebhookConflict.epoch == retained.epoch,
+                    OfFansWebhookConflict.event_key == event_key).limit(1))
+                if other is not None or conflict is not None or (old_raw and old_raw.payload_sha256 != raw.payload_sha256):
+                    continue
+                key = digest_resolution_key(runtime.binding_id, retained.epoch, event_key, raw.payload_sha256)
+                if s.get(OfLaunchCommand, (account, key)) is not None:
+                    continue
+                evidence = {'eventEpoch':retained.epoch, 'eventKey':event_key,
+                            'payloadSha256':raw.payload_sha256, 'projectedEpoch':epoch}
+                result = {'status':'exact_challenge_projected', 'sendBlocked':True}
+                request_hash = sha256(json.dumps([account,evidence,result],sort_keys=True).encode()).hexdigest()
+                s.add(OfLaunchCommand(account_id=account, command_key=key, binding_id=runtime.binding_id,
+                    kind='plan_c_webhook_resolution', request_hash=request_hash, actor='fans-webhook',
+                    reason='Exact signed provider challenge projected and sending blocked',
+                    before_json=json.dumps(evidence,sort_keys=True), result_json=json.dumps(result,sort_keys=True),
+                    created_at=utcnow()))
 
     def _resolve(self, s, body, event, now):
         """Find the connection row for this delivery; a reconnect (new acct_) re-binds by creator id."""
@@ -159,6 +233,11 @@ class FansEventIntake:
             return None  # unknown or ambiguous creator: never invent a binding
         account = accounts.pop()
         latest = prior[0]
+        existing_link = s.get(OfFansLink, (account, creator), with_for_update=True)
+        if existing_link is not None and existing_link.block_reason == 'auth_challenge':
+            # A webhook can arrive late. A current provider identity check is
+            # needed before a new account binding can recover this hold.
+            raise Refused('authentication challenge recovery is unverified')
         policy = s.get(OfDeliveryPolicy, account)
         if policy is None or policy.transport_kind not in ALLOWED_TRANSPORTS:
             raise Refused('webhook intake is limited to the synthetic lab')
@@ -251,8 +330,12 @@ class FansEventIntake:
             return ('pending', 'inbox_backpressure') if result == 'backpressure' else ('projected', result)
         if event == 'messages.sent':
             return self._sent(s, payload, raw, connection, now, after)
+        if event == 'messages.deleted':
+            return self._deleted(s, payload, raw, connection, current)
         if event == 'subscriptions.new':
             return self._subscription(s, payload, connection)
+        if event in ('subscriptions.renewed', 'subscriptions.expired'):
+            return self._subscription_lifecycle(event, payload, link)
         if event == 'messages.ppv.unlocked':
             return self._unlock(s, payload, raw, connection, now, after)
         if event == 'transactions.new':
@@ -260,6 +343,59 @@ class FansEventIntake:
         if event == 'chargebacks.new':
             return self._chargeback(s, payload, raw.event_key, ev.digest(json.loads(raw.raw_body)), connection, now, after, 'webhook')
         raise Refused('unsupported event')
+
+    def _deleted(self, s, payload, raw, connection, current):
+        # Only a provider account and message ID are supplied. Ambiguity,
+        # retired accounts and missing source evidence remain held. A proven
+        # outside-pilot message is classified only after exact epoch mapping.
+        from conversation_engine.history_scope import current_binding_message
+        from conversation_engine.pilot_scope import current as current_pilot
+        from db.onlyfans_models import OfRuntime
+        from db.onlyfans_engine_models import OfEngineDecision
+        from sqlalchemy import func
+        from sqlalchemy.dialects.postgresql import JSONB
+        runtime = s.get(OfRuntime, connection.account_id)
+        if connection.status != 'active' or connection.provider_account_id != current:
+            return 'held', 'deletion_historical_connection'
+        message_id = ev.numeric(payload.get('id'))
+        rows = s.scalars(select(Message).where(Message.account_id == connection.account_id,
+            Message.message_id == message_id).limit(2)).all()
+        if len(rows) != 1:
+            return 'held', 'deletion_mapping_missing_or_ambiguous'
+        message = rows[0]
+        if not s.scalar(select(current_binding_message(runtime.binding_id)).where(
+                Message.account_id == message.account_id, Message.fan_id == message.fan_id,
+                Message.message_id == message.message_id)):
+            return 'held', 'deletion_binding_unproven'
+        pilot, config = current_pilot(s, runtime)
+        body = func.convert_from(OfFansWebhook.raw_body, 'UTF8').cast(JSONB)
+        incoming = s.scalar(select(OfFansWebhook.event_key).join(OfFansProjection,
+            (OfFansProjection.account_id == OfFansWebhook.account_id) &
+            (OfFansProjection.epoch == OfFansWebhook.epoch) &
+            (OfFansProjection.event_key == OfFansWebhook.event_key)).where(
+            OfFansWebhook.account_id == connection.account_id, OfFansWebhook.epoch == connection.epoch,
+            OfFansWebhook.event_type == 'messages.received', OfFansProjection.status == 'projected',
+            func.jsonb_extract_path_text(body, 'payload', 'id') == str(message_id),
+            func.jsonb_extract_path_text(body, 'payload', 'fromUser', 'id') == str(message.fan_id)).limit(1))
+        outgoing = s.scalar(select(OfTextIntent.intent_id).join(OfEngineDecision,
+            (OfEngineDecision.account_id == OfTextIntent.account_id) &
+            (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(
+            OfTextIntent.account_id == connection.account_id, OfTextIntent.fan_id == message.fan_id,
+            OfTextIntent.provider_message_id == message_id, OfTextIntent.binding_id == runtime.binding_id,
+            OfTextIntent.status == 'accepted', OfTextIntent.projected_at.is_not(None),
+            OfEngineDecision.connection_epoch == connection.epoch).limit(1))
+        if (message.direction not in ('in', 'out') or
+                (message.direction == 'in' and incoming is None) or
+                (message.direction == 'out' and outgoing is None)):
+            return 'held', 'deletion_epoch_unproven'
+        if pilot is not None and message.fan_id not in config['fans']:
+            # Proven unrelated to both pilot fans. Retain the webhook and its
+            # projection, without modifying the other fan or holding the pilot.
+            return 'ignored', 'deletion_outside_pilot'
+        # Only the display flag changes. Immutable ingress, contact control,
+        # accepted intents, purchase/access evidence and financial history remain.
+        message.is_unsent = True
+        return 'projected', f'deleted:{message.fan_id}:{message_id}'
 
     # ---------------------------------------------------------------- accounts
     def _account(self, s, event, payload, provider_id, current, connection, link, now, after):
@@ -269,6 +405,10 @@ class FansEventIntake:
         if creator is not None and str(creator) != link.creator_id:
             raise Refused('account event names another creator')
         if event in ('accounts.connected', 'accounts.reconnected'):
+            if link.block_reason == 'auth_challenge':
+                # A signed success may be a delayed pre-challenge event; it is
+                # not proof of current provider authentication.
+                return 'held', 'challenge_recovery_unverified'
             if provider_id == current:
                 link.provider_account_id = provider_id
                 if link.state != 'connected':
@@ -277,8 +417,10 @@ class FansEventIntake:
         if event == 'accounts.session_expired':
             link.session_refreshes += 1  # the provider re-connects it itself: informational only
             return 'projected', 'session_refreshing'
-        link.state = 'auth_failed' if event == 'accounts.authentication_failed' else 'disconnected'
-        link.send_blocked, link.block_reason, link.updated_at = True, link.state, now
+        challenge = event in ('accounts.otp_code_required', 'accounts.face_otp_required')
+        link.state = 'auth_failed' if event == 'accounts.authentication_failed' or challenge else 'disconnected'
+        challenge_hold = challenge or link.block_reason == 'auth_challenge'
+        link.send_blocked, link.block_reason, link.updated_at = True, 'auth_challenge' if challenge_hold else link.state, now
         if event == 'accounts.disconnected':
             connection.status = 'retired'  # that acct_ id answers 404 from now on
         tenant, account, reason = s.get(OfCreatorBinding, connection.binding_id).tenant_id, connection.account_id, link.state
@@ -340,6 +482,27 @@ class FansEventIntake:
         if str(fan_id) == link.creator_id:
             raise Refused('subscription names the creator as the fan')
         return 'projected', f'subscription_new:{fan_id}'
+
+    @staticmethod
+    def _subscription_lifecycle(event, payload, link):
+        fan = payload.get('fan')
+        if type(fan) is not dict:
+            raise Refused('subscription fan is missing')
+        fan_id = ev.numeric(fan.get('id'))
+        if str(fan_id) == link.creator_id:
+            raise Refused('subscription names the creator as the fan')
+        user = payload.get('user')
+        if user is not None and (type(user) is not dict or ev.numeric(user.get('id')) != fan_id):
+            raise Refused('subscription fan identity conflicts')
+        expected_user = link.creator_id if event == 'subscriptions.renewed' else str(fan_id)
+        if str(payload.get('user_id')) != expected_user:
+            raise Refused('subscription identity conflicts')
+        # Validate provider timestamps, retain the immutable original receipt,
+        # and never turn subscription lifecycle into photo purchase evidence.
+        ev.stamp(payload.get('createdAt'))
+        if event == 'subscriptions.expired':
+            ev.stamp(payload.get('expiredAt'))
+        return 'projected', f"{event.replace('.', '_')}:{fan_id}"
 
     def _unlock(self, s, payload, raw, connection, now, after):
         link = s.get(OfFansLink, (connection.account_id, connection.provider_creator_id))

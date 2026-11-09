@@ -147,6 +147,25 @@ class OfEnginePilotWebhookDigest(Base):
     received_at = Column(DateTime, nullable=False)
 
 
+class OfEnginePilotReconnectReceipt(Base):
+    """Authenticated bytes retained without asserting a new provider binding."""
+    __tablename__ = 'of_engine_pilot_reconnect_receipt'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'epoch', 'event_key', 'payload_sha256'],
+            ['of_engine_pilot_webhook_digest.account_id', 'of_engine_pilot_webhook_digest.epoch',
+             'of_engine_pilot_webhook_digest.event_key', 'of_engine_pilot_webhook_digest.payload_sha256'],
+            ondelete='RESTRICT'),
+        {'info': {'onlyfans_since': '0129_reconnect_receipt'}},
+    )
+    account_id = Column(String, primary_key=True)
+    epoch = Column(BigInteger, primary_key=True)
+    event_key = Column(String(255), primary_key=True)
+    payload_sha256 = Column(String(64), primary_key=True)
+    raw_body = Column(LargeBinary, nullable=False)
+    signature = Column(String(64), nullable=False)
+    received_at = Column(DateTime, nullable=False)
+
+
 class OfEngineAttempt(Base):
     __tablename__ = 'of_engine_attempt'
     __table_args__ = (

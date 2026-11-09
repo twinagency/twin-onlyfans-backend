@@ -481,6 +481,7 @@ def request_context_from(snapshot, budget):
                 data['source_text' if kind == 'REQUEST' else 'proposed_text'] = body[:160]
             prefix = ('CARD facts (reference ' + str(references.get('state', 'unavailable'))
                       + '; send ' + str(row.get('sendState', 'unavailable'))
+                      + ('; message deleted; current availability unknown' if row.get('messageDeleted') else '')
                       + '; access ' + str(row.get('accessState', 'unavailable'))
                       + '; financial settlement not established; not action authority): '
                       if kind == 'CARD' else kind + ' ')

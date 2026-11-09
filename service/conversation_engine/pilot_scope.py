@@ -366,7 +366,9 @@ def delivery_block(s, runtime, fan, *, commercial=False):
         (OfFansConnection.epoch == OfFansWebhook.epoch)).where(
         OfFansProjection.account_id == runtime.account_id, OfFansProjection.status.in_(('pending','held')),
         OfFansConnection.binding_id == runtime.binding_id,
-        or_(OfFansWebhook.event_type.in_(('accounts.disconnected','accounts.session_expired','accounts.authentication_failed')),
+        or_(OfFansWebhook.event_type.in_(('accounts.disconnected','accounts.session_expired','accounts.authentication_failed',
+                                               'accounts.otp_code_required','accounts.face_otp_required',
+                                               'messages.deleted','subscriptions.renewed','subscriptions.expired')),
             (OfFansWebhook.event_type.in_(('messages.sent','messages.received') +
                 (('messages.ppv.unlocked','transactions.new','chargebacks.new') if commercial else ()))) &
             or_(sent_fan == str(fan), sent_fan.is_(None)))).limit(1))

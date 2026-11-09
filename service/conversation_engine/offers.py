@@ -73,7 +73,8 @@ def _cards(s, runtime, fan_id, *, exclude_intent_id=None):
                     or message is None or message.direction != 'out'):
                 complete = False
                 continue
-            card.update(messageId=str(intent.provider_message_id), offerId=str(offer.id), offerState=offer.status)
+            card.update(messageId=str(intent.provider_message_id), offerId=str(offer.id), offerState=offer.status,
+                        messageDeleted=bool(message.is_unsent))
             access = s.scalar(select(OfEngineAccessEvidence).where(
                 OfEngineAccessEvidence.account_id == runtime.account_id, OfEngineAccessEvidence.fan_id == fan_id,
                 OfEngineAccessEvidence.intent_id == intent.intent_id,
@@ -106,6 +107,9 @@ def _match(s, runtime, fan_id, text):
         if (intent is None or decision is None or decision.action != 'offer' or intent.status != 'accepted'
                 or intent.binding_id != runtime.binding_id or decision.binding_id != runtime.binding_id
                 or decision.fan_id != fan_id or intent.projected_at is None or not decision.terms_json):
+            return {'state':'incomplete', 'offers':[]}
+        message = s.get(Message, (runtime.account_id, fan_id, intent.provider_message_id)) if intent.provider_message_id else None
+        if message is None or message.is_unsent:
             return {'state':'incomplete', 'offers':[]}
         try:
             terms = json.loads(decision.terms_json)

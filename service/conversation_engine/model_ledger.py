@@ -179,6 +179,15 @@ class ModelLedger:
                 raise ModelBudgetExhausted('daily model budget exhausted')
             if cfg.creator_cap_microusd <= 0 or self._committed(s, day, account) + need > cfg.creator_cap_microusd:
                 raise ModelBudgetExhausted('creator model budget exhausted')
+            # For the bounded pilot, the approved creator cap is also a total
+            # across days and scope revisions. Unknown calls remain reserved;
+            # only proven releases or provider-settled actual costs change it.
+            if pilot_stamp is not None:
+                pilot_total = int(s.scalar(select(_counted()).select_from(OfEngineModelCall).where(
+                    OfEngineModelCall.account_id == account,
+                    OfEngineModelCall.pilot_scope_revision.is_not(None))) or 0)
+                if pilot_total + need > cfg.creator_cap_microusd:
+                    raise ModelBudgetExhausted('pilot total model budget exhausted')
             seq = (existing[-1].seq + 1) if existing else 0
             call_id = str(uuid.uuid4())
             s.add(OfEngineModelCall(account_id=account, call_id=call_id, request_id=request_id, generation=generation,

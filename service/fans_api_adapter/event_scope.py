@@ -2,7 +2,8 @@
 from sqlalchemy import func
 
 ACCOUNT_EVENTS = ('accounts.connected','accounts.reconnected','accounts.disconnected',
-                  'accounts.session_expired','accounts.authentication_failed')
+                  'accounts.session_expired','accounts.authentication_failed',
+                  'accounts.otp_code_required','accounts.face_otp_required')
 
 
 def event_fan(event_type, raw_body):

@@ -4,7 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 from fans_api_adapter.event_scope import classify_raw, SUPPORTED, IRRELEVANT, MATERIAL
-from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec
+import re
+from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec,CLASSES
+from delivery_history import canon,sha
 FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
 PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
@@ -22,10 +24,30 @@ def validate(root):
     rows=deliveries['data']
     if type(rows) is not list or len(rows)!=manifest['provider_delivery_count']:
         raise RuntimeError('interval evidence count changed')
-    if 'incident_sha256' in manifest:
+    if len({canon(r) for r in rows})!=len(rows):
+        raise RuntimeError('duplicate delivery rows in the retained interval listing')
+    class_based=manifest.get('resolution_kind')=='class_based'
+    if class_based:
+        # Class/evidence-based incident: identity and revision are bound by the receipt and the
+        # database owner; here the evidence must be internally coherent and for this URL.
+        if (incident_spec(manifest.get('incident_sha256')) is not None or manifest.get('classification') not in CLASSES
+                or type(manifest.get('scope_revision')) is not int or type(manifest['scope_revision']) is bool
+                or not re.fullmatch('[a-f0-9]{32}',str(manifest.get('incident_id','')))):
+            raise RuntimeError('class-based incident evidence is malformed')
+    elif 'incident_sha256' in manifest:
         spec=incident_spec(manifest['incident_sha256'])
         if spec is None or manifest.get('classification')!=spec['classification'] or manifest.get('scope_revision')!=spec['scope_revision']:
             raise RuntimeError('incident hash, classification or scope changed')
+    if class_based or 'delivery_url' in manifest:
+        if (manifest.get('delivery_url')!=URL or manifest.get('delivery_url_sha256')!=sha(URL.encode())
+                or re.fullmatch('[a-f0-9]{64}',str(manifest.get('config_version',''))) is None):
+            raise RuntimeError('delivery URL or subscription version changed')
+    if 'delivery_page_count' in manifest:
+        page=deliveries['_pagination']
+        if page.get('complete') is not True or page.get('pages')!=manifest['delivery_page_count']:
+            raise RuntimeError('delivery page evidence is incomplete or changed')
+        if len(list(root.glob('deliveries-page-*.json')))<manifest['delivery_page_count']:
+            raise RuntimeError('retained delivery pages are missing')
     current_case=manifest.get('incident_sha256') in (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT)
     if current_case:
         spec=incident_spec(manifest['incident_sha256'])
@@ -40,12 +62,18 @@ def validate(root):
         if any(by_key.get(r.get('idempotency_key'))!=r for r in recent['data']):
             raise RuntimeError('incident window has unmatched reported delivery')
     receipts={r['key']:r for r in local['receipts']}
-    findings=[];matched=[]
+    findings=[];matched=[];superseded=[]
+    ok_keys={r.get('idempotency_key') for r in rows if r.get('succeeded') is True and type(r.get('status_code')) is int
+             and 200<=r['status_code']<300 and r.get('url')==URL and type(r.get('payload')) is dict
+             and r['payload'].get('account_id')==PROVIDER}-{None}
     for row in rows:
         key=row.get('idempotency_key');payload=row.get('payload')
         if (row.get('succeeded') is not True or type(row.get('status_code')) is not int
                 or not 200<=row['status_code']<300 or row.get('url')!=URL
                 or type(payload) is not dict or payload.get('account_id')!=PROVIDER):
+            # A failed attempt is reconciled only by a verified successful retry of the same key.
+            if key is not None and key in ok_keys:
+                superseded.append(key);continue
             raise RuntimeError('failed or ambiguous provider delivery')
         raw=json.dumps(payload,separators=(',',':')).encode()
         verdict=classify_raw(raw)
@@ -72,9 +100,11 @@ def validate(root):
         findings.append({'event_key':key,'event':event,'fan':fan,
             'local_digest':digests[0]['hash'],'disposition':disposition,
             'limitation':'provider object does not reproduce retained exact raw bytes'})
-    if REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
+    if class_based:
+        if not rows:raise RuntimeError('class-based interval has no provider delivery evidence')
+    elif REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
         raise RuntimeError('known prior pilot receipt missing from full monitor window' if current_case else 'known post-incident pilot receipt missing from provider interval')
-    return {'interval_valid_for_bounded_scope':True,'matched_receipts':matched,
+    return {'interval_valid_for_bounded_scope':True,'matched_receipts':matched,'superseded_failed_attempts':superseded,
             'outside_scope_limitations':findings,'full_event_continuity_claimed':False,
             **({'reported_incident_window_count':manifest['incident_delivery_count'],
                 'anchor_context':'known prior receipt predates this incident','original_failure_subcause':'not retained'} if current_case else {})}

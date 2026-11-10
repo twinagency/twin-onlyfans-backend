@@ -1,9 +1,13 @@
 """Pilot-only supervisor. Staged; no activation or hold release is performed."""
 import datetime,json,os,socket,subprocess,sys,time,urllib.error,urllib.request
 from pathlib import Path
-from incident_state import unresolved
+from incident_state import unresolved,resolved_intervals
+import delivery_history
 from urllib.parse import urlencode
 from guard_core import GuardFailure,credit_estimate,require_health
+class TransientFailure(GuardFailure):
+ """A lookup that could not complete. Tolerated a bounded number of times in a row, never as success."""
+MAX_TRANSIENT=2
 ROOT=Path('/srv/projects/twin-plan-c-pilot-20261109')
 STATE=ROOT/'supervision-v11'/'budget-state.json'
 INCIDENT=ROOT/'supervision-v11'/'outage-open.json'
@@ -53,6 +57,12 @@ def status_json(url):
   if type(result) is not dict:raise ValueError()
   return result
  except Exception:raise GuardFailure('readiness_malformed') from None
+def lookup(url,headers=None,**kw):
+ # Network errors, 429 and 5xx are transient: nothing was learned, and nothing is published.
+ try:status,body=status_request(url,headers=headers,**kw)
+ except Exception:raise TransientFailure('lookup_incomplete') from None
+ if status==429 or status>=500:raise TransientFailure('lookup_incomplete')
+ return status,body
 def intake_readiness(scope_status):
  status,body=status_request(LOCAL+'/readyz')
  try:
@@ -97,14 +107,15 @@ def team_usage(baseline):
   if pairs.get('FANSAPI_BASE')!='https://api.fansapi.com' or pairs.get('FANSAPI_ACCT')!='acct_7bf8540de5a84f459058490fee26c47f' or not pairs.get('FANSAPI_KEY'):raise ValueError()
   today=datetime.datetime.now(datetime.timezone.utc).date().isoformat()
   query=urlencode({'from':baseline['start'],'to':today,'group_by':'endpoint','include_today':'true'})
-  status,body=status_request('https://api.fansapi.com/api/usage/credits?'+query,headers={'Authorization':'Bearer '+pairs['FANSAPI_KEY'],'Accept':'application/json','User-Agent':'Twin-Plan-C/1.0'})
+  status,body=lookup('https://api.fansapi.com/api/usage/credits?'+query,headers={'Authorization':'Bearer '+pairs['FANSAPI_KEY'],'Accept':'application/json','User-Agent':'Twin-Plan-C/1.0'})
   if status!=200 or len(body)>2_000_000:raise ValueError()
   data=json.loads(body);meta=data['_meta']['_credits']
   return data['data']['totals']['credits'],meta['balance'],meta['used']
+ except TransientFailure:raise TransientFailure('credit_monitor_unavailable') from None
  except Exception:raise GuardFailure('credit_monitor_unavailable') from None
-def webhook_health():
- # Check the exact dedicated subscription and its complete recent delivery log.
- # A failed/ambiguous delivery causes a stop; no automatic hold is cleared.
+def webhook_health(deadline=None):
+ # Check the exact dedicated subscription and every unaccounted delivery since a durable
+ # verified checkpoint. A failed/ambiguous delivery causes a stop; no hold is cleared.
  try:
   pairs={}
   for line in ENV.read_text().splitlines():
@@ -117,21 +128,22 @@ def webhook_health():
   expected=readjson(ROOT/'evidence'/'webhook-registration.log')
   wid='wh_db5f1a0931514ef9b285c412bede5713'
   if expected.get('id')!=wid or expected.get('url')!=PUBLIC or expected.get('account_ids')!=[pairs['FANSAPI_ACCT']] or expected.get('account_scope')!='inclusive':raise ValueError()
-  status,body=status_request('https://api.fansapi.com/api/webhooks/'+wid,headers=headers)
+  status,body=lookup('https://api.fansapi.com/api/webhooks/'+wid,headers=headers)
   if status!=200 or len(body)>2000000:raise ValueError()
   obj=json.loads(body);row=obj['data']
   if (type(obj['_meta']['_credits']['used']) is not int or obj['_meta']['_credits']['used']!=0) or row.get('id')!=wid or row.get('url')!=PUBLIC or row.get('enabled') is not True or row.get('has_signing_secret') is not True or row.get('account_scope')!='inclusive' or row.get('account_ids')!=[pairs['FANSAPI_ACCT']] or set(row.get('events',[]))!=set(expected['events']):raise ValueError()
   if 'paused' in row and row['paused'] is not False:raise ValueError()
-  intent=ROOT/'evidence'/'webhook-enable-v2'/'put-intent.json'
-  start=datetime.datetime.fromtimestamp(intent.stat().st_mtime,datetime.timezone.utc).isoformat()
-  query=urlencode({'date_start':start,'limit':100,'offset':0})
-  status,body=status_request('https://api.fansapi.com/api/webhooks/'+wid+'/deliveries?'+query,headers=headers,timeout=12)
-  if status!=200 or len(body)>2000000:raise ValueError()
-  obj=json.loads(body);rows=obj['data'];page=obj['_pagination']
-  if (type(obj['_meta']['_credits']['used']) is not int or obj['_meta']['_credits']['used']!=0) or type(rows) is not list or not rows or page.get('next_page') is not None:raise ValueError()
-  for item in rows:
-   if type(item) is not dict or item.get('succeeded') is not True or type(item.get('status_code')) is not int or not 200<=item['status_code']<300 or item.get('url')!=PUBLIC or item.get('event') not in expected['events'] or type(item.get('payload')) is not dict or item['payload'].get('account_id')!=pairs['FANSAPI_ACCT']:raise ValueError()
+  def page(start,limit,offset):
+   status,body=lookup('https://api.fansapi.com/api/webhooks/'+wid+'/deliveries?'+urlencode({'date_start':start,'limit':limit,'offset':offset}),headers=headers,timeout=12)
+   if status!=200 or len(body)>2000000:raise delivery_history.HistoryError('delivery_page_unavailable')
+   return json.loads(body)
+  sup=ROOT/'supervision-v11'
+  delivery_history.verify_history(page,boundary_path=sup/'delivery-enable-boundary.json',checkpoint_path=sup/'delivery-checkpoint.json',
+   intent_path=ROOT/'evidence'/'webhook-enable-v2'/'put-intent.json',webhook_id=wid,url=PUBLIC,subscription=row,events=set(expected['events']),
+   account_id=pairs['FANSAPI_ACCT'],resolved_intervals=resolved_intervals(sup),deadline=deadline)
   return True
+ except TransientFailure:raise TransientFailure('provider_webhook_health_unavailable') from None
+ except delivery_history.TransientHistoryError:raise TransientFailure('provider_webhook_health_unavailable') from None
  except Exception:raise GuardFailure('provider_webhook_health_unavailable') from None
 
 def sender_identity():
@@ -160,7 +172,7 @@ def check(state):
    sender_identity()
    require_health(public_status=public,local_status=local,intake=intake,scope_status='active',active_sender=sender)
  else:require_health(public_status=public,local_status=local,intake=intake,scope_status=row['status'],active_sender=None)
- webhook_health()
+ webhook_health(started+25)
  total,balance,cost=team_usage(baseline)
  estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=row['reserved'],external_reserved=outside,prior_estimate=state['prior_estimate'])
  # Bound proof age before the caller can publish STATE; request timeouts are
@@ -174,8 +186,15 @@ def run():
  state=readjson(STATE)
  if type(state) is not dict or type(state.get('prior_estimate')) not in (int,float):raise GuardFailure('persistent_state_malformed')
  if db_state()['status']=='active':raise GuardFailure('restart_requires_stopped_scope')
+ failures=0
  while True:
-  state=check(state);atomic(STATE,state)
+  try:fresh=check(state)
+  except TransientFailure as exc:
+   # Incomplete evidence: no STATE, no lease, no READY/WATCHDOG. The sender's 45s limit lapses on its own.
+   failures+=1
+   if failures>MAX_TRANSIENT:raise GuardFailure(str(exc)) from None
+   time.sleep(10);continue
+  failures=0;state=fresh;atomic(STATE,state)
   notify('READY=1\nWATCHDOG=1\nSTATUS=Pilot checks passed')
   time.sleep(10)
 if __name__=='__main__':

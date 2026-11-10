@@ -88,11 +88,11 @@ try:
  receipts={r['key']:r for r in local['receipts']};digests={}
  for r in local['digests']:digests.setdefault(r['key'],[]).append(r)
  matched=[];missing=[]
- ok_keys={r.get('idempotency_key') for r in rows if delivery_history.success(r,url=supervisor.PUBLIC,events=set(expected['events']),account_id=env['FANSAPI_ACCT'])}-{None}
+ ok_index=delivery_history.retry_index(rows,lambda r:delivery_history.success(r,url=supervisor.PUBLIC,events=set(expected['events']),account_id=env['FANSAPI_ACCT']))
  for row in rows:
   key=row.get('idempotency_key');payload=row.get('payload')
   if row.get('succeeded') is not True or not 200<=row.get('status_code',0)<300 or row.get('url')!=supervisor.PUBLIC or type(payload) is not dict or payload.get('account_id')!=env['FANSAPI_ACCT']:
-   if key in ok_keys:continue   # superseded by a later successful retry of the same key; that success is reconciled below
+   if delivery_history.retry_state(row,ok_index)=='resolved':continue   # same event/destination/payload retried successfully; that success is reconciled below
    missing.append({'key':key,'reason':'failed_or_ambiguous_delivery'});continue
   rec=receipts.get(key)
   if rec:

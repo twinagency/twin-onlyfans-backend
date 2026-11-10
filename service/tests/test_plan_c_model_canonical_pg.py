@@ -188,3 +188,40 @@ def test_old_call_uses_its_pinned_mapping_even_if_current_alias_changes(supervis
         assert before["canonicalMappingEvidence"]["canonicalModel"]=="m/primary-20260910"
         assert before["providerEvidence"]["model"]=="m/primary-20260910"
     assert len(state["mapping_reads"])==1 and len(state["posts"])==1 and w.fans.posts==[]
+
+
+@pytest.mark.parametrize("supervised",["autonomous"],indirect=True)
+def test_loser_of_concurrent_reconcile_returns_the_idempotent_replay(supervised,monkeypatch):
+    """Regression (Q1): caller B is paused between its replay check (no row yet) and its unlocked target read while
+    caller A commits the whole settlement. B must get the same idempotent replay, not Refused; settlement stays single."""
+    w,pilot,runtime,state,common,args,day,reserved=prepare(supervised)
+    orig_get=Session.get
+    fired={"n":0}
+    results={}
+    def get(self,entity,ident,*a,**k):
+        if entity is OfEngineModelCall and fired["n"]==0 and not k.get("with_for_update"):
+            fired["n"]=1
+            results["A"]=reconcile_model_usage(w.store,runtime.config,runtime.client,**args)
+        return orig_get(self,entity,ident,*a,**k)
+    monkeypatch.setattr(Session,"get",get)
+    results["B"]=reconcile_model_usage(w.store,runtime.config,runtime.client,**args)
+    monkeypatch.setattr(Session,"get",orig_get)
+    assert fired["n"]==1 and results["A"]["replayed"] is False and results["B"]["replayed"] is True
+    assert {k:v for k,v in results["A"].items() if k!="replayed"}=={k:v for k,v in results["B"].items() if k!="replayed"}
+    assert all(not x["sendAuthorized"] and not x["retryAuthorized"] for x in results.values())
+    with Session(w.database[1]) as s:
+        assert len(list(s.scalars(select(OfLaunchCommand).where(OfLaunchCommand.kind=="plan_c_model_cost_reconcile"))))==1
+    assert runtime.ledger.committed(day=day,account=ACCOUNT)==100 and len(state["posts"])==1 and w.fans.posts==[]
+
+
+@pytest.mark.parametrize("rep",range(10))
+@pytest.mark.parametrize("supervised",["autonomous"],indirect=True)
+def test_concurrent_pinned_reconciliation_is_idempotent_under_short_thread_switch_interval(supervised,rep):
+    """The original concurrent test body, repeated under aggressive GIL preemption to emulate a starved host."""
+    import sys
+    old=sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        test_concurrent_pinned_reconciliation_is_idempotent(supervised)
+    finally:
+        sys.setswitchinterval(old)

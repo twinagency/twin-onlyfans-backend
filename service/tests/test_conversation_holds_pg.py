@@ -42,10 +42,25 @@ def OfOperatorCase():  # noqa: N802 - mirrors the model name; resolved lazily
 REPLY = "Thanks for telling me, how was your day?"
 
 
-def start(database, monkeypatch, body, *, safety=None, fan=FAN):
+def configured_commercial(database, **kw):
+    """Q1 (obsolete expectation): since 47e8c54 (audited text-only pilot activation) TextAuthority._eligibility
+    (text_delivery.py:419-420) returns media_delivery_disabled for action 'commercial' BEFORE the conversation-hold
+    policy runs, and configured() leaves OfDeliveryPolicy.media_enabled False. The hold matrix exists to prove the hold
+    policy blocks every sender including the commercial one, so the commercial sender must be reachable (media enabled).
+    The media-disabled refusal itself is pinned by test_commercial_sender_with_media_disabled_is_refused_before_holds
+    below and by test_plan_c_text_activation_pg.py:114. Hold assertions are unchanged."""
+    store, authority = configured(database, **kw)
+    authority.configure(TENANT, ACCOUNT, expected_revision=1, enabled=True, limit_units=kw.get("limit", 20),
+                        throttle_seconds=kw.get("throttle", 1), actor="synthetic-operator",
+                        reason="hold matrix needs commercial senders reachable", media_enabled=True)
+    return store, authority
+
+
+def start(database, monkeypatch, body, *, safety=None, fan=FAN, commercial=False):
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
     monkeypatch.setenv("DATABASE_URL", database[0])
-    store, authority = configured(database, mode="automated")
+    # commercial=True: campaigns are commercial-origin and are refused media_delivery_disabled (47e8c54) unless media is on
+    store, authority = (configured_commercial if commercial else configured)(database, mode="automated")
     config = None if safety is None else json.dumps({"conversation_safety_mode": safety})
     with Session(database[1]) as s, s.begin():
         s.add(AccountAiConfig(account_id=ACCOUNT, model="grok-4-1-fast-non-reasoning",
@@ -284,7 +299,7 @@ SENDERS = [("chat", "automated", "chat"), ("pack/upsell/contextual card", "autom
                                                       ("identity", False), ("external_sender", False),
                                                       ("hardship", True), ("complaint", True)])
 def test_after_each_hold_no_internal_sender_may_send(database, category, commercial_only):
-    store, authority = configured(database, mode="automated")
+    store, authority = configured_commercial(database, mode="automated")
     hold(database, category=category)
     for label, origin, action in SENDERS:
         reason = eligibility(database, authority, origin, action)
@@ -295,6 +310,15 @@ def test_after_each_hold_no_internal_sender_may_send(database, category, commerc
     store.close()
 
 
+def test_commercial_sender_with_media_disabled_is_refused_before_holds(database):
+    """The current text-only ordering (text_delivery.py:419-420): media disabled refuses the commercial sender first;
+    the chat sender is unaffected. Kept so the helper above cannot silently hide the media gate."""
+    store, authority = configured(database, mode="automated")
+    assert eligibility(database, authority, "automated", "commercial") == "media_delivery_disabled"
+    assert eligibility(database, authority, "automated", "chat") is None
+    store.close()
+
+
 @pytest.mark.parametrize("kw,reason", [
     ({"skip": "of_restricted"}, "fan_restricted"),
     ({"skip": "manual_restrict"}, "fan_restricted"),
@@ -302,7 +326,7 @@ def test_after_each_hold_no_internal_sender_may_send(database, category, commerc
     ({"unresolved": "attempt-x"}, "unresolved_delivery"),
 ])
 def test_durable_stops_flags_and_uncertain_delivery_hold_every_internal_sender(database, kw, reason):
-    store, authority = configured(database, mode="automated")
+    store, authority = configured_commercial(database, mode="automated")
     hold(database, **kw)
     for _label, origin, action in SENDERS:
         assert eligibility(database, authority, origin, action) == reason
@@ -333,7 +357,7 @@ def test_authorised_manual_response_under_takeover_still_works(database, categor
 
 
 def test_a_stop_request_after_planning_is_judged_again_immediately_before_the_wire(database, monkeypatch):
-    store, authority = start(database, monkeypatch, "hello there", safety="live")
+    store, authority = start(database, monkeypatch, "hello there", safety="live", commercial=True)
     # an operator campaign is queued BEFORE the fan asks us to stop
     service = CampaignService(store)
     service.create(TENANT, ACCOUNT, command_key="c" * 64, actor="synthetic-operator", name="Synthetic promo",
@@ -362,7 +386,7 @@ def external_out(engine, minutes_ago=5):
 
 
 def test_external_message_is_observed_shadow_then_live_and_cancels_obsolete_internal_work(database, monkeypatch):
-    store, authority = start(database, monkeypatch, "hello there")
+    store, authority = start(database, monkeypatch, "hello there", commercial=True)
     external_out(database[1])
     assert operator_cases.scan(store, TENANT, ACCOUNT, FAN) == []
     assert cases(database[1]) == [("external_sender", "shadow", "all")] and state(database[1])[0] == "automated"
@@ -480,17 +504,45 @@ def test_case_record_carries_owner_due_overdue_escalation(database):
 
 
 def test_migration_adds_the_case_table_and_upgrades_cleanly_from_the_previous_head(database):
+    """Q1 (obsolete expectation): the original pinned HEAD == 0108_commercial_progress (real head is
+    0129_reconnect_receipt, db/schema.py HEAD) and downgraded to 0104, which crosses 0111_moxy_owner.downgrade() that
+    deliberately raises ("Never restore a legacy writer implicitly"). The table is created by 0105_operator_cases
+    (down_revision 0104_contextual_item_scope), so this now tests that migration upgrade-only: a database really at 0104
+    has no case table, upgrading to 0105 creates it with the same columns, and the rest of the chain reaches HEAD."""
+    import os
+    import uuid
     from alembic import command
-    from db.schema import HEAD, _config, check_schema
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine
+    from db.schema import BASELINE, HEAD, HERE, _config, check_schema
     url, engine = database
-    assert HEAD == "0108_commercial_progress"
     with engine.begin() as c:
         check_schema(c)
-        command.downgrade(_config(c), "0104_contextual_item_scope")
-        c.execute(text("DROP TABLE of_operator_case"))
-    with engine.begin() as c:
-        command.upgrade(_config(c), HEAD)
-        check_schema(c)
-        cols = {r[0] for r in c.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='of_operator_case'"))}
+    assert HEAD in {r.revision for r in ScriptDirectory.from_config(_config(engine.connect())).iterate_revisions(HEAD, "0105_operator_cases")}
+    admin = create_engine(os.environ["ONLYFANS_TEST_PG_URL"], isolation_level="AUTOCOMMIT")
+    name = "of_test_mig_" + uuid.uuid4().hex
+    with admin.connect() as c:
+        c.exec_driver_sql(f'CREATE DATABASE "{name}" TEMPLATE template0 ENCODING \'UTF8\'')
+    old = create_engine(admin.url.set(database=name), connect_args={"options": "-c timezone=UTC"})
+    try:
+        with old.begin() as c:
+            c.exec_driver_sql((HERE / "snapshots/0070_postgresql.sql").read_text())
+            command.stamp(_config(c), BASELINE)
+            command.upgrade(_config(c), "0104_contextual_item_scope")
+            check_schema(c, expected="0104_contextual_item_scope")
+            assert not c.execute(text("SELECT to_regclass('of_operator_case')")).scalar()
+        with old.begin() as c:
+            command.upgrade(_config(c), "0105_operator_cases")
+            check_schema(c, expected="0105_operator_cases")
+            assert c.execute(text("SELECT to_regclass('of_operator_case')")).scalar()
+        with old.begin() as c:
+            command.upgrade(_config(c), HEAD)
+            check_schema(c)
+            cols = {r[0] for r in c.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='of_operator_case'"))}
+    finally:
+        old.dispose()
+        with admin.connect() as c:
+            c.exec_driver_sql(f'DROP DATABASE "{name}" WITH (FORCE)')
+        admin.dispose()
     assert {"case_id", "category", "scope", "status", "reason", "evidence_json", "owner", "due_at", "acknowledged_at",
             "resolution", "resolved_at", "escalation_level"} <= cols

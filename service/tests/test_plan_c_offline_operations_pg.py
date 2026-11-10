@@ -37,13 +37,29 @@ def test_documented_valid_account_counter_retains_digest_without_stopping_chat(s
 @pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
 @pytest.mark.parametrize('event,payload', [('messages.unread_count_updated', {'count':True}),
     ('messages.unread_count_updated', {'count':-1}), ('messages.unread_count_updated', {}),
-    ('messages.deleted', {'id':'123'}), ('posts.new', {})])
+    ('posts.new', {})])
+# Q1: ('messages.deleted', {'id':'123'}) moved to test_unmapped_message_delete_is_held_as_projection_and_stops_sends below.
+# messages.deleted is a supported event (fans_api_adapter/events.py:37); an unmapped id is held by _deleted() as
+# OfFansProjection.status='held' (deletion_mapping_missing_or_ambiguous), not as a safety-hold digest row.
 def test_invalid_counter_material_or_unclassified_event_keeps_safety_hold(supervised, event, payload):
     world, _, _, seen, pilot = supervised
     response, _ = http_event(pilot, {'event':event, 'account_id':PROVIDER, 'payload':payload}, 'retained-hold')
     assert response.status_code == 202
     with Session(world.database[1]) as s:assert s.scalar(select(OfEnginePilotWebhookDigest)).safety_hold
     stage(pilot, 18310, 'hello');pilot.tick()
+    assert world.fans.posts == []
+
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_unmapped_message_delete_is_held_as_projection_and_stops_sends(supervised):
+    from db.onlyfans_fans_intake_models import OfFansProjection
+    world, _, _, seen, pilot = supervised
+    response, _ = http_event(pilot, {'event':'messages.deleted', 'account_id':PROVIDER, 'payload':{'id':'123'}}, 'retained-hold')
+    assert response.status_code == 202
+    with Session(world.database[1]) as s:
+        raw = s.scalar(select(OfFansWebhook).where(OfFansWebhook.event_key == 'retained-hold'))
+        assert s.get(OfFansProjection, (ACCOUNT, raw.epoch, raw.event_key)).status == 'held'
+    stage(pilot, 18310, 'hello');pilot.tick();pilot.tick()
     assert world.fans.posts == []
 
 

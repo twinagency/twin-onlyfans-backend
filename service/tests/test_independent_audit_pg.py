@@ -11,7 +11,8 @@ from test_plan_c_draft_app_pg import configured_draft
 from test_plan_c_supervised_pg import supervised, stage
 from test_plan_c_scope_pg import ACTOR
 from test_onlyfans_text_delivery_pg import TENANT, ACCOUNT, FAN
-from test_plan_c_sales_journey_pg import install_coverage, writer, cards
+from test_engine_real_worker_pg import FAN2
+from test_plan_c_sales_journey_pg import install_coverage, writer, cards, prepare_scoped_history, stop_for_history, history_client, resume_after_history
 
 @pytest.mark.parametrize('text', ['My travel agency booked the flights.', 'There was lots of chatter at work.'])
 def test_unrelated_nouns_do_not_force_ai_identity(text):
@@ -73,7 +74,7 @@ def test_repairable_correction_does_not_bypass_later_control(supervised, block):
 @pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
 def test_clear_renewed_request_with_actually_completes(supervised):
     world,env,_,_,_=supervised
-    install_coverage(world);world.backfilled(FAN)
+    install_coverage(world);prepare_scoped_history(world)
     pilot,seen,_=writer(world,env)
     stage(pilot,17010,'no thanks');pilot.tick();world.no_throttle()
     stage(pilot,17011,'Actually, I want to buy the photo')
@@ -112,17 +113,27 @@ def test_bounded_history_preflight_unblocks_the_same_purchase_request(supervised
         assert not list(s.scalars(select(OfFansBackfill)))
     config=pilot_scope.describe(world.store,TENANT,ACCOUNT)['config']
     pilot_scope.authorize(config,ACTOR,'configure')
+    # Preparation only through the existing stopped scope and budgeted authorization (guarded fake provider).
+    revision=stop_for_history(world)
     before=pilot_scope.describe(world.store,TENANT,ACCOUNT)['providerRequestsUsed']
-    replay=FansBackfill(pilot.worker.intake)
-    first=replay.run(TENANT,ACCOUNT,pilot.worker.transport.client,reason='operator',
-        start_date=datetime(2015,1,1),pages_budget=1,history_chats=(FAN,))
+    client,calls=history_client(world,revision)
+    replay=FansBackfill(world.intake)
+    first=replay.run(TENANT,ACCOUNT,client,reason='operator',
+        start_date=datetime(2015,1,1),pages_budget=1,history_chats=(FAN,FAN2))
     assert first['status']=='budget_exhausted'
-    pilot.tick()
+    from conversation_engine.journey import backfill_complete
+    from onlyfans_runtime.store import Refused
+    with Session(world.database[1]) as s:
+        assert not backfill_complete(s,ACCOUNT,FAN),'a partial walk must not open the sale'
+    with pytest.raises(Refused):pilot.tick()  # stopped scope: the worker itself refuses to act
     assert not world.fans.posts
-    final=replay.run(TENANT,ACCOUNT,pilot.worker.transport.client,reason='operator',
-        start_date=datetime(2015,1,1),pages_budget=2,history_chats=(FAN,))
+    final=replay.run(TENANT,ACCOUNT,client,reason='operator',
+        start_date=datetime(2015,1,1),pages_budget=3,history_chats=(FAN,FAN2))
     assert final['run']==first['run'] and final['status']=='complete'
-    assert pilot_scope.describe(world.store,TENANT,ACCOUNT)['providerRequestsUsed']-before==3
+    assert pilot_scope.describe(world.store,TENANT,ACCOUNT)['providerRequestsUsed']-before==len(calls)==5  # accounts, transactions, chargebacks and one chat per scoped fan
+    assert all(method=='GET' for method,_ in calls)
+    resume_after_history(world,revision)
+    pilot,seen,_=writer(world,env)  # fresh worker for the re-activated scope; the original held request is recovered from the database
     for _ in range(4):pilot.tick()
     assert len(cards(world))==1
     assert cards(world)[0]['body']['price']==3.0
@@ -136,7 +147,7 @@ def test_bounded_history_preflight_unblocks_the_same_purchase_request(supervised
 def test_normal_content_interest_can_reach_the_one_approved_offer(supervised,request_text):
     from db.onlyfans_engine_models import OfEngineOfferGrant
     world,env,_,_,_=supervised
-    install_coverage(world);world.backfilled(FAN)
+    install_coverage(world);prepare_scoped_history(world)
     def choose(latest,proposal):
         with Session(world.database[1]) as s:
             grant=s.scalar(select(OfEngineOfferGrant))
@@ -279,7 +290,7 @@ def test_queued_offer_correction_can_finish_without_reusing_sent_authority(super
     from conversation_engine import approval
     from db.onlyfans_delivery_models import OfTextIntent
     world,env,_,_,_=supervised
-    install_coverage(world);world.backfilled(FAN)
+    install_coverage(world);prepare_scoped_history(world)
     pilot,seen,_=writer(world,env)
     staged=stage(pilot,17230,'I want to buy the photo')
     info=staged['approval']

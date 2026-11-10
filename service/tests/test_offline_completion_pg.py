@@ -19,12 +19,15 @@ from test_onlyfans_foundation_pg import database
 from test_engine_real_worker_pg import world, answer, inbound, FAN2
 from test_plan_c_draft_app_pg import configured_draft, signed
 from test_plan_c_supervised_pg import supervised, stage
-from test_plan_c_sales_journey_pg import install_coverage, cards
+from test_plan_c_sales_journey_pg import install_coverage, cards, prepare_scoped_history
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
 
 
 def normal_pilot(world, env, *, selecting=True, on_call=None):
     install_coverage(world)
+    # Complete history through the existing stopped, budget-authorized, guarded backfill (never a seeded row).
+    prepared = prepare_scoped_history(world, chats=(FAN, FAN2), pages_budget=4)
+    assert prepared['status'] == 'complete', prepared
     def provider(request):
         if request.method == 'GET':
             if '/transactions' in request.url.path:
@@ -53,9 +56,6 @@ def normal_pilot(world, env, *, selecting=True, on_call=None):
             'openrouter_metadata': {'endpoints': {'available': [{'provider': 'Fixture Provider', 'selected': True}]}}})
     transport = httpx.MockTransport(model)
     pilot = build_supervised_pilot(world.store, env, model_transport=transport, fans_transport=httpx.MockTransport(provider))
-    result = FansBackfill(pilot.worker.intake).run(TENANT, ACCOUNT, pilot.worker.transport.client,
-        reason='operator', start_date=datetime(2015, 1, 1), pages_budget=4, history_chats=(FAN, FAN2))
-    assert result['status'] == 'complete', result
     return pilot, seen, controls, transport
 
 

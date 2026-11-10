@@ -368,3 +368,28 @@ def test_pagination_continues_past_cutoff_until_actual_end(configured_draft):
     with Session(w.database[1]) as s:
         assert s.query(OfIngress).filter_by(account_id=ACCOUNT, message_id=90001).count() == 1
     assert not seen and not w.fans.posts
+
+def test_queue_review_preparation_uses_existing_stopped_budget_before_wire_and_cannot_send(configured_draft):
+    w,seen,revision=setup_stopped(configured_draft)
+    g=guard(w,revision,limit=3)
+    calls=[]
+    def wire(request):
+        calls.append((request.method,str(request.url)))
+        if request.url.path=='/api/accounts':
+            return answer(200,[{'id':PROVIDER,'onlyfans_id':CREATOR,'is_authenticated':True}])
+        assert request.method=='GET' and request.url.path=='/api/'+PROVIDER+'/mass-messaging'
+        return answer(200,{'data':[],'_pagination':{'next_page':None}})
+    c=build_client(RealFansConfig('fixture-token',PROVIDER,BASE,5),creator_id=CREATOR,
+                   epoch=1,transport=httpx.MockTransport(wire),request_guard=g)
+    endpoint=BASE+'/api/'+PROVIDER+'/mass-messaging'
+    assert c._request('GET',endpoint)[0]==200
+    assert pilot_scope.describe(w.store,TENANT,ACCOUNT)['providerRequestsUsed']==2
+    for method,url in [('POST',endpoint),('GET',endpoint+'?action=delete'),
+                       ('GET',BASE+'/api/acct_other/mass-messaging')]:
+        with pytest.raises(Refused):c._request(method,url)
+    assert len(calls)==2
+    assert c._request('GET',endpoint)[0]==200
+    with pytest.raises(Refused,match='budget'):c._request('GET',endpoint)
+    assert len(calls)==3 and not w.fans.posts and not seen
+    with Session(w.database[1]) as session:
+        assert not session.get(OfRuntime,ACCOUNT).enabled

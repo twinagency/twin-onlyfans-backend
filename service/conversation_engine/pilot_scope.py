@@ -832,12 +832,15 @@ class StoppedBackfillGuard:
         parts = urlsplit(url)
         origin = urlsplit(self.evidence['base'])
         paths = {'/api/accounts', '/api/' + self.evidence['provider_account'] + '/transactions',
-                 '/api/' + self.evidence['provider_account'] + '/chargebacks'}
+                 '/api/' + self.evidence['provider_account'] + '/chargebacks',
+                 '/api/' + self.evidence['provider_account'] + '/mass-messaging'}
         paths.update('/api/' + self.evidence['provider_account'] + '/chats/' + str(fan) + '/messages'
                      for fan in self.evidence['fans'])
         if (parts.scheme != origin.scheme or parts.netloc != origin.netloc
                 or parts.path not in paths or parts.fragment or parts.username or parts.password):
             raise Refused('provider request outside stopped backfill scope')
+        if parts.path.endswith('/mass-messaging') and parts.query:
+            raise Refused('queue preparation requires the exact documented list endpoint')
         with Session(self.store.engine) as s, s.begin():
             row, config = self._check(s, mock_wire=mock_wire)
             limits = config['limits']

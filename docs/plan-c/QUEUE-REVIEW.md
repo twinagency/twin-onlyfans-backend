@@ -57,3 +57,5 @@ provider delivery object. A changed payload or newly retained digest is held.
 This document describes the candidate repair, not an activation verdict.
 Qualification, independent review, current provider evidence, refreshed host
 composition, credit accounting and the existing launch checks remain required.
+
+Fresh queue inspection uses the existing authorize_stopped_backfill request guard and reservation ledger. Its exact current-account GET /mass-messaging is now allowed without query parameters; POST, other accounts, budget exhaustion, stale authorization and changed scopes still refuse before the wire. This read does not mark ownership history complete or authorize sales.

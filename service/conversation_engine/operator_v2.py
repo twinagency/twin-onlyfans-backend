@@ -797,8 +797,8 @@ def _reconcile_provider_queue(store, tenant, account, item_id, body):
             if set(history)!=set(config['fans']):
                 raise Conflict('both current test fans require reviewed history')
             now=utcnow().replace(tzinfo=timezone.utc)
-            if not 0<=(now-observed).total_seconds()<=300:
-                raise Conflict('queue review evidence is stale or from the future')
+            if observed>now:
+                raise Conflict('queue review evidence is from the future')
             connection=s.get(OfFansConnection,(account,epoch))
             if (connection is None or connection.binding_id!=binding or connection.status!='active'
                     or provider_accounts!={connection.provider_account_id}):

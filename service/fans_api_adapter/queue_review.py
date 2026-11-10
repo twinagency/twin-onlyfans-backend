@@ -35,7 +35,10 @@ def queue_envelope(raw):
         raise ValueError('invalid queue identity')
     if any(type(payload[k]) is not bool for k in _BOOLS):
         raise ValueError('invalid queue flags')
-    if any(type(payload[k]) is not int or not 0<=payload[k]<2**63 for k in ('pending','total','unsendSeconds')) or payload['pending']>payload['total']:
+    if (any(type(payload[k]) is not int or not 0<=payload[k]<2**63 for k in ('pending','unsendSeconds'))
+            or type(payload['total']) is not int or not -1<=payload['total']<2**63
+            or payload['total']==-1 and payload['pending']!=0
+            or payload['total']!=-1 and payload['pending']>payload['total']):
         raise ValueError('invalid queue counts')
     timestamp(payload['date'])
     return body, int(ident)

@@ -158,3 +158,26 @@ def test_sibling_digest_command_key_is_rejected_before_any_disposition(rig):
         key=digest_resolution_key(runtime.binding_id,item['eventEpoch'],item['eventKey'],sibling)
     with pytest.raises(operator_v2.BadRequest):submit(rig,item,raws,n=int(key,16))
     assert rig.block(FAN)==rig.block(FAN2)=='pilot_evidence_pending'
+
+def test_reported_unknown_total_is_reviewed_not_treated_as_zero_or_auto_ignored(rig):
+    raw=rig.post(queue_event(total=-1),key='unknown-total')
+    assert rig.block(FAN)==rig.block(FAN2)=='pilot_evidence_pending'
+    stopped(rig)
+    [item]=rig.items('provider_event')
+    result=submit(rig,item,[raw],n=96101)
+    assert result['resolved'] and not result['sendAuthorized']
+    with Session(rig.w.database[1]) as session:
+        audit=session.scalar(select(OfLaunchCommand).where(OfLaunchCommand.kind=='plan_c_queue_review'))
+        body=json.loads(json.loads(audit.before_json)['rawBodies'][0])
+        assert body['payload']['total']==-1
+    assert rig.w.fans.posts==[]
+
+
+def test_completed_historical_review_is_not_an_activation_freshness_permit(rig,monkeypatch):
+    raws,item=held(rig)
+    now=utcnow()
+    monkeypatch.setattr(operator_v2,'utcnow',lambda:now+timedelta(hours=1))
+    result=submit(rig,item,raws,n=96102)
+    assert result['resolved'] and not result['activationAuthorized']
+    with Session(rig.w.database[1]) as session:
+        assert not session.get(OfRuntime,ACCOUNT).enabled and not session.get(OfDeliveryPolicy,ACCOUNT).enabled

@@ -22,7 +22,7 @@ eventKey, payloadSha256 and rawBody fields. queueReview has exactly:
 - rawBodies: every distinct retained original body for this one event key,
   1-16 variants, each at most 8192 UTF-8 bytes. Their SHA-256 values must exactly
   match the immutable digest rows. The supplied rawBody must match its own item.
-- observedAt: an aware ISO datetime, no more than five minutes old and not future.
+- observedAt: an aware ISO datetime, not future and no earlier than the reviewed retained receipts.
 - queueListingSha256: hash of the authenticated current provider queue listing.
 - pendingQueues: integer zero. An incomplete listing cannot support this assertion.
 - externalWritersExcluded: true only after checking the agreed external-writer
@@ -59,3 +59,5 @@ Qualification, independent review, current provider evidence, refreshed host
 composition, credit accounting and the existing launch checks remain required.
 
 Fresh queue inspection uses the existing authorize_stopped_backfill request guard and reservation ledger. Its exact current-account GET /mass-messaging is now allowed without query parameters; POST, other accounts, budget exhaustion, stale authorization and changed scopes still refuse before the wire. This read does not mark ownership history complete or authorize sales.
+
+Historical queue review is separate from activation freshness. Completed historical evidence is not discarded just because collection/review took more than five minutes; future timestamps and reviews preceding any retained variant are rejected. Current provider health, writer exclusion and incident reconciliation remain required before activation. A provider-reported total=-1 is retained literally as an unestablished count, never converted to zero; only pending=0 and explicit review are allowed, with no inference about recipients.

@@ -825,9 +825,24 @@ class TextAuthority:
             if not concurrent and policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
                 intent.reason = "account_throttled"
                 return "queued"
-            if policy.used_units >= policy.limit_units:
-                intent.status, intent.reason, intent.updated_at = "refused", "cap_exhausted", now
+            # The first part of a multi-part reply reserves against the capacity the WHOLE sequence needs, so a
+            # sequence that cannot finish is never started (no first part goes out). Later parts, and every
+            # non-engine intent, keep the ordinary one-unit check.
+            units_needed = 1
+            if engine_action:
+                from conversation_engine.delivery import sequence_units_remaining
+                units_needed = sequence_units_remaining(s, intent)
+            if policy.used_units + units_needed > policy.limit_units:
+                exhausted = policy.used_units >= policy.limit_units
+                intent.status, intent.updated_at = "refused", now
+                intent.reason = "cap_exhausted" if exhausted else "sequence_capacity_insufficient"
                 policy.queued_count -= 1
+                if engine_action:
+                    # Cancel the decision (and the unsent rest of its sequence) so it is not retried every tick.
+                    # A distinct reason keeps the autonomous regeneration scan from re-planning against a
+                    # capacity that did not change: that would spend a model call per tick for nothing.
+                    from conversation_engine.delivery import unsent_cancelled as engine_capacity_cancelled
+                    engine_capacity_cancelled(s, intent, reason="delivery_capacity", next_step="review_delivery_capacity")
                 return intent.status
             token, attempt = str(uuid.uuid4()), str(uuid.uuid4())
             if concurrent:

@@ -265,7 +265,11 @@ class RealConversationWorker:
         return result
 
     def _blocked(self, tenant, account, part, intent, reason, sequence):
-        if reason in approval.PASSIVE_REASONS or reason.startswith('approval_') and reason != 'approval_mismatch':
+        # A passive approval reason leaves an UNSTARTED draft for its operator. Once an earlier part has gone out the
+        # approval can never be restored for the remainder (stop/correction/expiry after part one), so the unsent
+        # rest is cancelled instead of being left 'ready' forever.
+        started = sequence.index(part) > 0
+        if (reason in approval.PASSIVE_REASONS or reason.startswith('approval_') and reason != 'approval_mismatch') and not started:
             if intent is not None:
                 self._cancel_queued(tenant, account, intent, reason)
             return {'decisionId': part, 'intentId': intent, 'outcome': 'not_authorized:' + reason}

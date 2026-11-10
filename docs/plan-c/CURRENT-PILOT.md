@@ -1,8 +1,41 @@
 # Current Plan C development scope
 
-Updated 8 November 2026. This is the current scope reference. The older `PILOT-CONFIG.md` and `HANDOFF.md` preserve historical decisions and results; their one-fan, $6/three-media and per-message approval values are superseded.
+Updated 10 November 2026. This is the current scope reference. **The current configuration is the two-fan autonomous ordinary-text pilot (`delivery_mode=text_only`) on schema `0129_reconnect_receipt`.** Where this document or any older Plan C document (`PILOT-CONFIG.md`, `HANDOFF.md`, `OFFLINE-CLOSURE-REGISTER.md`, the 8 November text of this file) mentions the single approved USD 3.00 photo, a card, media, a product catalogue, `0128_model_billing_evidence` as the head, a one-fan scope, a $6/three-media product or per-message approval, that text describes the earlier or deferred milestone and **must not be used to configure, activate or judge the text pilot**. The photo/sales milestone is deferred and is kept only in the section "Deferred commercial milestone" below.
 
-## Approved behavior
+## Authoritative current configuration (text-only pilot)
+
+| Item | Current value | Where it is authoritative |
+|---|---|---|
+| Scope | One creator (Malie), one durable account/binding, exactly two verified immutable fan IDs (318022380 and 601164546). Display names and emails do not establish bindings. | Durable pilot scope (`pilot_scope.validate/configure/set_status`) |
+| Delivery mode | `delivery_mode=text_only`: ordinary text only. Media, paid cards, offers/grants, a third fan and fallback models are refused. `media_enabled` must be false. Text-only configure/activate no longer needs the unused USD 3 product; full mode still does. | `pilot_scope.py` (text_only branches) |
+| Authorization | `authorization_mode=autonomous` through the existing durable machine policy and delivery authority. No per-message human approval. Named administrator manages configuration, stop and recovery. | `pilot_scope.py`, `text_delivery.py` |
+| Limits | The existing 10-unit text limit and throttle (10 total / 10 daily in the reviewed config); larger limits are not qualified. | durable scope config `limits` |
+| Schema | `0129_reconnect_receipt`. No schema change in the V3 candidate `6f1f648`. Old images must not be used with a newer schema; do not downgrade to erase scope, delivery or unresolved records. | `RELEASE.json` / migrations |
+| Durable state reported 10 Nov (read-only AWS inspection, not re-measured here) | Revision 20, stopped; autonomous text_only; runtime, policy and media disabled; zero used text units of 10. | review package `REVIEW.md` section 1 |
+| Creator profile | The same approved durable creator profile is used for writing, validation, snapshots and authorization (`creator_profile` in the scope config; a missing or different profile is refused before I/O). The identity answer remains "I'm an AI assistant helping with Malie's messages." The actual durable profile (facts, contact rules, `@maliebaby` fact) lives in the host/durable config, **not in the repo, and has not been verified in this block**. A real contradiction is resolved with the owner, not by inventing a ban. | durable scope config; verified by the deployment owner |
+| Model and prompt | One qualified model through OpenRouter (DeepSeek per the 8 November decision), fallback disabled. The exact primary model id, upstream, reported name, version and the prompt version are recorded in the durable scope config (`model` block) and the ledger identity rows (`prompt_version`, `config_version`); they are host state, not repo constants. The text-only prompt carries no offer contract, APPROVED OFFER or SALES STATE lines. Real-model qualification (H01-H08, held-out replays) is not done offline and needs authorized spend. | durable scope config; `model_ledger.note_identity` |
+| Event contract | One classification for intake, interval validation and operator reconciliation: `service/fans_api_adapter/event_scope.classify_raw/classify_body` (SUPPORTED / IRRELEVANT / MATERIAL / UNKNOWN). The event name alone is never enough; payload shape must match the documented one. UNKNOWN holds the whole account; MATERIAL (`tips.received`) holds the identified fan. Payload shapes come from the provider docs page; real payload shapes are unverified. | `event_scope.py` |
+| Monitor evidence | Delivery history is read with bounded pagination and a durable verified checkpoint (`ops/plan-c-supervision/delivery_history.py`). A failed delivery is resolved only by a verified success of the same event, destination, account and payload (delivery-attempt IDs may differ); missing identity stays unresolved. | `delivery_history.py` |
+| Host guard | `guard_core.py` at `/srv/projects/twin-plan-c-pilot-20261109/supervision-v11/`, SHA-256 `5aef81d23d14bf8518ddc1028ccd5d32c9c1084015626a300732dd6ca03d9617` (matches the saved guard Sol inspected; read-only SSM 10 Nov). It is host-only and not in the repo; it must export `GuardFailure`, `credit_estimate` and `require_health`. If its contract changes, a reviewed new version/hash and a coherent host manifest are required; never edit a host copy independently of the backend contract. | host file; `supervisor.py` imports it |
+| Budgets | Existing approvals only: 500 total monitored FansAPI credits (overshoot accepted, auto-top-up off), US$5 AI including prior external/unknown reservations, existing request/early-stop controls. Unknown model costs are not refunded or erased. | host guard; `model_ledger` |
+| Baseline | Backend candidate `6f1f64880f06afe0fcada1d7175a6b62b5739f3f`, image `sha256:87962016666ca1167768ca16c3405e3722a26a794463bb9a00a7702998ebc47a`; dashboard `3cedc8f5c6d3c9f493d6ef35f4162a5207b5b589`. Repairs on top of it (U1-U5) are tracked in the closure register, not here. | review package |
+
+### Activation and deployment responsibilities
+
+- **ChatGPT/Jesse own every AWS, host and deployment action** (Stages 1, 7 and 8 of the completion plan): writer inventory and external-writer exclusion, the account fence (`TWIN_ENGINE_PILOT_ACCOUNTS`), deploying a coherent receiver/sender/supervisor/guard/mount/config set inactive first, populated backup/restore and compatible rollback, budget reconciliation, real-model checks, and bounded activation with a person watching and emergency stop available.
+- **Claude** is the offline implementation owner: repository changes and disposable-lab tests only. Claude does not deploy, activate, change AWS, contact providers, spend, or hold the same installation as another builder.
+- Activation is a separately authorized act. Nothing in this repository, this document or a passing test activates the pilot; an inactive observation is not active qualification.
+- Sales and the USD 3 photo remain a separate commercial milestone and must not be enabled to satisfy a text-pilot check.
+
+### Known open items against this configuration
+
+Tracked in `evidence/u2-q1/CLOSURE-REGISTER.md` of the completion block; the ones that affect reading this document: `/readyz` `malformedHolds`/`sendingReady` still count fan-scoped digests as account-wide (readiness/guard scope, U3); automatic handover persistence (U4); restart loses the length-limit verdict (U5); unsupported product wording can reach a text send (U1). The text pilot is not qualified until these are closed on the exact final candidate.
+
+## Deferred commercial milestone (earlier 8 November scope, NOT the current text pilot)
+
+Everything from here to the end was written for the one-photo pilot and keeps its value only for the deferred sales milestone and for behaviour shared by both modes (identity, memory, enforcement of destination/ownership/revisions, holds). Where it conflicts with the table above, the table wins.
+
+### Approved behavior
 
 - One creator, Malie, with one durable account/binding and exactly two verified immutable fan IDs. Display names and login emails do not establish those bindings.
 - One approved photo at **USD 3.00**, with no bundles, discounts, customs, proactive campaigns or timer-based reopening of declined sales. The selected local photo must still be independently bound to the correct provider media/version before live use; fixture IDs are not a substitute.
@@ -12,7 +45,7 @@ Updated 8 November 2026. This is the current scope reference. The older `PILOT-C
 - Memory is creator/fan scoped. Manual corrections and clears take precedence; selected learned evidence retains uncertainty, source and relevant dates. Historical requests and unresolved actions are context, not new send or purchase authority.
 - Destination, price, media, purchase/access evidence, ownership, revisions, limits, duplicate protection and unknown-send holds remain enforced by the application. A paid card, provider acceptance, unlock/access and financial settlement are distinct facts.
 
-## Configuration and startup boundaries
+### Configuration and startup boundaries
 
 The authoritative contract is `service/conversation_engine/pilot_scope.py` (`validate`, `configure`, `set_status`) and the worker builder in `service/model_transport/pilot_supervised.py`. Do not copy the old provisional configuration into those APIs. No real account configuration or credentials are supplied by this document.
 
@@ -22,9 +55,9 @@ The worker remains default-off. Its existing environment flag is still named `TW
 
 Administrator session revocation removes dashboard control access. The engine's durable policy is separate: stopping/revising that policy invalidates affected unsent authorizations. The existing explicit procedure is stop the pilot, disable delivery policy while retaining counters and unresolved records, verify the worker boundary, retain intake-only evidence processing, then revoke owner/session access. See `OFFLINE-OPERATING-PROCEDURES.md`. No automatic offboarding rule is added; the actual deployed sequence still requires separately authorized qualification.
 
-## Qualification and retained gates
+### Qualification and retained gates
 
-Use one exact backend/dashboard commit pair and the corresponding immutable image digest. The current head is `0128_model_billing_evidence`: `0126_plan_c_ingress` retains safe ingress parsing, `0127_offer_grant_lineage` preserves immutable authorization issuances, and `0128` retains provider call correlation. Old images must not be used with a newer schema. Do not infer compatibility merely from older `0125_plan_c_scope` revision labels, which were reused during early development. Every test uses an isolated database. Preserve evidence and matching images; never force a downgrade to erase scope, delivery or unresolved records.
+Use one exact backend/dashboard commit pair and the corresponding immutable image digest. The head at the time of the 8 November text was `0128_model_billing_evidence` (superseded by `0129_reconnect_receipt`): `0126_plan_c_ingress` retains safe ingress parsing, `0127_offer_grant_lineage` preserves immutable authorization issuances, and `0128` retains provider call correlation. Old images must not be used with a newer schema. Do not infer compatibility merely from older `0125_plan_c_scope` revision labels, which were reused during early development. Every test uses an isolated database. Preserve evidence and matching images; never force a downgrade to erase scope, delivery or unresolved records.
 
 The current offline work uses synthetic model/provider transports on Work Server. No deployment, live messages, purchases or metered provider/model calls are authorized by this scope reference.
 

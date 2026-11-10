@@ -768,7 +768,7 @@ def _reconcile_provider_queue(store, tenant, account, item_id, body):
             fan=_int(row['fanId'],1,2**63-1)
             if (fan in history or row['activityReviewed'] is not True or type(row['sha256']) is not str
                     or not _HEX64.fullmatch(row['sha256']) or timestamp(row['coveredFrom'])>min(dates)
-                    or timestamp(row['coveredThrough'])<observed):
+                    or timestamp(row['coveredFrom'])>observed or timestamp(row['coveredThrough'])!=observed):
                 raise ValueError('fan evidence does not cover the reviewed interval')
             history[fan]=row
     except (ValueError,TypeError,KeyError,UnicodeError,Refused):
@@ -808,6 +808,10 @@ def _reconcile_provider_queue(store, tenant, account, item_id, body):
                 OfEnginePilotWebhookDigest.event_key==event_key)))
             if {r.payload_sha256 for r in retained}!=set(variants):
                 raise Conflict('queue review must cover every retained variant')
+            earliest=min(dates+[r.received_at.replace(tzinfo=timezone.utc) for r in retained])
+            if (any(timestamp(h['coveredFrom'])>earliest for h in history.values())
+                    or any(r.received_at.replace(tzinfo=timezone.utc)>observed for r in retained)):
+                raise Conflict('queue history review does not cover the retained evidence interval')
             original=s.get(OfFansWebhook,(account,epoch,event_key))
             if original is not None:
                 raise Conflict('projected or quarantined event requires its existing recovery owner')

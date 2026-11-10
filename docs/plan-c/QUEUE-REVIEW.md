@@ -30,7 +30,7 @@ eventKey, payloadSha256 and rawBody fields. queueReview has exactly:
 - fanHistory: one entry per currently approved test fan, with integer fanId,
   retained authenticated response sha256, coveredFrom, coveredThrough and
   activityReviewed=true. Coverage must include the earliest queue creation date
-  through observedAt. Review deletions/missing known messages and delivery
+  through observedAt (the explicit coveredThrough cutoff must equal observedAt). Coverage also includes the retained receipt times. Review deletions/missing known messages and delivery
   uncertainty explicitly; lack of a queued flag is not proof of no queue impact.
 
 Only the exact documented chat_queue.updated/finished payload shape is accepted.

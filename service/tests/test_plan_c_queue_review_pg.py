@@ -69,7 +69,7 @@ def test_review_resolves_exact_conflict_group_but_grants_no_send_and_new_variant
 
 
 @pytest.mark.parametrize('bad',['missing_variant','wrong_bytes','wrong_fans','active_queue','no_exclusion',
-    'stale','future','short_history','unreviewed_activity','other_actor','wrong_revision','wrong_provider'])
+    'stale','future','future_history','short_history','unreviewed_activity','other_actor','wrong_revision','wrong_provider'])
 def test_incomplete_or_unauthorized_review_preserves_all_holds(rig,bad):
     raws,item=held(rig);p=proof(raws);patch={}
     if bad=='missing_variant':p['rawBodies']=p['rawBodies'][:1]
@@ -79,6 +79,7 @@ def test_incomplete_or_unauthorized_review_preserves_all_holds(rig,bad):
     if bad=='no_exclusion':p['externalWritersExcluded']=False
     if bad=='stale':p['observedAt']=(utcnow().replace(tzinfo=timezone.utc)-timedelta(hours=1)).isoformat()
     if bad=='future':p['observedAt']=(utcnow().replace(tzinfo=timezone.utc)+timedelta(hours=1)).isoformat()
+    if bad=='future_history':p['fanHistory'][0]['coveredThrough']=(utcnow().replace(tzinfo=timezone.utc)+timedelta(hours=1)).isoformat()
     if bad=='short_history':p['fanHistory'][0]['coveredFrom']=(utcnow().replace(tzinfo=timezone.utc)+timedelta(hours=1)).isoformat()
     if bad=='unreviewed_activity':p['fanHistory'][0]['activityReviewed']=False
     if bad=='other_actor':patch['actor']=OTHER

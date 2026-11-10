@@ -496,3 +496,176 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
             raise Refused('promises a custom that is not supported')
         if next(_involvement_claims(text), None) is not None:
             raise Refused('unsupported claim about who writes or reviews messages')
+
+
+# --- creator background and current-time claims (U1b) -------------------------------------------------------------------
+# A first-person statement about her job, pets, siblings, education, nationality, or the current local time is accepted only
+# when her approved profile documents it (the time of day is never documented: the engine has no clock for her place).
+# An absent fact is a gap, never a negative and never permission to invent one; a documented topic with a different detail
+# (a nurse when the job is barista, three brothers when two are documented) is a contradiction. Same clause rules as the
+# product wording: questions, negations, conditionals, quotes, attributions and hypotheticals are not claims, and the fan's
+# own facts reflected back to him ("you work as a nurse?") are about him, not her. Unmatched wording is not a claim: this
+# is a backstop for the common phrasings, like the age and city checks beside it.
+_FACT_STOP = frozenset({'a', 'an', 'the', 'of', 'at', 'in', 'on', 'to', 'and', 'or', 'with', 'from', 'my', 'our', 'named', 'called',
+                        'for', 'as', 'is', 'are', 'was', 'i', 'one', 'uni', 'university', 'college', 'school', 'older', 'younger',
+                        'big', 'little', 'elder', 'currently', 'also', 'very', 'really', 'just'})
+_FACT_SYNONYM = {'puppy': 'dog', 'puppie': 'dog', 'pup': 'dog', 'kitten': 'cat', 'kitty': 'cat', 'bunny': 'rabbit', 'bunnie': 'rabbit',
+                 'pony': 'horse', 'ponie': 'horse'}
+_CLAIM_CUT = frozenset({'and', 'but', 'so', 'because', 'then', 'now', 'before', 'when', 'while', 'until', 'which', 'that', 'though',
+                        'lol', 'haha', 'babe', 'baby', 'since', 'after', 'if', 'or'})
+_JOB_CUT = _CLAIM_CUT | {'at', 'in', 'for', 'with', 'during', 'from', 'every', 'on', 'by', 'as', 'i', 'part', 'full'}
+
+
+def _fact_tokens(text, drop_one=False):
+    out = set()
+    for word in re.findall(r"[a-z0-9]+", str(text).lower().replace('’', "'")):
+        if word in _FACT_STOP:
+            continue
+        if word in _NUMBER_WORDS:
+            word = str(_NUMBER_WORDS[word])
+        elif len(word) > 3 and word.endswith('s') and not word.endswith('ss'):
+            word = word[:-1]
+        word = _FACT_SYNONYM.get(word, word)
+        if drop_one and word == '1':
+            continue
+        out.add(word)
+    return out
+
+
+def _phrase(raw, cut):
+    words = []
+    for word in (raw or '').lower().split():
+        if word.strip(".,!?;:'\"") in cut:
+            break
+        words.append(word)
+    return ' '.join(words)
+
+
+_OWN = re.compile(r"(?:\bi\s+(?:just\s+|really\s+|also\s+)?(?:have|got|own|adopted|grew\s+up\s+with|live\s+with)|\bi'?ve(?:\s+got)?|\bi\s+have\s+got|\bmy)"
+                  r"\s+((?:[\w'-]+\s+){0,3})$", re.I)
+_OWN_BLOCK = frozenset({'to', 'about', 'for', 'of', 'from', 'thing', 'lot', 'against', 'without', 'into', 'not'})
+_PET_NOUN = re.compile(r"\b(dogs?|puppy|puppies|pup|cats?|kittens?|kitty|rabbits?|bunny|bunnies|hamsters?|parrots?|guinea\s+pigs?|"
+                       r"ferrets?|turtles?|tortoises?|ponies|pony)\b", re.I)
+_SIBLING_NOUN = re.compile(r"\b(brothers?|sisters?|siblings?|twins?)\b(?!\s*-?\s*in-law)", re.I)
+_ONLY_CHILD = re.compile(r"\bi(?:'m|\s+am)\s+an?\s+(only\s+child)\b", re.I)
+_NAMED = re.compile(r"^\s*(?:named|called)\s+([a-z][\w'-]*)", re.I)
+
+_EDU_NOT_YET = r"(?!\s*(?:hard|all|late|for|up|so|too|a\s+lot|really|tonight|today|now|until|at\s+the\s+moment)\b)"
+_EDU_KEYS = r"\b(?:educat|degree|studi|college|school|uni(?:versity)?\b)"
+_EDU_CLAIMS = (
+    re.compile(r"\bi\s+(?:also\s+|just\s+|actually\s+)?(?:studied|majored\s+in|graduated\s+(?:from|with|in)|dropped\s+out\s+of|went\s+to\s+(?:uni|university|college)|"
+               r"(?:have|got|hold|earned)\s+(?:an?|my)\s+(?:[a-z]+\s+)?degree(?:\s+in)?)\b" + _EDU_NOT_YET + r"\s*((?:[\w'-]+\s*){0,5})", re.I),
+    re.compile(r"\bi(?:'m|\s+am)\s+(?:currently\s+)?(?:an?\s+(?:uni\s+|university\s+|college\s+)?student|studying)\b" + _EDU_NOT_YET
+               + r"\s*((?:[\w'-]+\s*){0,5})", re.I),
+)
+
+_JOB_LEX = (r"(?:nurse|teacher|doctor|waitress|waiter|bartender|barista|lawyer|engineer|dancer|receptionist|accountant|cleaner|"
+            r"hairdresser|stylist|makeup\s+artist|personal\s+trainer|photographer|designer|nanny|secretary|chef|pilot|"
+            r"flight\s+attendant|paramedic|vet|pharmacist|therapist|dentist|cashier|florist|journalist|scientist|librarian|"
+            r"beautician|masseuse|model|actress|dental\s+nurse|physio(?:therapist)?)")
+_NOT_A_JOB = r"(?!(?:an?\s+|the\s+)?(?:hard|much|long|many|fast|well|late|early|little|soon|often|usual|always|if|though|team|you|your|my|his|her|good|best|hot)\b)"
+_JOB_CLAIMS = (
+    re.compile(r"\bi\s+(?:work|worked|used\s+to\s+work)\s+as\s+" + _NOT_A_JOB + r"(?:an?\s+|the\s+)?((?:[\w'-]+\s*){1,4})", re.I),
+    re.compile(r"\bmy\s+(?:job|occupation|profession|career)\s+is\s+" + _NOT_A_JOB + r"(?:being\s+)?(?:an?\s+|the\s+)?((?:[\w'-]+\s*){1,4})", re.I),
+    re.compile(r"\bi(?:'m|\s+am)\s+(?:currently\s+|actually\s+|also\s+|now\s+)?(?:an?\s+)?(" + _JOB_LEX + r")\b", re.I),
+)
+
+_NATIONALITIES = {
+    'brazilian': ('brazil',), 'australian': ('australia',), 'aussie': ('australia', 'aussie'), 'american': ('america', 'usa', 'united states'),
+    'british': ('britain', 'uk', 'england', 'united kingdom'), 'english': ('england', 'english'), 'irish': ('ireland',),
+    'scottish': ('scotland',), 'welsh': ('wales',), 'canadian': ('canada',), 'mexican': ('mexico',), 'colombian': ('colombia',),
+    'argentinian': ('argentina',), 'argentine': ('argentina',), 'chilean': ('chile',), 'peruvian': ('peru',), 'venezuelan': ('venezuela',),
+    'cuban': ('cuba',), 'spanish': ('spain',), 'french': ('france',), 'german': ('germany',), 'italian': ('italy',),
+    'portuguese': ('portugal',), 'dutch': ('netherlands', 'holland'), 'belgian': ('belgium',), 'swiss': ('switzerland',),
+    'austrian': ('austria',), 'swedish': ('sweden',), 'norwegian': ('norway',), 'danish': ('denmark',), 'finnish': ('finland',),
+    'polish': ('poland',), 'czech': ('czech',), 'hungarian': ('hungary',), 'romanian': ('romania',), 'bulgarian': ('bulgaria',),
+    'greek': ('greece',), 'turkish': ('turkey',), 'russian': ('russia',), 'ukrainian': ('ukraine',), 'indian': ('india',),
+    'pakistani': ('pakistan',), 'chinese': ('china',), 'japanese': ('japan',), 'korean': ('korea',), 'thai': ('thailand',),
+    'vietnamese': ('vietnam',), 'filipina': ('philippines', 'filipin'), 'filipino': ('philippines', 'filipin'),
+    'indonesian': ('indonesia',), 'malaysian': ('malaysia',), 'nigerian': ('nigeria',), 'kenyan': ('kenya',), 'ghanaian': ('ghana',),
+    'egyptian': ('egypt',), 'lebanese': ('lebanon',), 'israeli': ('israel',), 'iranian': ('iran',), 'persian': ('iran', 'persia'),
+    'jamaican': ('jamaica',), 'kiwi': ('new zealand', 'kiwi'),
+}
+_NATIONALITY_CLAIM = re.compile(r"\bi(?:'m|\s+am)\s+(?:(?:also|originally|actually|proudly|fully|part|half|quarter|a\s+bit)[\s-]+)*(?:an?\s+)?("
+                                + '|'.join(sorted(_NATIONALITIES, key=len, reverse=True)) + r")\b(?!\s*(?:kiss|fries|toast|braid|manicure|press|vanilla))", re.I)
+
+_CLOCK = r"(?:\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)|\d{1,2}:\d{2}|midnight|noon|midday)"
+_TIME_CLAIM = re.compile(r"\b(?:it'?s|it\s+is)\s+(?:(?:about|almost|nearly|around|just\s+(?:past|after|gone)|already|only|exactly|literally|now)\s+)*("
+                         + _CLOCK + r")(?![\w:])(?!\s*(?:somewhere|there\b|tomorrow|tonight|today|on\b|at\b|in\b|for\s+you|where\s+you|your\b|ur\b|yesterday|when\b))", re.I)
+_LOCATIVE = re.compile(r"\b(?:here|for\s+me|my\s+(?:time|side)|where\s+i\s+am|on\s+my\s+end)\b", re.I)
+
+
+def _owned(clause, start):
+    """Words between an ownership cue ("I have", "I've got", "I grew up with", "my") and `start`, or None."""
+    match = _OWN.search(clause[:start])
+    if not match:
+        return None
+    between = match.group(1).split()
+    if any(w.lower().strip(".,!?") in _OWN_BLOCK or w.lower().endswith("'s") for w in between):
+        return None
+    return between
+
+
+def _creator_claims(clause):
+    """Yield (label, claim tokens, start, empty_ok_keys, extra) for each first-person background claim in a clause."""
+    for rx in _JOB_CLAIMS:
+        for match in rx.finditer(clause):
+            yield 'job', _fact_tokens(_phrase(match.group(1), _JOB_CUT)), match.start(), None, None
+    for match in _PET_NOUN.finditer(clause):
+        between = _owned(clause, match.start())
+        if between is None:
+            continue
+        tokens = _fact_tokens(match.group(1)) | _fact_tokens(' '.join(w for w in between if re.fullmatch(r"\d+|" + '|'.join(_NUMBER_WORDS), w, re.I)), drop_one=True)
+        named = _NAMED.match(clause[match.end():])
+        if named:
+            tokens.add(named.group(1).lower())
+        yield 'pet', tokens, match.start(), None, None
+    for match in _SIBLING_NOUN.finditer(clause):
+        between = _owned(clause, match.start())
+        if between is None:
+            continue
+        tokens = _fact_tokens(match.group(1)) | _fact_tokens(' '.join(w for w in between if re.fullmatch(r"\d+|" + '|'.join(_NUMBER_WORDS), w, re.I)), drop_one=True)
+        yield 'family', tokens, match.start(), None, None
+    for match in _ONLY_CHILD.finditer(clause):
+        yield 'family', _fact_tokens(match.group(1)), match.start(), None, None
+    for rx in _EDU_CLAIMS:
+        for match in rx.finditer(clause):
+            yield 'education', _fact_tokens(_phrase(match.group(1), _CLAIM_CUT)), match.start(), _EDU_KEYS, None
+    for match in _NATIONALITY_CLAIM.finditer(clause):
+        yield 'nationality', set(), match.start(), None, _NATIONALITIES[match.group(1).lower()] + (match.group(1).lower(),)
+    for match in _TIME_CLAIM.finditer(clause):
+        yield 'local time', set(), match.start(), None, re.sub(r"[\s.]+", '', match.group(1).lower())
+
+
+_FACT_LABEL = {'job': 'a job', 'pet': 'a pet', 'family': 'siblings or family', 'education': 'education',
+               'nationality': 'a nationality', 'local time': 'the current local time'}
+
+
+def creator_fact_problems(texts, profile, fan_texts=()):
+    """Reasons for first-person background or current-time claims her documented facts do not support."""
+    facts = tuple(getattr(profile, 'facts', ()) or ())
+    documented = _fact_tokens(' '.join(str(v) for _, v in facts))
+    raw = ' '.join(f'{k} {v}' for k, v in facts).lower().replace('_', ' ')
+    fan_clock = {re.sub(r"[\s.]+", '', m.group(0).lower()) for t in fan_texts for m in re.finditer(_CLOCK, t or '', re.I)}
+    problems = []
+    for text in texts:
+        for clause, question in _clauses(text.replace('’', "'")):
+            for label, tokens, start, any_keys, extra in _creator_claims(clause):
+                if not _asserted(clause, question, start):
+                    continue
+                if label == 'local time':
+                    # the fan's own time reflected back ("it's 3am, you should sleep") is his fact; "here"/"for me" makes it hers
+                    if extra in fan_clock and not _LOCATIVE.search(clause):
+                        continue
+                    supported = False
+                elif label == 'nationality':
+                    supported = any(re.search(r"\b" + re.escape(term), raw) for term in extra)
+                elif not tokens:
+                    supported = bool(any_keys) and bool(re.search(any_keys, raw))
+                else:
+                    supported = tokens <= documented
+                if not supported:
+                    message = f'states {_FACT_LABEL[label]} that is not in her documented facts'
+                    if message not in problems:
+                        problems.append(message)
+    return problems

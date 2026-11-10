@@ -1,0 +1,46 @@
+{
+  "recorded_utc": "2026-11-10T16:42:23.602901+00:00",
+  "purpose": "Private source backup and review handoff; not release approval",
+  "source": [
+    {
+      "repository": "twinagency/twin-onlyfans-backend",
+      "branch": "codex/plan-c-current-20261111",
+      "head": "8a911799b4840dfd8ee5f3fdfa4fa3f9c5eaa025",
+      "tree": "0cd7ab50da2ae942c09c52204a1a55c6efefaa5f",
+      "defaultBranch": "codex/onlyfans-of-b1",
+      "defaultUnchanged": true,
+      "defaultHead": "0af4132ee90bb1886ec64367f1445e337ba5d14d",
+      "workflows": [
+        {
+          "name": "",
+          "event": "push",
+          "branch": "codex/plan-c-current-20261111",
+          "status": "completed",
+          "conclusion": "startup_failure",
+          "url": "https://github.com/twinagency/twin-onlyfans-backend/actions/runs/42856571288"
+        }
+      ]
+    },
+    {
+      "repository": "twinagency/twin-dashboard",
+      "branch": "codex/plan-c-current-20261111",
+      "head": "3cedc8f5c6d3c9f493d6ef35f4162a5207b5b589",
+      "tree": "2aaccbe4497df0ed75b0dfa73019933d869fe37d",
+      "defaultBranch": "main",
+      "defaultUnchanged": true,
+      "defaultHead": "a1dd0ffe208d9573036f022c454e0ad47cfeafce",
+      "workflows": [
+        {
+          "name": "",
+          "event": "push",
+          "branch": "codex/plan-c-current-20261111",
+          "status": "completed",
+          "conclusion": "startup_failure",
+          "url": "https://github.com/twinagency/twin-dashboard/actions/runs/42856566347"
+        }
+      ]
+    }
+  ],
+  "source_qualification": "c657a77 Q3 verdict FAIL. Newer 8a91179 is uploaded; its full independent review is not completed. Builder tests were running during publication.",
+  "runtime_secrets_databases_images": "Not included"
+}

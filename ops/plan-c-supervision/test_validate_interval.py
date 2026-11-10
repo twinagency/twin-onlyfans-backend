@@ -93,3 +93,39 @@ class ThirdIntervalTests(unittest.TestCase):
   row=copy.deepcopy(self.row);row['idempotency_key']='new'
   self.recent['data']=[row];self.manifest_extra['incident_delivery_count']=1
   with self.assertRaises(RuntimeError):self.run_case()
+
+class SharedClassificationTests(unittest.TestCase):
+ """Recovery uses the same classification contract as intake: no unguarded fan extraction."""
+ setUp=IntervalTests.setUp
+ tearDown=IntervalTests.tearDown
+ run_case=IntervalTests.run_case
+ def add(self,event,payload,key,hold=False,digest=True):
+  body={'event':event,'account_id':v.PROVIDER,'payload':payload}
+  self.rows.append({'idempotency_key':key,'event':event,'payload':body,'succeeded':True,'status_code':202,'url':v.URL})
+  if digest:self.local['digests'].append({'key':key,'hash':'b'*64,'hold':hold})
+ def test_the_five_safe_counters_pass_recovery(self):
+  for i,event in enumerate(('messages.unread_count_updated','messages.priority_count_updated','messages.unread_tips_count_updated','calls.count_request_updated','notifications.count_updated')):
+   self.add(event,{'count':i},'ctr%d'%i)
+  r=self.run_case();self.assertTrue(r['interval_valid_for_bounded_scope'])
+  self.assertEqual({f['disposition'] for f in r['outside_scope_limitations']},{'validated_irrelevant'})
+ def test_validated_presence_and_like_events_pass_but_need_a_clean_digest(self):
+  self.add('users.typing',{'id':318022380},'typing')
+  self.add('users.online',{'fan':{'id':601164546}},'online')
+  self.add('messages.liked',{'id':5,'chat_id':None,'fan_id':None,'fan':None},'liked')
+  self.assertTrue(self.run_case()['interval_valid_for_bounded_scope'])
+  self.local['digests'][0]['hold']=True
+  with self.assertRaises(RuntimeError):self.run_case()
+ def test_bad_counters_and_unverified_types_refuse_without_crashing(self):
+  for event,payload in (('messages.unread_count_updated',{'count':-1}),('messages.unread_count_updated',{'count':True}),
+          ('messages.unread_count_updated',{'count':1,'extra':1}),('chat_queue.finished',{'id':1,'total':3}),
+          ('chat_queue.updated',{'id':1}),('posts.new',{'id':1}),('users.typing',{'user':{'id':1}})):
+   self.rows=self.rows[:1];self.local['digests']=[]
+   self.add(event,payload,'x')
+   with self.assertRaises(RuntimeError,msg=event):self.run_case()
+ def test_material_tip_for_a_pilot_fan_without_a_receipt_refuses_but_other_fan_is_a_limitation(self):
+  tip=lambda fan:{'id':'t','amountGross':5,'fan':{'id':fan},'user_id':1}
+  self.add('tips.received',tip(318022380),'tip')
+  with self.assertRaises(RuntimeError):self.run_case()
+  self.rows=self.rows[:1];self.local['digests']=[]
+  self.add('tips.received',tip(12345),'tip2')
+  r=self.run_case();self.assertEqual(r['outside_scope_limitations'][0]['disposition'],'outside_approved_fans')

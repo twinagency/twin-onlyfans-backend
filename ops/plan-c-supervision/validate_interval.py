@@ -3,7 +3,7 @@ import base64
 import hashlib
 import json
 from pathlib import Path
-from model_transport.pilot_supervised import _event_fan
+from fans_api_adapter.event_scope import classify_raw, SUPPORTED, IRRELEVANT, MATERIAL
 from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec
 FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
@@ -48,7 +48,9 @@ def validate(root):
                 or type(payload) is not dict or payload.get('account_id')!=PROVIDER):
             raise RuntimeError('failed or ambiguous provider delivery')
         raw=json.dumps(payload,separators=(',',':')).encode()
-        event,fan=_event_fan(raw)
+        verdict=classify_raw(raw)
+        if verdict.cls not in (SUPPORTED,IRRELEVANT,MATERIAL):raise RuntimeError('provider event is malformed or not classified')
+        event,fan=verdict.event,verdict.fan
         if row.get('event')!=event:raise RuntimeError('provider event changed')
         receipt=receipts.get(key)
         if receipt is not None:
@@ -61,10 +63,14 @@ def validate(root):
         digests=[d for d in local['digests'] if d['key']==key]
         if len(digests)!=1 or digests[0]['hold'] is not False:
             raise RuntimeError('digest evidence is missing or conflicting')
-        if fan is None or fan in FANS:
+        if verdict.cls==IRRELEVANT:
+            disposition='validated_irrelevant'
+        elif fan is None or fan in FANS:
             raise RuntimeError('digest-only evidence may affect pilot')
+        else:
+            disposition='outside_approved_fans'
         findings.append({'event_key':key,'event':event,'fan':fan,
-            'local_digest':digests[0]['hash'],'disposition':'outside_approved_fans',
+            'local_digest':digests[0]['hash'],'disposition':disposition,
             'limitation':'provider object does not reproduce retained exact raw bytes'})
     if REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
         raise RuntimeError('known prior pilot receipt missing from full monitor window' if current_case else 'known post-incident pilot receipt missing from provider interval')

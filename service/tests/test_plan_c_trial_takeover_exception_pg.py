@@ -94,6 +94,55 @@ def test_exception_does_not_weaken_stops_or_queued_send_holds(rig):
     with Session(rig.w.database[1]) as s:
         assert s.get(OfConversationState, (ACCOUNT, FAN2)).mode == 'no_contact'
         held = s.scalar(select(OfFansEvidence).where(OfFansEvidence.message_id == 97201))
-        assert (held.status, held.reason) == ('held', 'queued_send_to_engine_owned_fan')
-    assert rig.block(FAN) == 'pilot_evidence_pending'
-    assert rig.w.fans.posts == []
+        assert (held.status, held.reason) == ('held', 'queued_send_to_engine_owned_fan'), 'still recorded'
+    assert rig.block(FAN) is None, 'a queued outside broadcast does not pause the test fan under the exception'
+    assert rig.w.fans.posts == [], 'nothing was sent: no fan message arrived'
+
+
+def test_without_exception_queue_and_queued_send_still_hold(rig):
+    from test_plan_c_events_stage3_pg import queue_event
+    rig.post(queue_event(), key='q-no-exc')
+    rig.post(sent_event(97301, FAN, queued=True), key='queued-no-exc')
+    rig.post(ev_deleted(97302), key='del-no-exc')
+    assert rig.block(FAN) == rig.block(FAN2) == 'pilot_evidence_pending'
+
+
+def ev_deleted(mid):
+    from test_plan_c_events_stage3_pg import ev
+    return ev('messages.deleted', {'id': mid})
+
+
+def test_exception_lets_outside_queue_notifications_and_unmapped_deletions_pass_and_bot_replies(rig):
+    from test_plan_c_events_stage3_pg import queue_event
+    enable(rig)
+    rig.post(queue_event('chat_queue.updated'), key='q-exc')
+    rig.post(queue_event('chat_queue.finished', total=5), key='q-exc')          # a second variant of the same key
+    rig.post(sent_event(97401, FAN2, queued=True), key='queued-exc')
+    rig.post(ev_deleted(97402), key='del-unmapped-exc')                        # outside message we never had
+    assert rig.block(FAN) is None and rig.block(FAN2) is None
+    with Session(rig.w.database[1]) as s:
+        from db.onlyfans_fans_intake_models import OfFansProjection
+        from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
+        assert s.get(OfFansProjection, (ACCOUNT, 1, 'del-unmapped-exc')).status == 'held', 'kept, not resolved'
+        assert s.scalar(select(OfEnginePilotWebhookDigest).where(OfEnginePilotWebhookDigest.event_key == 'q-exc')) is not None
+        runtime = rig.w.store._runtime(s, TENANT, ACCOUNT, lock=False)
+        assert pilot_scope.digest_hold_scope(s, runtime) == (False, frozenset())
+    rig.fans_in(base=97500)
+    rig.ticks()
+    assert len(rig.w.fans.posts) == 2, 'both test fans answered despite outside queue activity'
+
+
+def test_exception_never_ignores_malformed_events_or_a_deletion_of_our_own_message(rig):
+    from test_plan_c_events_stage3_pg import ev
+    enable(rig)
+    rig.post(ev('chat_queue.updated', {'queue_id': 1, 'total': -1}), key='malformed-queue')   # not the documented shape
+    assert rig.block(FAN) == rig.block(FAN2) == 'pilot_evidence_pending'
+
+
+def test_exception_keeps_a_deletion_of_a_known_pilot_message_on_its_normal_path(rig):
+    enable(rig)
+    rig.post(inbound(97601, 'hello', fan=FAN), key='in-97601')
+    rig.post(ev_deleted(97601), key='del-97601')
+    rig.ticks(1)
+    with Session(rig.w.database[1]) as s:
+        assert s.get(Message, (ACCOUNT, FAN, 97601)).is_unsent is True

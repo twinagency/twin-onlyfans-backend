@@ -379,6 +379,24 @@ def delivery_block(s, runtime, fan, *, commercial=False):
     from fans_api_adapter.event_scope import event_fan
     from sqlalchemy import or_
     sent_fan = event_fan(OfFansWebhook.event_type, OfFansWebhook.raw_body)
+    unmapped_outside_deletion = None
+    if trial_exception_covers_pilot(s, runtime):
+        from db.models import Message
+        from db.onlyfans_delivery_models import OfTextIntent
+        from sqlalchemy import BigInteger, cast as sql_cast, and_ as sql_and, func
+        from sqlalchemy.dialects.postgresql import JSONB
+        deleted_id = sql_cast(func.jsonb_extract_path_text(
+            sql_cast(func.convert_from(OfFansWebhook.raw_body, 'UTF8'), JSONB), 'payload', 'id'), BigInteger)
+        # A held deletion of a message the pilot never had (no native row, intent or evidence) is outside-writer
+        # activity on another chat. It stays held and recorded; it does not block the trial fans.
+        unmapped_outside_deletion = sql_and(OfFansWebhook.event_type == 'messages.deleted',
+            OfFansProjection.status == 'held', OfFansProjection.detail == 'deletion_mapping_missing_or_ambiguous',
+            ~select(Message.message_id).where(Message.account_id == runtime.account_id,
+                                              Message.message_id == deleted_id).exists(),
+            ~select(OfTextIntent.intent_id).where(OfTextIntent.account_id == runtime.account_id,
+                                                  OfTextIntent.provider_message_id == deleted_id).exists(),
+            ~select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == runtime.account_id,
+                                                      OfFansEvidence.message_id == deleted_id).exists())
     pending = s.scalar(select(OfFansProjection.event_key).join(OfFansWebhook,
         (OfFansWebhook.account_id == OfFansProjection.account_id) &
         (OfFansWebhook.epoch == OfFansProjection.epoch) &
@@ -392,10 +410,17 @@ def delivery_block(s, runtime, fan, *, commercial=False):
                                                'messages.deleted','subscriptions.renewed','subscriptions.expired')),
             (OfFansWebhook.event_type.in_(('messages.sent','messages.received') +
                 (('messages.ppv.unlocked','transactions.new','chargebacks.new') if commercial else ()))) &
-            or_(sent_fan == str(fan), sent_fan.is_(None)))).limit(1))
-    human = s.scalar(select(OfFansEvidence.evidence_id).where(
+            or_(sent_fan == str(fan), sent_fan.is_(None))),
+        *(() if unmapped_outside_deletion is None else (~unmapped_outside_deletion,))).limit(1))
+    excepted = trial_takeover_exception(s, runtime.account_id, runtime.binding_id, fan)
+    human_query = select(OfFansEvidence.evidence_id).where(
         OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
-        OfFansEvidence.kind == 'human_sent', OfFansEvidence.status.in_(('pending','held'))).limit(1))
+        OfFansEvidence.kind == 'human_sent', OfFansEvidence.status.in_(('pending','held')))
+    if excepted:
+        # A queued outside broadcast stays held as evidence but does not block this test fan.
+        human_query = human_query.where(or_(OfFansEvidence.reason.is_(None),
+                                            OfFansEvidence.reason != 'queued_send_to_engine_owned_fan'))
+    human = s.scalar(human_query.limit(1))
     money = s.scalar(select(OfFansEvidence.evidence_id).where(
         OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
         OfFansEvidence.kind.in_(('unlock','transaction','chargeback')),
@@ -423,12 +448,23 @@ def digest_hold_scope(s, runtime):
         Row.payload_sha256).limit(_DIGEST_SCAN + 1)).all()
     if len(keys) > _DIGEST_SCAN:
         return True, frozenset()
+    excepted = trial_exception_covers_pilot(s, runtime)
     fans = set()
     for epoch, event_key, digest in keys:
         receipt = s.get(Receipt, (runtime.account_id, epoch, event_key, digest))
         connection = s.get(OfFansConnection, (runtime.account_id, epoch))
         if receipt is None or connection is None or sha256(bytes(receipt.raw_body)).hexdigest() != digest:
             return True, frozenset()
+        if excepted:
+            # Owner trial exception: a documented chat_queue notification for THIS provider account, with retained
+            # exact bytes, is outside-writer activity. It stays recorded and unresolved but does not hold sending.
+            try:
+                from fans_api_adapter.queue_review import queue_envelope
+                body, _ = queue_envelope(bytes(receipt.raw_body))
+                if body['account_id'] == connection.provider_account_id:
+                    continue
+            except (Refused, ValueError, TypeError, KeyError):
+                pass
         verdict = classify_raw(bytes(receipt.raw_body))
         if verdict.cls != MATERIAL or verdict.fan is None:
             return True, frozenset()
@@ -906,3 +942,10 @@ def set_trial_takeover_exception(store, tenant, account, *, enabled, actor, reas
               request_hash=_fingerprint([kind, account, runtime.binding_id, before, actor, reason]), actor=actor,
               reason=reason, before_json=_encoded(before), result_json=_encoded({'ok': True}), created_at=utcnow()))
         return {'ok': True, 'kind': kind, 'fans': before['fans'], 'replayed': False}
+
+
+def trial_exception_covers_pilot(s, runtime):
+    """True while the recorded owner exception covers EVERY current pilot fan (account-level outside-writer holds)."""
+    pilot, config = current(s, runtime)
+    return pilot is not None and bool(config['fans']) and all(
+        trial_takeover_exception(s, runtime.account_id, runtime.binding_id, fan) for fan in config['fans'])

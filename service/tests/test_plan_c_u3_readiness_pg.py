@@ -32,8 +32,8 @@ from test_plan_c_scope_pg import ACTOR
 from test_plan_c_text_activation_pg import stopped_text  # noqa: F401
 
 SUP = Path(__file__).resolve().parents[2] / 'ops' / 'plan-c-supervision'
-PINNED = SUP / 'host-guard-5aef81d2' / 'guard_core.py'
-PINNED_SHA256 = '5aef81d23d14bf8518ddc1028ccd5d32c9c1084015626a300732dd6ca03d9617'
+PINNED = SUP / 'host-guard-c2be833f' / 'guard_core.py'
+PINNED_SHA256 = 'c2be833f7191bf5a94f3c1f841e09effac62cf5a0b03b751663545e9af905797'
 
 
 def _load(name, path, **modules):

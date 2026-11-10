@@ -102,8 +102,8 @@ cadence,45s wire lease,90s watchdog/start timeout and30s start grace are unchang
 A third recovery preserves BOTH prior immutable histories and does not activate.
 
 Scope-aware sender readiness and the host guard (U3). The host guard is UNCHANGED:
-supervision-v11/guard_core.py, sha256 5aef81d23d14bf8518ddc1028ccd5d32c9c1084015626a300732dd6ca03d9617.
-host-guard-5aef81d2/guard_core.py is a byte-identical copy kept only so the tests run the real guard
+supervision-v11/guard_core.py, sha256 c2be833f7191bf5a94f3c1f841e09effac62cf5a0b03b751663545e9af905797 (early stop 300, Jesse 2026-11-10; previous 5aef81d2 = 250).
+host-guard-c2be833f/guard_core.py is a byte-identical copy kept only so the tests run the real guard
 (service/tests/test_plan_c_u3_readiness_pg.py asserts the hash); it is not an install source and the
 host copy is never edited independently. The guard still requires the sender /readyz to report
 ok=true, mode=active, code=ready and sendingReady=true. What changed is the worker's definition of

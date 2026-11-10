@@ -15,7 +15,7 @@ def credit_estimate(*, baseline_total, baseline_balance, team_total, team_balanc
         raise GuardFailure('credit_monitor_inconsistent')
     estimate = max(prior_estimate, external_reserved + max(
         team_total - baseline_total, baseline_balance - team_balance, scope_reserved))
-    if estimate >= 250:
+    if estimate >= 300:  # Jesse 2026-11-10: stricter early stop 250 -> 300 (within the monitored 500)
         raise GuardFailure('credit_early_stop')
     return estimate
 

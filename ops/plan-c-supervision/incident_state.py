@@ -23,7 +23,7 @@ def pinned_incidents():
         REPEATED_WEBHOOK_INCIDENT:{'classification':'provider_webhook_health_unavailable','scope_revision':20},
     }
 # Classes that class/evidence-based resolution may cover. Must equal the service owner's set.
-CLASSES=('credit_monitor_unavailable','provider_webhook_health_unavailable')
+CLASSES=('credit_monitor_unavailable','provider_webhook_health_unavailable','sender_not_ready')
 V1='plan-c-monitor-resolution.v1'
 V2='plan-c-monitor-resolution.v2'
 V1_FIELDS=frozenset(('version','incident_sha256','account_id','binding_id','connection_epoch','scope_revision',

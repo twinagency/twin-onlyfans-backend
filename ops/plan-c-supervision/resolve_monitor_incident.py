@@ -23,7 +23,7 @@ def main():
   raise RuntimeError('recovery image revision mismatch')
  assert_sender_stopped()
  marker=(SUP/'outage-open.json').read_bytes()
- incident_hash=state.digest(marker);spec=state.incident_spec(incident_hash)
+ incident_hash=state.digest(marker);spec=state.incident_spec(incident_hash,marker)
  if spec is None:raise RuntimeError('incident changed or not approved')
  if not state.unresolved(SUP/'outage-open.json'):
   print(json.dumps({'result':'replayed','sendingEnabled':False,'incident_sha256':incident_hash}))
@@ -56,11 +56,25 @@ def main():
   evidence_hash=state.digest(state.encoded(sources))
   (evidence/'source-hashes.json').write_bytes(state.encoded(sources))
   actor=read(ROOT/'config/pilot-operator-identity.json')['actor']
-  receipt={'version':'plan-c-monitor-resolution.v1','incident_sha256':incident_hash,
-   'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':1,
-   'scope_revision':manifest['scope_revision'],'classification':spec['classification'],
-   'actor':actor,'audit_command_key':state.digest(('monitor-resolution:'+state.APPROVED_INCIDENT+':'+evidence_hash).encode()),
-   'evidence_sha256':evidence_hash,'resolved_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+  if spec['pinned']:
+   receipt={'version':state.V1,'incident_sha256':incident_hash,
+    'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':1,
+    'scope_revision':manifest['scope_revision'],'classification':spec['classification'],
+    'actor':actor,'audit_command_key':state.digest(('monitor-resolution:'+state.APPROVED_INCIDENT+':'+evidence_hash).encode()),
+    'evidence_sha256':evidence_hash,'resolved_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+  else:
+   # Class/evidence-based resolution: immutable incident identity, affected interval, expected
+   # revision and a command identity bound to all of them. Never a send permit or hold release.
+   if (manifest.get('resolution_kind')!='class_based' or manifest.get('incident_sha256')!=incident_hash
+       or manifest.get('classification') not in state.CLASSES or type(manifest.get('scope_revision')) is not int
+       or manifest.get('incident_id')!=spec['incident_id']):raise RuntimeError('class-based evidence does not match this incident')
+   interval={'start':spec['interval_start'],'end':manifest['collected_at']}
+   receipt={'version':state.V2,'incident_sha256':incident_hash,'incident_id':spec['incident_id'],
+    'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':1,
+    'scope_revision':manifest['scope_revision'],'classification':manifest['classification'],
+    'affected_interval':interval,'delivery_url_sha256':manifest['delivery_url_sha256'],'config_version':manifest['config_version'],
+    'actor':actor,'audit_command_key':state.command_key_v2(incident_hash,evidence_hash,interval['start'],interval['end'],manifest['scope_revision']),
+    'evidence_sha256':evidence_hash,'resolved_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
   (evidence/'receipt.json').write_bytes(state.encoded(receipt))
   os.chmod(evidence,0o750);os.chown(evidence,0,65532)
   for f in evidence.iterdir():

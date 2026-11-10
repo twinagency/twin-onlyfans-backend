@@ -1,5 +1,7 @@
-"""Audit this one approved stopped-pilot monitor incident; grants no send rights."""
+"""Audit a stopped-pilot monitor incident (pinned or class/evidence-based); grants no send rights."""
+import hashlib
 import json
+import re
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,14 +17,62 @@ WEBHOOK_INCIDENT='c240c781574ad075939782179ab926c9f0a69cc3fc40a292f81f7d3f57e3ad
 
 REPEATED_WEBHOOK_INCIDENT='df20805ad9525b3ccc54b5dba161940cbdca78bda053d916d0578bbb42a27f33'
 
+# Must agree with ops/plan-c-supervision/incident_state.py (a test compares both owners).
+CLASSES=('credit_monitor_unavailable','provider_webhook_health_unavailable')
+V1='plan-c-monitor-resolution.v1'
+V2='plan-c-monitor-resolution.v2'
+V1_FIELDS=frozenset(('version','incident_sha256','account_id','binding_id','connection_epoch','scope_revision',
+    'classification','actor','audit_command_key','evidence_sha256','resolved_at'))
+V2_FIELDS=V1_FIELDS|{'incident_id','affected_interval','delivery_url_sha256','config_version'}
+MAX_INTERVAL=timedelta(days=7)
+
+def pinned_incidents():
+    return {
+        INCIDENT:{'classification':'credit_monitor_unavailable','scope_revision':12},
+        WEBHOOK_INCIDENT:{'classification':'provider_webhook_health_unavailable','scope_revision':16},
+        REPEATED_WEBHOOK_INCIDENT:{'classification':'provider_webhook_health_unavailable','scope_revision':20},
+    }
+
 def incident_spec(incident_hash):
-    if incident_hash==INCIDENT:
-        return {'classification':'credit_monitor_unavailable','scope_revision':12}
-    if incident_hash==WEBHOOK_INCIDENT:
-        return {'classification':'provider_webhook_health_unavailable','scope_revision':16}
-    if incident_hash==REPEATED_WEBHOOK_INCIDENT:
-        return {'classification':'provider_webhook_health_unavailable','scope_revision':20}
-    return None
+    """The three pinned incidents only; any other incident is class-based (see proof_kind)."""
+    return pinned_incidents().get(incident_hash)
+
+def command_key_v2(incident_sha256,evidence_sha256,start,end,scope_revision):
+    return hashlib.sha256(('monitor-resolution.v2:%s:%s:%s:%s:%d'%(incident_sha256,evidence_sha256,start,end,scope_revision)).encode()).hexdigest()
+
+def _moment(value):
+    try:
+        parsed=datetime.fromisoformat(value[:-1]+'+00:00' if value.endswith('Z') else value)
+    except (AttributeError,TypeError,ValueError):return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
+
+def proof_kind(proof,account,binding):
+    """Static proof validation shared by the audit and the agreement test. Returns 'v1' or 'v2'
+    or None. The live stopped revision is compared separately, inside the locked transaction."""
+    if type(proof) is not dict or not isinstance(proof.get('incident_sha256'),str):return None
+    common=(proof.get('account_id')==account and proof.get('binding_id')==binding
+        and type(proof.get('connection_epoch')) is int and proof['connection_epoch']==1
+        and type(proof.get('scope_revision')) is int and type(proof['scope_revision']) is not bool and proof['scope_revision']>=0
+        and re.fullmatch(r'op-session:[a-f0-9]{64}',str(proof.get('actor',''))) is not None
+        and all(re.fullmatch('[a-f0-9]{64}',str(proof.get(k,''))) is not None for k in ('audit_command_key','evidence_sha256'))
+        and type(proof.get('resolved_at')) is str and bool(proof['resolved_at']))
+    if not common:return None
+    pinned=incident_spec(proof['incident_sha256'])
+    if proof.get('version')==V1:
+        return 'v1' if (pinned is not None and set(proof)==V1_FIELDS and proof['scope_revision']==pinned['scope_revision']
+                        and proof.get('classification')==pinned['classification']) else None
+    if proof.get('version')!=V2 or pinned is not None or set(proof)!=V2_FIELDS:return None
+    interval=proof.get('affected_interval')
+    if type(interval) is not dict or set(interval)!={'start','end'}:return None
+    start,end,done=_moment(interval['start']),_moment(interval['end']),_moment(proof['resolved_at'])
+    if (proof['classification'] not in CLASSES or start is None or end is None or done is None
+            or not (start<end<=done and end-start<=MAX_INTERVAL)
+            or re.fullmatch('[a-f0-9]{32}',str(proof.get('incident_id',''))) is None
+            or any(re.fullmatch('[a-f0-9]{64}',str(proof.get(k,''))) is None for k in ('delivery_url_sha256','config_version'))
+            or proof['audit_command_key']!=command_key_v2(proof['incident_sha256'],proof['evidence_sha256'],
+                                                          interval['start'],interval['end'],proof['scope_revision'])):
+        return None
+    return 'v2'
 
 ACCOUNT='of-323358988'
 BINDING='01612323-b06f-5320-b623-4e032f474a6e'
@@ -31,18 +81,12 @@ CREATOR='323358988'
 FANS=frozenset((318022380,601164546))
 
 def record_resolution(store,tenant,account,*,proof,actor,command_key):
-    required={'version','incident_sha256','account_id','binding_id','connection_epoch','scope_revision',
-              'classification','actor','audit_command_key','evidence_sha256','resolved_at'}
-    spec=incident_spec(proof.get('incident_sha256')) if type(proof) is dict else None
-    if (spec is None or type(proof) is not dict or set(proof)!=required or proof.get('version')!='plan-c-monitor-resolution.v1'
-            or account!=ACCOUNT or proof.get('account_id')!=account
-            or proof.get('binding_id')!=BINDING or type(proof.get('connection_epoch')) is not int
-            or proof['connection_epoch']!=1 or type(proof.get('scope_revision')) is not int
-            or proof['scope_revision']!=spec['scope_revision'] or proof.get('classification')!=spec['classification'] or proof.get('actor')!=actor
-            or proof.get('audit_command_key')!=command_key):
+    kind=proof_kind(proof,account,BINDING) if account==ACCOUNT else None
+    if kind is None or proof.get('actor')!=actor or proof.get('audit_command_key')!=command_key:
         raise Refused('unsupported monitor incident resolution')
     request_hash=digest(proof)
-    reason='Evidence-based resolution of the explicitly pinned monitor incident; sending remains stopped'
+    reason=('Evidence-based resolution of the explicitly pinned monitor incident; sending remains stopped' if kind=='v1'
+            else 'Class and evidence-based resolution of a monitor incident over its affected interval; sending remains stopped')
     command_identity(command_key,actor,reason,request_hash)
     try:
         observed=datetime.fromisoformat(proof['resolved_at'])

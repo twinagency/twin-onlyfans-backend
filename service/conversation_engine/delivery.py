@@ -231,14 +231,30 @@ def not_accepted(s, intent):
     request.revision += 1
 
 
-def unsent_cancelled(s, intent):
+def sequence_units_remaining(s, intent):
+    """Delivery units the whole reply sequence still needs when `intent` is its FIRST part, else 1.
+
+    Used by admission (the delivery-unit reservation owner) so a multi-part reply is never started when the
+    known remaining capacity cannot finish it. Later parts keep the ordinary one-unit check.
+    """
+    decision = s.scalar(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
+                                                       OfEngineDecision.intent_id == intent.intent_id))
+    if decision is None or decision.part_index != 0:
+        return 1
+    remaining = s.scalars(select(OfEngineDecision.decision_id).where(OfEngineDecision.account_id == intent.account_id,
+        OfEngineDecision.request_id == decision.request_id, OfEngineDecision.generation == decision.generation,
+        OfEngineDecision.status.in_(('ready', 'queued')))).all()
+    return max(1, len(remaining))
+
+
+def unsent_cancelled(s, intent, *, reason='unsent_cancelled', next_step=None):
     decision = s.scalar(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
                                                        OfEngineDecision.intent_id == intent.intent_id))
     if decision is None:
         return
     decision.status, decision.updated_at = 'cancelled', utcnow()
     from .approval import invalidate_generation_in_session
-    invalidate_generation_in_session(s, intent.account_id, decision.request_id, decision.generation, 'unsent_cancelled')
+    invalidate_generation_in_session(s, intent.account_id, decision.request_id, decision.generation, reason)
     later = s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
         OfEngineDecision.request_id == decision.request_id, OfEngineDecision.generation == decision.generation,
         OfEngineDecision.part_index > decision.part_index,
@@ -249,7 +265,7 @@ def unsent_cancelled(s, intent):
     if request.status not in {'handover_pending', 'handover_accepted'}:
         request.status = 'open'
     conflicted = (decision.fan_id, request.source_message_id) in conflicted_sources(s, intent.account_id)
-    request.next_step, request.updated_at = ('review_webhook_conflict' if conflicted else 'review_changed_conversation'), utcnow()
+    request.next_step, request.updated_at = (next_step or ('review_webhook_conflict' if conflicted else 'review_changed_conversation')), utcnow()
     request.revision += 1
 
 

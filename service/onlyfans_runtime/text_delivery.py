@@ -825,9 +825,24 @@ class TextAuthority:
             if not concurrent and policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
                 intent.reason = "account_throttled"
                 return "queued"
-            if policy.used_units >= policy.limit_units:
-                intent.status, intent.reason, intent.updated_at = "refused", "cap_exhausted", now
+            # The first part of a multi-part reply reserves against the capacity the WHOLE sequence needs, so a
+            # sequence that cannot finish is never started (no first part goes out). Later parts, and every
+            # non-engine intent, keep the ordinary one-unit check.
+            units_needed = 1
+            if engine_action:
+                from conversation_engine.delivery import sequence_units_remaining
+                units_needed = sequence_units_remaining(s, intent)
+            if policy.used_units + units_needed > policy.limit_units:
+                exhausted = policy.used_units >= policy.limit_units
+                intent.status, intent.updated_at = "refused", now
+                intent.reason = "cap_exhausted" if exhausted else "sequence_capacity_insufficient"
                 policy.queued_count -= 1
+                if engine_action:
+                    # Cancel the decision (and the unsent rest of its sequence) so it is not retried every tick.
+                    # A distinct reason keeps the autonomous regeneration scan from re-planning against a
+                    # capacity that did not change: that would spend a model call per tick for nothing.
+                    from conversation_engine.delivery import unsent_cancelled as engine_capacity_cancelled
+                    engine_capacity_cancelled(s, intent, reason="delivery_capacity", next_step="review_delivery_capacity")
                 return intent.status
             token, attempt = str(uuid.uuid4()), str(uuid.uuid4())
             if concurrent:
@@ -915,11 +930,23 @@ class TextAuthority:
                     or row.policy_revision != transport_generation):
                 raise Refused("dispatch is not eligible for identity preflight")
 
-    def consume_dispatch(self, tenant_id, grant: Dispatch, *, transport_generation=None):
-        """Commit the final one-use network marker, never an I/O transaction."""
+    def consume_dispatch(self, tenant_id, grant: Dispatch, *, transport_generation=None, retry_after_posts=None):
+        """Commit the final one-use network marker, never an I/O transaction.
+
+        ``retry_after_posts`` (2 or more -> never below 1) authorizes ONE further wire attempt of an
+        already-consumed grant after the transport saw a provider-proven not-sent result. It never consumes the
+        grant again: it re-runs every pre-wire check below (account/fan scope, controls, binding, freshness,
+        approval, pilot/budget gates) under the same lock, atomically advances a durable attempt counter so a
+        concurrent worker cannot take the same retry, and keeps the immutable key/payload. Any failed check
+        refuses WITHOUT changing the intent (the earlier attempt is already proven not sent); the transport then
+        settles it as not accepted and makes no further POST.
+        """
         self._validate_grant(grant)
         if transport_generation is not None and (type(transport_generation) is not int or transport_generation < 0):
             raise Refused("invalid transport generation")
+        retry = retry_after_posts is not None
+        if retry and (type(retry_after_posts) is not int or not 1 <= retry_after_posts <= 2):
+            raise Refused("invalid retry attempt")
         # Immediately-before-the-wire safety scan (R1): a stop request that landed after planning is judged now.
         self._safety_scan_intent(tenant_id, grant.account_id, grant.intent_id, status="dispatching")
         with Session(self.engine) as s, s.begin():
@@ -927,10 +954,22 @@ class TextAuthority:
             row = self._intent(s, grant.account_id, grant.intent_id)
             if self._grant(row) != grant:
                 raise Refused("dispatch grant mismatch")
-            if row.wire_started_at is not None or row.status != "dispatching":
+            if retry:
+                if row.wire_started_at is None or row.status != "dispatching":
+                    raise Refused("no wire attempt is open for a retry")
+                expected_marker = None if retry_after_posts == 1 else f"wire_attempt:{retry_after_posts}"
+                if row.reason != expected_marker:
+                    raise Refused("wire retry already taken")
+            elif row.wire_started_at is not None or row.status != "dispatching":
                 raise Refused("dispatch grant was already consumed or settled")
             now = self._db_now(s)
+            if retry and (row.wire_version != 1 or row.deadline <= now or row.expires_at <= now):
+                raise Refused("wire retry window closed")
             if row.wire_version != 1 or row.deadline <= now or row.expires_at <= now:
+                # Under the runtime lock and before wire_started_at is written, so nothing was or will be sent
+                # for this attempt: a version-1 engine intent is proven never wired. Anything else stays unknown.
+                if self._cancel_never_wired(s, row, "prewire_dispatch_expired", tenant_id):
+                    return None
                 self._hold_unknown(s, row, "legacy_dispatch_unverified" if row.wire_version != 1 else "dispatch_expired",
                                    tenant_id)
                 return None
@@ -981,6 +1020,8 @@ class TextAuthority:
             if concurrent:
                 from native_pilot import admission
                 cooldown = admission.cooldown_at(policy)
+                if retry and reason is None and concurrent_admission.is_after(cooldown, now):
+                    reason = "account_throttled"
                 if reason is None and concurrent_admission.is_after(cooldown, now):
                     # A provider-wide cooldown can land after admission but before
                     # the wire. Put this still-unsent intent back in the queue rather
@@ -1005,6 +1046,11 @@ class TextAuthority:
                 reason = "attempt_ownership_changed"
             if reason is None and policy.used_units > policy.limit_units:
                 reason = "cap_exhausted"
+            if retry:
+                if reason is not None:
+                    raise Refused("wire retry no longer authorized: " + reason)
+                row.reason, row.updated_at = f"wire_attempt:{retry_after_posts + 1}", now
+                return self._grant(row)
             if reason == "pilot_evidence_pending" or reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
                 # No wire marker exists yet. Release this attempt's reservation
                 # and retain the intent for a fresh admission after ingress drains.
@@ -1090,6 +1136,36 @@ class TextAuthority:
                                          row.attempt_id, "unknown", utcnow(), gap)
         elif not independent and not _fan_isolated(policy):
             policy.active_intent_id = row.intent_id
+
+    def _cancel_never_wired(self, s, row, reason, tenant_id=None):
+        """Retire a dispatching engine attempt that PROVABLY never reached the wire. Caller holds the runtime lock.
+
+        Invariant relied on: for wire_version 1 every registered transport commits ``wire_started_at`` through
+        consume_dispatch (the one-use marker, written under this lock) before it can issue any provider
+        request, so a version-1 attempt with no marker has sent nothing. Legacy (wire_version != 1), non-engine
+        or ambiguous attempts return False and the caller keeps its unknown hold.
+
+        Atomically: the old dispatch token is destroyed (no late worker can consume, record or mark it), the
+        engine decision is cancelled through the same unsent-cancellation lineage as every other pre-wire
+        cancel (the request reopens, nothing is replayed), and only this attempt's held delivery-unit
+        reservation is released. Model/provider cost is never touched here.
+        """
+        if row.status != "dispatching" or row.wire_version != 1 or row.wire_started_at is not None:
+            return False
+        from conversation_engine.delivery import is_engine_intent, unsent_cancelled as engine_unsent_cancelled
+        if not is_engine_intent(s, row):
+            return False
+        policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == row.account_id).with_for_update())
+        if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or (row.reservation_held and policy.used_units < 1):
+            return False
+        row.status, row.reason, row.updated_at = "cancelled", reason, self._db_now(s)
+        row.dispatch_token = None
+        engine_unsent_cancelled(s, row)
+        if row.reservation_held:
+            policy.used_units -= 1
+            row.reservation_held = False
+        self._release_hold(s, row, tenant_id)
+        return True
 
     def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
         if reason not in {"ambiguous_transport", "invalid_receipt", "dispatch_expired", "provider_identity_conflict"}:
@@ -1399,7 +1475,14 @@ class TextAuthority:
             status = getattr(exc, "send_http_status", None)
             http = f" http_status={status}" if type(status) is int and 100 <= status <= 599 else ""
             print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__}{http} at={frames}", file=sys.stderr, flush=True)
-            return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
+            try:
+                return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
+            except Refused as refusal:
+                if str(refusal) != "stale dispatch token":
+                    raise
+                # The token was invalidated (the attempt was proven never wired and retired): nothing to mark.
+                with Session(self.engine) as s:
+                    return self._intent(s, account_id, intent_id).status
         if type(proof) is NotAccepted:
             return self.record_not_accepted(tenant_id, account_id, intent_id, grant.token, proof)
         result = self.record_accepted(tenant_id, account_id, intent_id, grant.token, proof)
@@ -1450,16 +1533,29 @@ class TextAuthority:
                     OfTextIntent.binding_id == runtime.binding_id, OfEngineDecision.binding_id == runtime.binding_id)
             rows = s.scalars(query.order_by(OfTextIntent.deadline, OfTextIntent.intent_id).limit(limit)).all()
             for row in rows:
-                self._hold_unknown(s, row, "dispatch_expired", tenant_id)
+                # Only the engine-scoped form may prove "never wired" (wire marker absent under the lock).
+                if not (synthetic_engine_only and self._cancel_never_wired(s, row, "prewire_crash_never_wired", tenant_id)):
+                    self._hold_unknown(s, row, "dispatch_expired", tenant_id)
             return len(rows)
 
-    def repair(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False):
+    def repair(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False, allowed_fans=None):
+        """Project saved accepted receipts (network-free; this method cannot call a transport).
+
+        ``allowed_fans`` is the bounded normal-worker-recovery form: only those fans of the current binding
+        are repaired, and one receipt that cannot be projected (conflicting canonical identity, invalid saved
+        evidence) stays held exactly as before without stopping the rest or the worker tick.
+        """
         if type(limit) is not int or not 1 <= limit <= 100 or type(synthetic_engine_only) is not bool:
             raise Refused("invalid repair limit")
+        if allowed_fans is not None and (not synthetic_engine_only or type(allowed_fans) is not frozenset or not allowed_fans
+                or any(type(fan) is not int or not 0 < fan < 2**63 for fan in allowed_fans)):
+            raise Refused("invalid repair fan scope")
         with Session(self.engine) as s, s.begin():
             runtime = self._historical_runtime(s, tenant_id, account_id)
             query = select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account_id,
                 OfTextIntent.status == "accepted", OfTextIntent.projected_at.is_(None))
+            if allowed_fans is not None:
+                query = query.where(OfTextIntent.fan_id.in_(allowed_fans))
             if synthetic_engine_only:
                 from db.onlyfans_engine_models import OfEngineDecision
                 policy = s.get(OfDeliveryPolicy, account_id)
@@ -1469,4 +1565,11 @@ class TextAuthority:
                     (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(
                     OfTextIntent.binding_id == runtime.binding_id, OfEngineDecision.binding_id == runtime.binding_id)
             ids = s.scalars(query.order_by(OfTextIntent.created_at, OfTextIntent.intent_id).limit(limit)).all()
-        return sum(self.materialize(tenant_id, account_id, identity, synthetic_engine_only=synthetic_engine_only) for identity in ids)
+        repaired = 0
+        for identity in ids:
+            try:
+                repaired += bool(self.materialize(tenant_id, account_id, identity, synthetic_engine_only=synthetic_engine_only))
+            except Refused:
+                if allowed_fans is None:
+                    raise
+        return repaired

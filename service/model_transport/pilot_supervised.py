@@ -250,6 +250,7 @@ class SupervisedPilot:
         from conversation_engine.pilot_ingress import preserve_contact_stops
         preserve_contact_stops(store, self.tenant, self.account)
         expired = self.worker.transport.recover_interrupted()
+        self.worker.transport.recover_accepted()  # saved accepted receipt -> transcript, no POST
         from fans_api_adapter.event_scope import event_fan, ACCOUNT_EVENTS
         with Session(store.engine) as s:
             runtime = store._runtime(s, self.tenant, self.account, lock=False)

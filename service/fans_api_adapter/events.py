@@ -726,9 +726,16 @@ class FansEventIntake:
                                        message.payload(), 'ws', now)
             state = s.get(OfConversationState, (account, fan_id))
             tenant = binding.tenant_id
+            binding_id = runtime.binding_id
             revision = state.revision if state is not None else 0
             already = state is not None and (state.mode == 'human_controlled' or state.takeover_state != 'none')
-        if already:
+        with Session(self.engine) as s:
+            from conversation_engine.pilot_scope import trial_takeover_exception
+            excepted = trial_takeover_exception(s, account, binding_id, fan_id)
+        if excepted and not already:
+            # Owner-recorded temporary trial exception: evidence and history above are kept; no takeover request.
+            result = 'outside_send_recorded_trial_exception'
+        elif already:
             result = 'already_human'
         else:
             try:

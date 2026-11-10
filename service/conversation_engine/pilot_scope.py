@@ -851,3 +851,58 @@ class StoppedBackfillGuard:
             row.provider_requests_used += 1
             row.provider_credits_reserved += limits['provider_credits_per_request']
             row.updated_at = utcnow()
+
+
+# ---------------------------------------------------------------- temporary trial exception (owner instruction)
+TRIAL_TAKEOVER_EXCEPTION = 'plan_c_trial_takeover_exc'
+TRIAL_TAKEOVER_EXCEPTION_END = 'plan_c_trial_takeover_exc_end'
+
+
+def _trial_exception_keys(binding):
+    start = sha256(f'plan-c-trial-takeover-exception:{binding}'.encode()).hexdigest()
+    return start, sha256(f'plan-c-trial-takeover-exception-end:{binding}'.encode()).hexdigest()
+
+
+def trial_takeover_exception(s, account, binding, fan):
+    """True while the owner's recorded, unrevoked exception covers this CURRENT pilot fan.
+
+    It only skips the automatic human-takeover request for an outside manual send. The send stays recorded as
+    evidence and in history; stops/no-contact, queued-send holds, unknown/duplicate send fences, scope and budgets
+    are unaffected. Any other fan, binding or a fan removed from the pilot keeps the normal takeover."""
+    start, end = _trial_exception_keys(binding)
+    row = s.get(OfLaunchCommand, (account, start))
+    if row is None or row.kind != TRIAL_TAKEOVER_EXCEPTION or row.binding_id != binding:
+        return False
+    if s.get(OfLaunchCommand, (account, end)) is not None:
+        return False
+    from db.onlyfans_models import OfRuntime
+    runtime = s.get(OfRuntime, account)
+    if runtime is None or runtime.binding_id != binding:
+        return False
+    pilot, config = current(s, runtime)
+    covered = json.loads(row.before_json).get('fans', [])
+    return pilot is not None and fan in config['fans'] and fan in covered
+
+
+def set_trial_takeover_exception(store, tenant, account, *, enabled, actor, reason):
+    """Record (enabled=True) or end (enabled=False) the exception for exactly the current pilot fans."""
+    _command('0' * 64, actor, reason)
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account, lock=True)
+        row, config = require(s, runtime, lock=True)
+        authorize(config, actor, 'handback')
+        start, end = _trial_exception_keys(runtime.binding_id)
+        key, kind = (start, TRIAL_TAKEOVER_EXCEPTION) if enabled else (end, TRIAL_TAKEOVER_EXCEPTION_END)
+        if enabled and s.get(OfLaunchCommand, (account, end)) is not None:
+            raise Refused('the trial takeover exception was already ended; it cannot be reopened')
+        prior = s.get(OfLaunchCommand, (account, key))
+        if prior is not None:
+            return {'ok': True, 'kind': kind, 'fans': json.loads(prior.before_json).get('fans'), 'replayed': True}
+        if not enabled and s.get(OfLaunchCommand, (account, start)) is None:
+            raise Refused('no trial takeover exception to end')
+        before = {'fans': list(config['fans']), 'scopeRevision': row.revision, 'scopeFingerprint': row.fingerprint,
+                  'effect': 'outside manual sends to these fans are recorded but do not request takeover'}
+        s.add(OfLaunchCommand(account_id=account, command_key=key, binding_id=runtime.binding_id, kind=kind,
+              request_hash=_fingerprint([kind, account, runtime.binding_id, before, actor, reason]), actor=actor,
+              reason=reason, before_json=_encoded(before), result_json=_encoded({'ok': True}), created_at=utcnow()))
+        return {'ok': True, 'kind': kind, 'fans': before['fans'], 'replayed': False}

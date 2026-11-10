@@ -922,6 +922,52 @@ def projection_resolution_key(binding, epoch, event_key):
     return hashlib.sha256(f'plan-c-projection-resolve:{binding}:{epoch}:{hashlib.sha256(event_key.encode()).hexdigest()}'.encode()).hexdigest()
 
 
+def _outside_deletion_proof(s, account, epoch, config, connection, proj, raw, proof):
+    """Prove a held deletion belongs to ONE fan outside the pilot, from the provider's retained messages.sent record.
+
+    The deletion event carries only a message id and the pilot database has no row for it (the message was sent by an
+    outside writer to a fan we never ingest). The provider's authenticated delivery listing holds the original
+    messages.sent for that id, with its recipient; its event key must match exactly one retained NON-holding local
+    digest of this epoch. The provider object cannot reproduce the digest's raw bytes (same documented limit as
+    interval validation), so the key match is the binding. Anything else stays held: a pilot fan (that path is the
+    takeover/history owner), an unknown or conflicting recipient, a mapped native message, an engine intent or any
+    other evidence for the id.
+    """
+    from db.onlyfans_engine_models import OfEnginePilotWebhookDigest, OfFansWebhook
+    from fans_api_adapter.event_scope import SUPPORTED, classify_body
+    from fans_api_adapter.payment_evidence import numeric
+    if proj.detail != 'deletion_mapping_missing_or_ambiguous':
+        raise Conflict('send proof applies only to an unmapped deletion')
+    if type(proof) is not dict or set(proof) != {'eventKey', 'body'} or type(proof['body']) is not dict \
+            or type(proof['eventKey']) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', proof['eventKey']):
+        raise BadRequest('exact provider send proof required')
+    deleted = json.loads(bytes(raw.raw_body))['payload']
+    message_id = numeric(deleted['id'])
+    sent, key = proof['body'], proof['eventKey']
+    verdict = classify_body(sent)
+    if (verdict.cls != SUPPORTED or verdict.event != 'messages.sent' or verdict.fan is None
+            or sent.get('account_id') != connection.provider_account_id or numeric(sent['payload'].get('id')) != message_id):
+        raise Conflict('proof is not this account\'s send of the deleted message')
+    fan = verdict.fan
+    if fan in config['fans']:
+        raise Conflict('a pilot fan deletion is resolved through takeover and history, not this proof')
+    digests = s.scalars(select(OfEnginePilotWebhookDigest).where(OfEnginePilotWebhookDigest.account_id == account,
+        OfEnginePilotWebhookDigest.epoch == epoch, OfEnginePilotWebhookDigest.event_key == key).limit(3)).all()
+    if len(digests) != 1 or digests[0].safety_hold is not False:
+        raise Conflict('retained digest of the send is missing, held or conflicting')
+    if s.get(OfFansWebhook, (account, epoch, key)) is not None:
+        raise Conflict('the send has a full receipt; it cannot be digest-proven')
+    if (s.scalar(select(Message.fan_id).where(Message.account_id == account, Message.message_id == message_id).limit(1))
+            is not None or s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account,
+            OfTextIntent.provider_message_id == message_id).limit(1)) is not None
+            or s.scalar(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
+            OfFansEvidence.message_id == message_id).limit(1)) is not None):
+        raise Conflict('the message is already known to the pilot; classify it through its own owner')
+    return {'messageId': message_id, 'fan': fan, 'sentEventKey': key, 'localDigest': digests[0].payload_sha256,
+            'proofSha256': hashlib.sha256(json.dumps(sent, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+            'limitation': 'provider object does not reproduce the retained digest bytes'}
+
+
 def _reconcile_held_projection(store, tenant, account, item_id, body):
     """Re-drive one held projection of a SUPPORTED event from its retained exact bytes.
 
@@ -936,7 +982,7 @@ def _reconcile_held_projection(store, tenant, account, item_id, body):
     from fans_api_adapter.events import FansEventIntake
     from .pilot_scope import require, authorize
     required = {'commandKey', 'actor', 'evidenceRef', 'scopeRevision', 'eventEpoch', 'eventKey'}
-    if type(body) is not dict or set(body) != required:
+    if type(body) is not dict or not required <= set(body) <= required | {'sendProof'}:
         raise BadRequest('exact held-projection evidence fields required')
     key, actor = _key(body['commandKey']), _actor(body['actor'])
     revision, epoch = _int(body['scopeRevision'], 1), _int(body['eventEpoch'], 1, 2**63-1)
@@ -983,6 +1029,12 @@ def _reconcile_held_projection(store, tenant, account, item_id, body):
                 raise Conflict('conflicting provider key remains held')
             if classify_raw(bytes(raw.raw_body)).cls != SUPPORTED:
                 raise Conflict('event is not a supported projection')
+            if 'sendProof' in body:
+                proof = _outside_deletion_proof(s, account, epoch, config, connection, proj, raw, body['sendProof'])
+                proj.status, proj.detail, proj.updated_at = 'ignored', 'deletion_outside_pilot_proven', utcnow()
+                return {'ok': True, 'accountId': account, 'id': item_id, 'action': 'reconcile', 'commandKey': key,
+                        'outcome': 'outside_pilot_deletion_classified', 'projection': 'ignored', 'resolved': True,
+                        'proof': proof}
             proj.status, proj.detail, proj.updated_at = 'pending', 'operator_reproject', utcnow()
         status = FansEventIntake(store)._project(account, epoch, event_key)
         return {'ok': True, 'accountId': account, 'id': item_id, 'action': 'reconcile', 'commandKey': key,

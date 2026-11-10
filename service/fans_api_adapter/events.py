@@ -386,6 +386,8 @@ class FansEventIntake:
             OfTextIntent.provider_message_id == message_id, OfTextIntent.binding_id == runtime.binding_id,
             OfTextIntent.status == 'accepted', OfTextIntent.projected_at.is_not(None),
             OfEngineDecision.connection_epoch == connection.epoch).limit(1))
+        if outgoing is None and message.direction == 'out':
+            outgoing = self._outside_writer_send(s, connection, message)
         if (message.direction not in ('in', 'out') or
                 (message.direction == 'in' and incoming is None) or
                 (message.direction == 'out' and outgoing is None)):
@@ -398,6 +400,33 @@ class FansEventIntake:
         # accepted intents, purchase/access evidence and financial history remain.
         message.is_unsent = True
         return 'projected', f'deleted:{message.fan_id}:{message_id}'
+
+    @staticmethod
+    def _outside_writer_send(s, connection, message):
+        """Epoch proof for an outgoing message the engine did not send.
+
+        Only a retained signed messages.sent receipt of THIS connection epoch for exactly this recipient and
+        message id, already accepted as takeover evidence (applied human_sent), proves it. It is evidence about an
+        outside writer, never an engine intent, so no accepted-intent or send authority is created.
+        """
+        evidence = s.scalar(select(OfFansEvidence).where(OfFansEvidence.account_id == connection.account_id,
+            OfFansEvidence.fan_id == message.fan_id, OfFansEvidence.message_id == message.message_id,
+            OfFansEvidence.kind == 'human_sent', OfFansEvidence.status == 'applied').limit(1))
+        if evidence is None or not evidence.event_key:
+            return None
+        receipt = s.get(OfFansWebhook, (connection.account_id, connection.epoch, evidence.event_key))
+        projection = s.get(OfFansProjection, (connection.account_id, connection.epoch, evidence.event_key))
+        if (receipt is None or projection is None or projection.status != 'projected' or receipt.status != 'accepted'
+                or receipt.event_type != 'messages.sent' or receipt.payload_sha256 != evidence.raw_sha256):
+            return None
+        try:
+            sent = _parse(bytes(receipt.raw_body))['payload']
+            if (ev.numeric(sent.get('id')) != message.message_id or ev.numeric(sent['toUser'].get('id')) != message.fan_id
+                    or sent.get('isFromQueue') is True):
+                return None
+        except (Refused, ValueError, TypeError, KeyError, AttributeError):
+            return None
+        return evidence.evidence_id
 
     # ---------------------------------------------------------------- accounts
     def _account(self, s, event, payload, provider_id, current, connection, link, now, after):

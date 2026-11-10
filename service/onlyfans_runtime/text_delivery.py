@@ -951,6 +951,10 @@ class TextAuthority:
             if retry and (row.wire_version != 1 or row.deadline <= now or row.expires_at <= now):
                 raise Refused("wire retry window closed")
             if row.wire_version != 1 or row.deadline <= now or row.expires_at <= now:
+                # Under the runtime lock and before wire_started_at is written, so nothing was or will be sent
+                # for this attempt: a version-1 engine intent is proven never wired. Anything else stays unknown.
+                if self._cancel_never_wired(s, row, "prewire_dispatch_expired", tenant_id):
+                    return None
                 self._hold_unknown(s, row, "legacy_dispatch_unverified" if row.wire_version != 1 else "dispatch_expired",
                                    tenant_id)
                 return None
@@ -1117,6 +1121,36 @@ class TextAuthority:
                                          row.attempt_id, "unknown", utcnow(), gap)
         elif not independent and not _fan_isolated(policy):
             policy.active_intent_id = row.intent_id
+
+    def _cancel_never_wired(self, s, row, reason, tenant_id=None):
+        """Retire a dispatching engine attempt that PROVABLY never reached the wire. Caller holds the runtime lock.
+
+        Invariant relied on: for wire_version 1 every registered transport commits ``wire_started_at`` through
+        consume_dispatch (the one-use marker, written under this lock) before it can issue any provider
+        request, so a version-1 attempt with no marker has sent nothing. Legacy (wire_version != 1), non-engine
+        or ambiguous attempts return False and the caller keeps its unknown hold.
+
+        Atomically: the old dispatch token is destroyed (no late worker can consume, record or mark it), the
+        engine decision is cancelled through the same unsent-cancellation lineage as every other pre-wire
+        cancel (the request reopens, nothing is replayed), and only this attempt's held delivery-unit
+        reservation is released. Model/provider cost is never touched here.
+        """
+        if row.status != "dispatching" or row.wire_version != 1 or row.wire_started_at is not None:
+            return False
+        from conversation_engine.delivery import is_engine_intent, unsent_cancelled as engine_unsent_cancelled
+        if not is_engine_intent(s, row):
+            return False
+        policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == row.account_id).with_for_update())
+        if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or (row.reservation_held and policy.used_units < 1):
+            return False
+        row.status, row.reason, row.updated_at = "cancelled", reason, self._db_now(s)
+        row.dispatch_token = None
+        engine_unsent_cancelled(s, row)
+        if row.reservation_held:
+            policy.used_units -= 1
+            row.reservation_held = False
+        self._release_hold(s, row, tenant_id)
+        return True
 
     def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
         if reason not in {"ambiguous_transport", "invalid_receipt", "dispatch_expired", "provider_identity_conflict"}:
@@ -1426,7 +1460,14 @@ class TextAuthority:
             status = getattr(exc, "send_http_status", None)
             http = f" http_status={status}" if type(status) is int and 100 <= status <= 599 else ""
             print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__}{http} at={frames}", file=sys.stderr, flush=True)
-            return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
+            try:
+                return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
+            except Refused as refusal:
+                if str(refusal) != "stale dispatch token":
+                    raise
+                # The token was invalidated (the attempt was proven never wired and retired): nothing to mark.
+                with Session(self.engine) as s:
+                    return self._intent(s, account_id, intent_id).status
         if type(proof) is NotAccepted:
             return self.record_not_accepted(tenant_id, account_id, intent_id, grant.token, proof)
         result = self.record_accepted(tenant_id, account_id, intent_id, grant.token, proof)
@@ -1477,7 +1518,9 @@ class TextAuthority:
                     OfTextIntent.binding_id == runtime.binding_id, OfEngineDecision.binding_id == runtime.binding_id)
             rows = s.scalars(query.order_by(OfTextIntent.deadline, OfTextIntent.intent_id).limit(limit)).all()
             for row in rows:
-                self._hold_unknown(s, row, "dispatch_expired", tenant_id)
+                # Only the engine-scoped form may prove "never wired" (wire marker absent under the lock).
+                if not (synthetic_engine_only and self._cancel_never_wired(s, row, "prewire_crash_never_wired", tenant_id)):
+                    self._hold_unknown(s, row, "dispatch_expired", tenant_id)
             return len(rows)
 
     def repair(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False, allowed_fans=None):

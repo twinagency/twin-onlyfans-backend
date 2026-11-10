@@ -425,7 +425,10 @@ def test_regression_repeated_unanswered_night_owl_question_is_rejected():
     outcome, why = reasons(ok('so are you a night owl?'), wctx(history, message='what do you look like'))
     assert outcome == 'invalid' and 'already asked' in why
     assert reasons(ok('here is a bit about me. what part of the day do you like best?'), wctx(history, message='tell me about you'))[0] == 'ok'
-    assert reasons(ok('i am a barista, tell me about you'), wctx(history, message='what do you do'))[0] == 'ok'  # no question at all is fine
+    # no question at all is fine. The sample states a job, so this call's profile documents it (U1b: an undocumented job claim is rejected)
+    barista = CreatorProfile.from_facts('Riley', {'age': '27', 'job': 'barista', 'limits': 'no meetups'}, role_statement=IDENT,
+                                        offers_permitted=True, approved_item_ids=('5',))
+    assert reasons(ok('i am a barista, tell me about you'), wctx(history, message='what do you do', profile=barista))[0] == 'ok'
 
 
 @pytest.mark.parametrize('body', ['tell me first what you do and then i will show you', 'answer my question first',

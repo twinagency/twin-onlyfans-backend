@@ -38,6 +38,13 @@ from .model_client import ModelBudgetExhausted, ModelBusy
 log = logging.getLogger('conversation_engine.model')
 _BUDGET_LOCK = 7811071
 CONTENT_FAILURES = frozenset({'refusal', 'malformed', 'invalid', 'empty'})
+# Completion evidence is persisted by `settle`, in the same transaction that stores the response, so a restart can never
+# replay a saved answer without knowing the provider stopped it at the length limit. No new column: the existing outcome
+# column carries it. LENGTH_PENDING = identity not yet checked; LENGTH_LIMITED = identity fine, answer incomplete (never
+# reusable, never verified_ok). The ordinary completed path keeps its existing states.
+LENGTH_PENDING = 'length_identity_pending'
+LENGTH_LIMITED = 'length_limited'
+IDENTITY_UNSETTLED = ('identity_pending', LENGTH_PENDING)
 
 
 @dataclass(frozen=True)
@@ -245,7 +252,7 @@ class ModelLedger:
         row.provider_generation_id,row.provider_endpoint_sha256 = generation_id,endpoint_sha256
 
     def settle(self, account, call_id, worker_id, *, text_value, usage, identity_pending=False,
-               generation_id='', endpoint_sha256=''):
+               generation_id='', endpoint_sha256='', finish_reason=None):
         if type(identity_pending) is not bool:
             raise Refused('invalid identity verification state')
         cfg = self.config
@@ -264,7 +271,10 @@ class ModelLedger:
             now = self.clock()
             row.response_text = text_value
             row.response_sha256 = sha256(text_value.encode('utf-8')).hexdigest()
-            if identity_pending:
+            if finish_reason == 'length':
+                # Persisted with the response itself: replay must reach the same verdict as uninterrupted processing.
+                row.outcome = LENGTH_PENDING if identity_pending else LENGTH_LIMITED
+            elif identity_pending:
                 row.outcome = 'identity_pending'  # never replay until the provider identity is verified
             row.prompt_tokens, row.completion_tokens = usage.prompt_tokens, usage.completion_tokens
             row.settled_at = row.updated_at = now
@@ -294,16 +304,21 @@ class ModelLedger:
         with Session(self.engine) as s, s.begin():
             row = s.get(OfEngineModelCall, (account, call_id), with_for_update=True)
             if (row is None or row.lease_owner != worker_id or row.status not in ('settled', 'unknown')
-                    or row.outcome != 'identity_pending'):
+                    or row.outcome not in IDENTITY_UNSETTLED):
                 raise Refused('model identity verification is no longer current')
-            row.outcome = 'identity_verified' if verified else 'identity_unverified'
+            if not verified:
+                row.outcome = 'identity_unverified'
+            else:
+                row.outcome = LENGTH_LIMITED if row.outcome == LENGTH_PENDING else 'identity_verified'
             row.updated_at = self.clock()
 
     def set_outcome(self, account, call_id, outcome):
         with Session(self.engine) as s, s.begin():
             row = s.get(OfEngineModelCall, (account, call_id), with_for_update=True)
             if (row is not None and row.status in ('settled', 'unknown')
-                    and row.outcome in (None, 'ok', 'identity_verified', 'verified_ok') + tuple(CONTENT_FAILURES)):
+                    and row.outcome in (None, 'ok', 'identity_verified', 'verified_ok', LENGTH_LIMITED) + tuple(CONTENT_FAILURES)):
+                if row.outcome == LENGTH_LIMITED and outcome in ('ok', 'verified_ok'):
+                    raise Refused('a length-limited model answer can never be recorded as complete')
                 row.outcome, row.updated_at = outcome, self.clock()
 
     # ---- identity, reconciliation -----------------------------------------------------

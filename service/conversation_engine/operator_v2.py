@@ -34,6 +34,7 @@ from onlyfans_runtime.launch_operations_models import OfLaunchCommand
 from onlyfans_runtime.store import Refused, utcnow
 from . import approval
 from .history_scope import current_binding_message
+from .model_ledger import IDENTITY_UNSETTLED
 from .operator import FANSAPI_EVIDENCE_PREFIX, evidence_allowed
 
 PLAN_C_TRANSPORT = 'fansapi'
@@ -649,10 +650,10 @@ def unresolved(store, tenant, account, actor=None):
         for call in s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
                 OfEngineModelCall.binding_id == binding, OfEngineModelCall.fan_id.in_(pilot),
                 (OfEngineModelCall.status.in_(('reserved', 'calling', 'unknown'))) |
-                (OfEngineModelCall.outcome.in_(('identity_pending', 'identity_unverified'))))
+                (OfEngineModelCall.outcome.in_((*IDENTITY_UNSETTLED, 'identity_unverified'))))
                 .order_by(OfEngineModelCall.created_at).limit(200)):
             cid, revision = conv(call.fan_id)
-            identity = call.outcome in ('identity_pending', 'identity_unverified')
+            identity = call.outcome in (*IDENTITY_UNSETTLED, 'identity_unverified')
             summary = ('The model response identity is not verified. Do not use its text; review the recorded call.'
                        if identity else 'A model call is in progress or its usage is uncertain. '
                        'Review the call and cost before retrying; do not assume it was free.')

@@ -35,7 +35,7 @@ from onlyfans_runtime.store import Refused
 from .model_client import (ChatRequest, ModelBusy, ModelCallError, ModelHTTPStatus, ModelIncompleteResponse,
                            ModelNotSent, ModelOutcomeUnknown, ModelUnavailable)
 from .model_config import input_token_upper_bound
-from .model_ledger import CONTENT_FAILURES, ModelLedger
+from .model_ledger import CONTENT_FAILURES, IDENTITY_UNSETTLED, LENGTH_LIMITED, ModelLedger
 from .model_output import JudgeContext, Verdict, judge
 from .prompt_registry import get_prompt_provider
 from .writer_context import PromptBudget, build_context, classify_turn, offer_for
@@ -43,6 +43,14 @@ from .writer_examples import NullExamples
 
 # Refusals come back as an explicit refusal OR as an EMPTY completion (known DeepSeek/OpenRouter behaviour). Neither is retried.
 SILENT_OR_REFUSED = frozenset({'refusal', 'empty'})
+LENGTH_REASON = 'the previous answer was cut off by the output length limit; write one shorter reply'
+
+
+def length_verdict(verdict):
+    """The provider stopped at the length limit: the text is incomplete (or empty because the limit was spent before any
+    text). That is not a refusal and not a silent completion; it gets the normal single corrected, costed regeneration,
+    never more. A genuine refusal in the text stays a refusal. Shared by the live path and by replay after a restart."""
+    return verdict if verdict.outcome == 'refusal' else Verdict('invalid', reasons=(LENGTH_REASON,))
 
 
 def is_availability_failure(outcome):
@@ -172,13 +180,15 @@ class ModelRuntime:
             same = row.snapshot_sha256 == turn.snapshot_sha256
             if row.status in ('reserved', 'calling'):
                 raise ModelBusy('a model call is already in flight for this request')
-            if cfg.upstream_provider and row.response_text is not None and same and row.outcome in (None, 'ok', 'identity_pending', 'identity_unverified'):
+            if cfg.upstream_provider and row.response_text is not None and same and row.outcome in (None, 'ok', 'identity_unverified') + IDENTITY_UNSETTLED:
                 turn.handover('model_identity_unverified', {'outcome': row.outcome or 'not_recorded'})
                 raise Refused('model identity is unverified; request handed to a human')
-            if row.response_text is not None and row.outcome in (None, 'ok', 'identity_verified', 'verified_ok'):
+            if row.response_text is not None and row.outcome in (None, 'ok', 'identity_verified', 'verified_ok', LENGTH_LIMITED):
                 if not same:
                     continue  # produced from an older view or model configuration: never reuse
                 verdict = judge(row.response_text, jctx)  # a stored answer: reuse, never pay twice
+                if row.outcome == LENGTH_LIMITED:
+                    verdict = length_verdict(verdict)  # the persisted completion evidence: same verdict as uninterrupted
                 recorded_outcome = 'verified_ok' if cfg.upstream_provider and verdict.outcome == 'ok' else verdict.outcome
                 if recorded_outcome != row.outcome:
                     ledger.set_outcome(turn.account, row.call_id, recorded_outcome)
@@ -269,7 +279,8 @@ class ModelRuntime:
             text = raw.encode('utf-8')[:cfg.max_output_bytes].decode('utf-8', 'ignore') if oversize else raw
             ledger.settle(turn.account, reservation.call_id, self.worker_id, text_value=text, usage=result.usage,
                           identity_pending=bool(cfg.upstream_provider), generation_id=getattr(result,'generation_id',''),
-                          endpoint_sha256=getattr(result,'endpoint_sha256',''))
+                          endpoint_sha256=getattr(result,'endpoint_sha256',''),
+                          finish_reason=getattr(result, 'finish_reason', None))
             returned_model = getattr(result, 'model', '') if type(getattr(result, 'model', '')) is str else ''
             returned_provider = getattr(result, 'provider', '') if type(getattr(result, 'provider', '')) is str else ''
             ledger.note_identity(turn.account, reservation.call_id, self.worker_id, requested=model,
@@ -298,11 +309,8 @@ class ModelRuntime:
             if cfg.upstream_provider:
                 ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=True)
             verdict = Verdict('invalid', reasons=('answer was longer than the output bound',)) if oversize else judge(text, jctx)
-            if getattr(result, 'finish_reason', None) == 'length' and verdict.outcome != 'refusal':
-                # The provider says it stopped at the length limit: the text is incomplete (or empty because the limit was
-                # spent before any text). That is not a refusal and not a silent completion; it gets the normal single
-                # corrected, costed regeneration, never more. A genuine refusal in the text stays a refusal.
-                verdict = Verdict('invalid', reasons=('the previous answer was cut off by the output length limit; write one shorter reply',))
+            if getattr(result, 'finish_reason', None) == 'length':
+                verdict = length_verdict(verdict)  # already persisted by settle; replay reaches the same verdict
             recorded_outcome = 'verified_ok' if cfg.upstream_provider and verdict.outcome == 'ok' else verdict.outcome
             ledger.set_outcome(turn.account, reservation.call_id, recorded_outcome)
             if verdict.outcome == 'ok':

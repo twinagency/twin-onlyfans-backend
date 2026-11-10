@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, aliased
 from conversation_engine import approval
 from conversation_engine.journey import journey_config
 from conversation_engine.model_config import ModelConfig
+from conversation_engine.model_ledger import IDENTITY_UNSETTLED
 from conversation_engine.pilot_scope import require, require_model, require_profile, policy_matches, _product_current
 from conversation_engine.real_worker import RealConversationWorker
 from conversation_engine.writer_context import JsonFileCreatorProfiles
@@ -348,7 +349,7 @@ class SupervisedPilot:
                     and_(OfEngineModelCall.status == 'released',
                          or_(OfEngineModelCall.outcome.is_(None), OfEngineModelCall.outcome != 'lease_expired',
                              OfEngineModelCall.wire_started_at.is_not(None))),
-                    OfEngineModelCall.outcome.in_(('identity_pending','identity_unverified')))).exists()
+                    OfEngineModelCall.outcome.in_((*IDENTITY_UNSETTLED,'identity_unverified')))).exists()
             query = (select(OfIngress, request).outerjoin(request, and_(
                 request.account_id == OfIngress.account_id, request.fan_id == OfIngress.fan_id,
                 request.source_message_id == OfIngress.message_id, request.binding_id == runtime.binding_id))

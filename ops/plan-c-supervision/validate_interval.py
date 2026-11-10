@@ -59,8 +59,8 @@ def validate(root):
                 or type(recent.get('_meta',{}).get('_credits',{}).get('used')) is not int
                 or recent['_meta']['_credits']['used']!=0 or len(recent['data'])!=manifest.get('incident_delivery_count')):
             raise RuntimeError('incident window evidence incomplete or changed')
-        by_key={r.get('idempotency_key'):r for r in rows}
-        if any(by_key.get(r.get('idempotency_key'))!=r for r in recent['data']):
+        full_rows={canon(r) for r in rows}
+        if any(canon(r) not in full_rows for r in recent['data']):
             raise RuntimeError('incident window has unmatched reported delivery')
     receipts={r['key']:r for r in local['receipts']}
     findings=[];matched=[];superseded=[]

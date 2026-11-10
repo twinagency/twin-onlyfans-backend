@@ -73,9 +73,9 @@ try:
  if type(rows) is not list:raise RuntimeError('invalid interval listing')
  if pinned_webhook:
   recent,_=pages(incident['last_confirmed_healthy_utc'],'incident-deliveries-page','incident-deliveries.json')
-  full={r.get('idempotency_key'):r for r in rows}
+  full={delivery_history.canon(r) for r in rows}
   for r in recent['data']:
-   if full.get(r.get('idempotency_key'))!=r:
+   if delivery_history.canon(r) not in full:
     raise RuntimeError('incident window changed during collection')
   out.update(incident_delivery_count=len(recent['data']),anchor_context='known prior receipt predates this incident',original_failure_subcause='not retained')
  if not spec['pinned']:

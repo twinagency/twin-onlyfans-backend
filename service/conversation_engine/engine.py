@@ -438,6 +438,10 @@ class EngineService:
                     'open_requests_truncated': len(open_rows) > 50}
                 if pilot_stamp is not None:
                     snapshot['pilot_scope'] = pilot_stamp
+                    from .pilot_scope import current as current_pilot_scope
+                    if (current_pilot_scope(s, runtime)[1] or {}).get('delivery_mode') == 'text_only':
+                        # Only text-only snapshots carry this key, so full-mode snapshots and their digests are unchanged.
+                        snapshot['delivery_mode'] = 'text_only'
                 if type(self.model).__name__ == 'ModelRuntime':
                     # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
                     snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)

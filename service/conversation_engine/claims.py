@@ -614,6 +614,8 @@ def _owned(clause, start):
     between = match.group(1).split()
     if any(w.lower().strip(".,!?") in _OWN_BLOCK or w.lower().endswith("'s") for w in between):
         return None
+    if match.group(0).lower().startswith('my') and _OTHER_PERSON.search(' '.join(between)):
+        return None   # "my sister has a dog": the dog is hers
     return between
 
 
@@ -652,11 +654,50 @@ _FACT_LABEL = {'job': 'a job', 'pet': 'a pet', 'family': 'siblings or family', '
                'nationality': 'a nationality', 'local time': 'the current local time'}
 
 
+# Each recognised claim is grounded only in the profile fields that document that kind of fact, and only in the parts of those
+# fields that describe her and are affirmative: "my sister is a nurse" is not her job, "no dogs" is not a pet. A field is
+# found by its key (free-form text elsewhere is not a source); when it cannot be parsed with confidence it supports nothing.
+_FIELD_KEYS = {'job': {'job', 'occupation', 'work', 'profession', 'career'},
+               'pet': {'pet', 'pets', 'animal', 'animals'},
+               'family': {'family', 'sibling', 'siblings', 'brother', 'brothers', 'sister', 'sisters'},
+               'education': {'education', 'school', 'college', 'university', 'uni', 'degree', 'study', 'studies', 'qualification', 'qualifications'},
+               'nationality': {'nationality', 'background', 'origin', 'heritage', 'ethnicity', 'birthplace', 'citizenship'}}
+_OTHER_PERSON = re.compile(r"\b(?:sisters?|brothers?|siblings?|mum|mom|mother|father|dad|parents?|aunt|uncle|cousins?|friends?|boyfriend|"
+                           r"girlfriend|husband|wife|partner|ex|grand\w+|nieces?|nephews?|sons?|daughters?|kids?|children|roommate|"
+                           r"flatmate|neighbou?rs?|boss|colleagues?|coworkers?|twins?)\b", re.I)
+_FIELD_BREAK = re.compile(r"[;.\n]+|\bbut\b|\bhowever\b|\bexcept\b|\balthough\b", re.I)
+_ITEM_BREAK = re.compile(r"[,&/]|\band\b|\bplus\b", re.I)
+
+
+def _affirmative_part(chunk):
+    """The words of a field chunk before its first negation ("a dog named Max, no cats" -> "a dog named Max"); "none" negates all."""
+    for cue in _NEGATION.finditer(chunk):
+        if chunk[cue.end():cue.end() + 1] == '-':
+            continue   # "no-nonsense nurse"
+        return '' if cue.group(0).lower() in ('none', 'nothing', 'nobody') else chunk[:cue.start()]
+    return chunk
+
+
+def _documented_items(facts, label):
+    """Token sets of the affirmative, creator-describing items in the fields whose key names this kind of fact."""
+    items = []
+    for key, value in facts:
+        if not _FIELD_KEYS[label] & set(re.findall(r"[a-z]+", str(key).lower())):
+            continue
+        for chunk in _FIELD_BREAK.split(str(value).lower().replace('’', "'")):
+            for item in _ITEM_BREAK.split(_affirmative_part(chunk)):
+                if label != 'family' and _OTHER_PERSON.search(item):
+                    continue   # another person's job, pet or schooling
+                tokens = _fact_tokens(item)
+                if tokens:
+                    items.append((tokens, item))
+    return items
+
+
 def creator_fact_problems(texts, profile, fan_texts=()):
     """Reasons for first-person background or current-time claims her documented facts do not support."""
     facts = tuple(getattr(profile, 'facts', ()) or ())
-    documented = _fact_tokens(' '.join(str(v) for _, v in facts))
-    raw = ' '.join(f'{k} {v}' for k, v in facts).lower().replace('_', ' ')
+    items = {label: _documented_items(facts, label) for label in _FIELD_KEYS}
     fan_clock = {re.sub(r"[\s.]+", '', m.group(0).lower()) for t in fan_texts for m in re.finditer(_CLOCK, t or '', re.I)}
     problems = []
     for text in texts:
@@ -670,11 +711,14 @@ def creator_fact_problems(texts, profile, fan_texts=()):
                         continue
                     supported = False
                 elif label == 'nationality':
-                    supported = any(re.search(r"\b" + re.escape(term), raw) for term in extra)
+                    own = ' '.join(item for _, item in items['nationality'])
+                    supported = any(re.search(r"\b" + re.escape(term), own) for term in extra)
                 elif not tokens:
-                    supported = bool(any_keys) and bool(re.search(any_keys, raw))
+                    supported = bool(any_keys) and bool(items[label])
+                elif label in ('pet', 'family'):
+                    supported = any(tokens <= documented for documented, _ in items[label])   # one documented item, not a pool
                 else:
-                    supported = tokens <= documented
+                    supported = tokens <= set().union(*(documented for documented, _ in items[label]))
                 if not supported:
                     message = f'states {_FACT_LABEL[label]} that is not in her documented facts'
                     if message not in problems:

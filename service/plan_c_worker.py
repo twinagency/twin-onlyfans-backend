@@ -19,7 +19,8 @@ def _work_counts(pilot):
     """Bounded operational counts; no message text, account IDs or credentials."""
     from sqlalchemy import select, and_
     from sqlalchemy.orm import Session
-    from conversation_engine.pilot_scope import require, unresolved_webhook_digests
+    from conversation_engine.pilot_scope import require, unresolved_webhook_digests, digest_hold_scope, delivery_block
+    from db.models import OfConversationState
     from conversation_engine.pilot_ingress import _unreviewed
     from db.onlyfans_delivery_models import OfTextIntent
     from db.onlyfans_fans_intake_models import OfFansProjection
@@ -42,7 +43,17 @@ def _work_counts(pilot):
                 OfFansProjection.account_id==pilot.account,OfFansConnection.binding_id==runtime.binding_id,
                 OfFansProjection.status.in_(('pending','held')))),
             'malformedHolds':count(unresolved_webhook_digests(runtime))}
-        return {**counts,'countsCapped':any(v==101 for v in counts.values())}
+        # Scope of the holds, kept apart from loop health: an account-wide hold (unknown/malformed/conflicting
+        # evidence) denies sending; a hold on one fan only removes that fan from the eligible set.
+        account_wide, digest_fans = digest_hold_scope(s, runtime)
+        eligible = 0
+        for fan in config['fans']:
+            state = s.get(OfConversationState, (pilot.account, fan))
+            if (not account_wide and fan not in digest_fans and state is not None and state.mode == 'automated'
+                    and state.takeover_state == 'none' and delivery_block(s, runtime, fan) is None):
+                eligible += 1
+        return {**counts,'countsCapped':any(v==101 for v in counts.values()),
+                'accountHold':account_wide,'eligibleFans':eligible,'heldFans':len(config['fans'])-eligible}
 
 
 def _response(status, code):
@@ -119,7 +130,7 @@ def create_app(pilot, *, run_loop=True):
                 try:
                     reason = await asyncio.to_thread(check)
                     work = await asyncio.to_thread(_work_counts, current)
-                    sending = reason == 'ready' and mode == 'active' and not work['malformedHolds']
+                    sending = reason == 'ready' and mode == 'active' and not work['accountHold']
                 except Exception:
                     reason = 'scope_or_state_refused'
         ready = reason == 'ready'

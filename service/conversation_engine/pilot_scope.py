@@ -394,13 +394,14 @@ def delivery_block(s, runtime, fan, *, commercial=False):
 _DIGEST_SCAN = 500
 
 
-def digest_blocks_fan(s, runtime, fan):
-    """True when an unresolved digest hold covers this fan.
+def digest_hold_scope(s, runtime):
+    """(account_wide, fans): what the unresolved digest holds cover.
 
     A held digest covers the whole account unless its retained exact bytes prove it is a MATERIAL
-    event for one other fan, signed for this connection's provider account, with no conflicting
-    payload under the same key. Missing bytes, unknown/malformed/irrelevant-but-held evidence,
-    conflicts and a scan larger than the bound all hold the account (never the safe direction).
+    event for one fan, signed for this connection's provider account, with no conflicting
+    payload under the same key; that digest then holds only that fan. Missing bytes,
+    unknown/malformed/irrelevant-but-held evidence, conflicts and a scan larger than the bound
+    all hold the account (never the safe direction).
     """
     from db.onlyfans_engine_models import OfEnginePilotReconnectReceipt as Receipt, OfEnginePilotWebhookDigest as Row
     from fans_api_adapter.event_scope import classify_raw, MATERIAL
@@ -408,25 +409,33 @@ def digest_blocks_fan(s, runtime, fan):
         Row.epoch, Row.event_key, Row.payload_sha256).order_by(Row.received_at, Row.event_key,
         Row.payload_sha256).limit(_DIGEST_SCAN + 1)).all()
     if len(keys) > _DIGEST_SCAN:
-        return True
+        return True, frozenset()
+    fans = set()
     for epoch, event_key, digest in keys:
         receipt = s.get(Receipt, (runtime.account_id, epoch, event_key, digest))
         connection = s.get(OfFansConnection, (runtime.account_id, epoch))
         if receipt is None or connection is None or sha256(bytes(receipt.raw_body)).hexdigest() != digest:
-            return True
+            return True, frozenset()
         verdict = classify_raw(bytes(receipt.raw_body))
-        if verdict.cls != MATERIAL or verdict.fan == fan:
-            return True
+        if verdict.cls != MATERIAL or verdict.fan is None:
+            return True, frozenset()
         try:
             from fans_api_adapter.events import _parse
             if _parse(bytes(receipt.raw_body))['account_id'] != connection.provider_account_id:
-                return True
+                return True, frozenset()
         except Refused:
-            return True
+            return True, frozenset()
         if s.scalar(select(Row.payload_sha256).where(Row.account_id == runtime.account_id, Row.epoch == epoch,
                 Row.event_key == event_key, Row.payload_sha256 != digest).limit(1)) is not None:
-            return True
-    return False
+            return True, frozenset()
+        fans.add(verdict.fan)
+    return False, frozenset(fans)
+
+
+def digest_blocks_fan(s, runtime, fan):
+    """True when an unresolved digest hold covers this fan (see digest_hold_scope)."""
+    account_wide, fans = digest_hold_scope(s, runtime)
+    return account_wide or fan in fans
 
 
 def planning_block(s, runtime, fan):

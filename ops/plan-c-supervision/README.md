@@ -100,3 +100,19 @@ all others remain6s. No retry or moving window is introduced. A complete check
 older than30 monotonic seconds fails before STATE publication. The existing10s
 cadence,45s wire lease,90s watchdog/start timeout and30s start grace are unchanged.
 A third recovery preserves BOTH prior immutable histories and does not activate.
+
+Scope-aware sender readiness and the host guard (U3). The host guard is UNCHANGED:
+supervision-v11/guard_core.py, sha256 5aef81d23d14bf8518ddc1028ccd5d32c9c1084015626a300732dd6ca03d9617.
+host-guard-5aef81d2/guard_core.py is a byte-identical copy kept only so the tests run the real guard
+(service/tests/test_plan_c_u3_readiness_pg.py asserts the hash); it is not an install source and the
+host copy is never edited independently. The guard still requires the sender /readyz to report
+ok=true, mode=active, code=ready and sendingReady=true. What changed is the worker's definition of
+sendingReady (service/plan_c_worker.py): it is false for loop failure, stale loop, refused scope or
+budget state, and for an ACCOUNT-WIDE evidence hold (unknown, malformed, conflicting, unbound-account
+or over-bound unresolved digests). A hold the retained exact bytes prove belongs to one fan (a signed
+material event such as tips.received) removes only that fan from work.eligibleFans (work.heldFans
+counts it) and no longer turns the other fan's sender permission off. Both fans held reports
+sendingReady=true, eligibleFans=0, heldFans=2 and sends nothing; it is not a health failure.
+work.malformedHolds and workHeld still count every unresolved digest. Deploy this worker revision
+together with the existing guard; no guard/hash/manifest change is required, and rolling the worker
+image back restores the previous (stricter, fan-hold-denies-all) readiness with the same guard.

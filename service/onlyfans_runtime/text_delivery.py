@@ -844,6 +844,13 @@ class TextAuthority:
                     from conversation_engine.delivery import unsent_cancelled as engine_capacity_cancelled
                     engine_capacity_cancelled(s, intent, reason="delivery_capacity", next_step="review_delivery_capacity")
                 return intent.status
+            if not concurrent:
+                # The rolling daily cap is enforced in gap mode too (concurrent admission checks the same counter): a pilot scope can
+                # configure daily_send_units below the lifetime allowance. Hold the intent, never drop it; the window rolls on its own.
+                cap = getattr(policy, "daily_limit_units", None)
+                if cap is not None and concurrent_admission.daily_used(s, account_id, now) >= int(cap):
+                    intent.reason = "account_daily_cap"
+                    return "queued"
             token, attempt = str(uuid.uuid4()), str(uuid.uuid4())
             if concurrent:
                 slot, reason = concurrent_admission.admit(

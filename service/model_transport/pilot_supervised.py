@@ -10,7 +10,7 @@ from hashlib import sha256
 import os
 import re
 
-from sqlalchemy import and_, or_, select, tuple_
+from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased
 
 from conversation_engine import approval
@@ -32,46 +32,48 @@ from .wiring import build_engine_service
 
 
 def _event_fan(raw):
-    try:
-        body = parse_event(raw)
-        event, payload = body['event'], body['payload']
-        if event == 'messages.received': value = payload['fromUser']['id']
-        elif event == 'messages.sent': value = payload['toUser']['id']
-        elif event == 'messages.deleted':
-            from fans_api_adapter.payment_evidence import numeric
-            numeric(payload['id'])
-            return event, None
-        elif event == 'messages.ppv.unlocked': value = payload['chat_id']
-        elif event in {'subscriptions.new', 'subscriptions.renewed', 'subscriptions.expired'}: value = payload['fan']['id']
-        elif event == 'transactions.new': value = (payload.get('fan') or payload['user'])['id']
-        elif event == 'chargebacks.new': value = payload['payment']['user']['id']
-        elif event in {'accounts.connected','accounts.reconnected','accounts.disconnected',
-                       'accounts.session_expired','accounts.authentication_failed',
-                       'accounts.otp_code_required','accounts.face_otp_required'}:
-            return event, None
-        else:
-            raise ValueError('unsupported event')
-        if type(value) not in (int, str) or not str(value).isascii() or not str(value).isdecimal():
-            raise ValueError('invalid fan')
-        fan = int(value)
-        if not 0 < fan < 2**63 or str(fan) != str(value):
-            raise ValueError('invalid fan')
-        return event, fan
-    except (ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError):
-        raise Refused('invalid pilot event') from None
-
+    """(event, fan) for an engine-projected event with the documented shape; Refused for any other class."""
+    from fans_api_adapter.event_scope import classify_raw, SUPPORTED
+    verdict = classify_raw(raw)
+    if verdict.cls != SUPPORTED:
+        raise Refused('invalid pilot event')
+    return verdict.event, verdict.fan
 
 
 def _known_irrelevant(raw):
-    from fans_api_adapter.event_scope import known_irrelevant_event
+    from fans_api_adapter.event_scope import classify_raw, IRRELEVANT
+    return classify_raw(raw).cls == IRRELEVANT
+
+
+def _scope(raw, allowed_fans):
+    """(outside_the_engine_path, hold) from the shared classification contract.
+
+    Only a verified-irrelevant event, an event for a fan outside the pilot, or a supported event
+    inside the pilot avoids a hold. A MATERIAL event holds only when it names a pilot fan (the
+    hold is scoped to that fan when read); everything unknown or malformed holds the account.
+    """
     try:
-        return known_irrelevant_event(parse_event(raw))
+        _, fan = _event_fan(raw)
+        return fan is not None and fan not in allowed_fans, False
     except Refused:
-        return False
+        pass
+    if _known_irrelevant(raw):
+        return True, False
+    from fans_api_adapter.event_scope import classify_raw, MATERIAL
+    verdict = classify_raw(raw)
+    if verdict.cls == MATERIAL:
+        return True, verdict.fan in allowed_fans
+    return True, True
+
+
+# Retained bytes for unresolved events live in the existing durable receipt table. Reconnects keep the
+# earlier 1 MB bound; every other held event is bounded per event and per account.
+RETAIN_MAX_BYTES = 65536
+RETAIN_MAX_PER_ACCOUNT = 2000
 
 
 def _record_outside_digest(store, tenant, account, raw, event_key, *, signature, secret, safety_hold=False):
-    """Persist held digest and, for an unbound reconnect, the authenticated receipt atomically."""
+    """Persist the digest and, when held, its authenticated receipt bytes atomically."""
     if not verify_signature(raw, signature, secret):
         raise Refused("webhook authentication failed")
     if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
@@ -115,16 +117,23 @@ def _record_outside_digest(store, tenant, account, raw, event_key, *, signature,
             s.add(OfEnginePilotWebhookDigest(account_id=account, epoch=epoch, event_key=event_key,
                 payload_sha256=digest, safety_hold=bool(safety_hold or conflict or matched is None), received_at=utcnow()))
             s.flush()
-        # An unbound reconnect is not a verified connection. Preserve its exact
-        # signed bytes under the prior epoch, in the same transaction as the hold.
-        try:
-            envelope = parse_event(raw)
-        except Refused:
-            envelope = {}
-        if (safety_hold and matched is None and
-                envelope.get('event') in ('accounts.connected', 'accounts.reconnected')):
+        # Retain the exact authenticated bytes of every held event so it can be recovered or reviewed
+        # later. An unbound reconnect keeps its earlier receipt rule; other held events are size- and
+        # count-bounded. This only retains evidence: it grants no model or send right and cannot
+        # recreate bytes that were never kept.
+        held = bool(safety_hold or conflict or matched is None)
+        if held and (marker is None or marker.safety_hold):
+            try:
+                envelope = parse_event(raw)
+            except Refused:
+                envelope = {}
+            reconnect = (safety_hold and matched is None and
+                         envelope.get('event') in ('accounts.connected', 'accounts.reconnected'))
             key = (account, epoch, event_key, digest)
-            if s.get(OfEnginePilotReconnectReceipt, key) is None:
+            if s.get(OfEnginePilotReconnectReceipt, key) is None and (reconnect or (
+                    len(raw) <= RETAIN_MAX_BYTES and s.scalar(select(func.count()).select_from(
+                        OfEnginePilotReconnectReceipt).where(
+                        OfEnginePilotReconnectReceipt.account_id == account)) < RETAIN_MAX_PER_ACCOUNT)):
                 s.add(OfEnginePilotReconnectReceipt(account_id=account, epoch=epoch, event_key=event_key,
                     payload_sha256=digest, raw_body=raw, signature=signature, received_at=utcnow()))
         return bool(conflict)
@@ -194,12 +203,7 @@ class SupervisedPilot:
                 planning = True
             except Refused:
                 pass
-        malformed = False
-        try:
-            _, fan = _event_fan(raw)
-            outside = fan is not None and fan not in allowed_fans
-        except Refused:
-            outside, malformed = True, not _known_irrelevant(raw)
+        outside, malformed = _scope(raw, allowed_fans)
         if outside:
             if self._record_outside_digest(raw, event_key, signature=signature, safety_hold=malformed):
                 return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
@@ -470,12 +474,7 @@ class IntakeOnlyPilot:
         with Session(self.store.engine) as s:
             runtime=self.store._runtime(s,self.tenant,self.account,lock=False)
             _,config=require(s,runtime)
-        malformed=False
-        try:
-            _,fan=_event_fan(raw)
-            outside=fan is not None and fan not in config['fans']
-        except Refused:
-            outside,malformed=True,not _known_irrelevant(raw)
+        outside,malformed=_scope(raw,frozenset(config['fans']))
         if outside:
             conflict=_record_outside_digest(self.store,self.tenant,self.account,raw,event_key,signature=signature,secret=self.secret,safety_hold=malformed)
             return {'outcome':'quarantined' if conflict else 'outside_pilot_scope','planning':'held'}

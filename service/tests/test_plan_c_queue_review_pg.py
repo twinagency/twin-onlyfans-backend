@@ -181,3 +181,39 @@ def test_completed_historical_review_is_not_an_activation_freshness_permit(rig,m
     assert result['resolved'] and not result['activationAuthorized']
     with Session(rig.w.database[1]) as session:
         assert not session.get(OfRuntime,ACCOUNT).enabled and not session.get(OfDeliveryPolicy,ACCOUNT).enabled
+
+
+@pytest.mark.parametrize('variant',['accepted','wrong_text','both','extra_with_true'])
+def test_owner_overlap_acceptance_is_explicit_audited_and_never_claims_exclusion(rig,variant):
+    raws,item=held(rig);p=proof(raws)
+    if variant=='accepted':p.update(externalWritersExcluded=False,ownerOverlapAcceptance=operator_v2.OWNER_OVERLAP_ACCEPTANCE)
+    if variant=='wrong_text':p.update(externalWritersExcluded=False,ownerOverlapAcceptance='writers excluded')
+    if variant=='both':p.update(externalWritersExcluded=False)
+    if variant=='extra_with_true':p.update(ownerOverlapAcceptance=operator_v2.OWNER_OVERLAP_ACCEPTANCE)
+    raw=next(r for r in raws if sha256(r).hexdigest()==item['payloadSha256'])
+    if variant!='accepted':
+        with pytest.raises(operator_v2.BadRequest):
+            rig.reconcile(item,96500,raw=raw,queueReview=p)
+        assert rig.block(FAN)==rig.block(FAN2)=='pilot_evidence_pending'
+        return
+    result=rig.reconcile(item,96500,raw=raw,queueReview=p)
+    assert result['resolved'] and result['writersExcluded'] is False
+    assert result['writerExclusion']==operator_v2.OWNER_OVERLAP_ACCEPTANCE
+    assert result['sendAuthorized'] is False and result['activationAuthorized'] is False
+    with Session(rig.w.database[1]) as s:
+        audit=s.scalar(select(OfLaunchCommand).where(OfLaunchCommand.kind=='plan_c_queue_review'))
+        review=json.loads(audit.before_json)['review']
+        assert review['externalWritersExcluded'] is False
+        assert review['ownerOverlapAcceptance']==operator_v2.OWNER_OVERLAP_ACCEPTANCE
+    assert rig.block(FAN) is None and rig.block(FAN2) is None
+
+
+def test_after_overlap_acceptance_an_outside_send_still_holds_that_fan(rig):
+    raws,item=held(rig);p=proof(raws)
+    p.update(externalWritersExcluded=False,ownerOverlapAcceptance=operator_v2.OWNER_OVERLAP_ACCEPTANCE)
+    rig.reconcile(item,96600,raw=next(r for r in raws if sha256(r).hexdigest()==item['payloadSha256']),queueReview=p)
+    assert rig.block(FAN) is None
+    rig.post(sent_event(96601,FAN,queued=False),key='outside-manual-after-waiver')
+    rig.post(sent_event(96602,FAN2,queued=True),key='outside-queued-after-waiver')
+    rig.post(queue_event(total=5),key='new-queue-after-waiver')
+    assert rig.block(FAN)=='pilot_evidence_pending' and rig.block(FAN2)=='pilot_evidence_pending'

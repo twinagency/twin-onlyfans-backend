@@ -713,6 +713,14 @@ def unresolved(store, tenant, account, actor=None):
 
 
 # ------------------------------------------------------------------ reconcile
+_QUEUE_REVIEW_KEYS = frozenset({'rawBodies','observedAt','queueListingSha256','pendingQueues',
+                                 'externalWritersExcluded','fanHistory'})
+# The owner's explicit exception for the bounded two-fan text trial (Jesse, 2026-11-11). It records that outside
+# writers were NOT excluded; it never claims they were. Fan-level takeover/stop, unknown-send, duplicate-send and
+# budget protections are unchanged: an outside send still holds the affected fan through its own owner.
+OWNER_OVERLAP_ACCEPTANCE = 'outside writers may remain active; owner accepts overlap risk'
+
+
 def _reconcile_provider_queue(store, tenant, account, item_id, body):
     """Stopped, text-only operator review of every retained variant of ONE queue key.
 
@@ -737,10 +745,11 @@ def _reconcile_provider_queue(store, tenant, account, item_id, body):
     if (type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}',event_key)
             or type(digest) is not str or not _HEX64.fullmatch(digest)
             or not evidence_allowed(PLAN_C_TRANSPORT,body['evidenceRef'])
-            or type(proof) is not dict or set(proof)!={'rawBodies','observedAt','queueListingSha256',
-                'pendingQueues','externalWritersExcluded','fanHistory'}
+            or type(proof) is not dict or not _QUEUE_REVIEW_KEYS<=set(proof)<=_QUEUE_REVIEW_KEYS|{'ownerOverlapAcceptance'}
             or proof['pendingQueues']!=0 or type(proof['pendingQueues']) is not int
-            or proof['externalWritersExcluded'] is not True
+            or not ((proof['externalWritersExcluded'] is True and 'ownerOverlapAcceptance' not in proof)
+                    or (proof['externalWritersExcluded'] is False
+                        and proof.get('ownerOverlapAcceptance')==OWNER_OVERLAP_ACCEPTANCE))
             or type(proof['queueListingSha256']) is not str or not _HEX64.fullmatch(proof['queueListingSha256'])
             or type(proof['rawBodies']) is not list or not 1<=len(proof['rawBodies'])<=16
             or type(proof['fanHistory']) is not list):
@@ -817,7 +826,10 @@ def _reconcile_provider_queue(store, tenant, account, item_id, body):
                 raise Conflict('projected or quarantined event requires its existing recovery owner')
             result={'ok':True,'accountId':account,'id':item_id,'action':'reconcile','commandKey':key,
                     'outcome':'queue_event_group_reviewed','resolved':True,'sendAuthorized':False,
-                    'activationAuthorized':False,'reviewedVariants':len(variants)}
+                    'activationAuthorized':False,'reviewedVariants':len(variants),
+                    'writersExcluded':proof['externalWritersExcluded'] is True}
+            if proof['externalWritersExcluded'] is not True:
+                result['writerExclusion']=OWNER_OVERLAP_ACCEPTANCE
             if s.get(OfLaunchCommand,(account,group_ident)) is None:
                 _record(s,account,binding,group_ident,'plan_c_queue_review',request_hash,actor,
                         body['evidenceRef'],before,result)

@@ -120,7 +120,14 @@ def reconcile_model_usage(store, config, client, *, tenant, account, call_id, ac
             expected_pilot_revision,reason],separators=(',',':')).encode()).hexdigest()
         replay=prior(s,runtime.binding_id,request_hash)
         if replay is not None:return replay
-        row=target(s,runtime,pilot,raw)
+        try:row=target(s,runtime,pilot,raw)
+        except Refused:
+            # A concurrent identical command may have committed its whole settlement between the replay check
+            # above and this unlocked read. Re-check the replay once (fresh READ COMMITTED statement) so the
+            # loser returns the same idempotent replay; any other refusal is re-raised unchanged.
+            replay=prior(s,runtime.binding_id,request_hash)
+            if replay is not None:return replay
+            raise
         observed=(row.binding_id,row.provider_generation_id,row.provider_endpoint_sha256,row.updated_at,row.outcome)
         model=row.model
     # The only external operation is one authenticated GET outside every DB transaction.

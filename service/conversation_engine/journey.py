@@ -157,6 +157,27 @@ def _norm(text):
     return re.sub(r'\s+', ' ', str(text or '').lower().replace('’', "'")).strip()
 
 
+def _affirmed(rx, value):
+    """Matches of `rx` that are not negated inside their own clause ("I don't want to meet you, just chat")."""
+    from .claims import _clauses, _negated
+    return [m for clause, _question in _clauses(value) for m in rx.finditer(clause) if not _negated(clause, m.start())]
+
+
+def _offplatform_push(value):
+    """A contact service is a push only when it is asked about or offered in the SAME clause ("can i get your whatsapp"),
+    not when it merely appears ("my email inbox is full") or is negated."""
+    from .claims import _clauses, _negated
+    for clause, _question in _clauses(value):
+        terms = [m for m in _OFFPLATFORM.finditer(clause) if not _negated(clause, m.start())]
+        if terms and (_OFFPLATFORM_ASK.search(clause) or _OFFPLATFORM.fullmatch(clause.rstrip(' .!?'))):
+            return True
+    return False
+
+
+def _limit_hit(term, value):
+    return bool(term) and bool(_affirmed(re.compile(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])"), value))
+
+
 def signals(text, config=None):
     """The set of journey signals in one fan message."""
     value = _norm(text)
@@ -167,11 +188,11 @@ def signals(text, config=None):
         found.add('platform_banned')
     if identity_question(value):
         found.add('identity')
-    if _OFFPLATFORM.search(value) and (_OFFPLATFORM_ASK.search(value) or _OFFPLATFORM.fullmatch(value.rstrip(' .!?'))):
+    if _offplatform_push(value):
         found.add('offplatform')
-    if _MEETUP.search(value):
+    if _affirmed(_MEETUP, value):
         found.add('meetup')
-    if any(term and term in value for term in config.limit_terms):
+    if any(_limit_hit(term, value) for term in config.limit_terms):
         found.add('limit')
     if _CUSTOM.search(value):
         found.add('custom')

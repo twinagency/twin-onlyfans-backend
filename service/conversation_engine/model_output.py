@@ -22,21 +22,34 @@ from .writer_context import classify_turn
 MAX_BUBBLE_CHARS = 320  # "short to medium" (rule 5); a ceiling against essays, not a style target
 MAX_BUBBLES = 4  # body plus up to three parts: the engine limit
 
-# A model that will not write the line, or answers like an assistant instead of like her. Narrow on purpose: a
-# girl's own "lol nah not doing that" must not match. (Adapted from Build B llm.py.)
+# Three separate things used to share one regex pair (Stage 5):
+#  * REFUSAL_RX: the model will not write the line (a genuine refusal, also when it sits inside a valid JSON body).
+#    Never re-asked: it goes to a human. Narrow on purpose: a girl's own "lol nah not doing that" or "that's so
+#    inappropriate haha" must not match. (Adapted from Build B llm.py.)
+#  * ASSISTANT_PACKAGING_RX: assistant packaging around or instead of her text ("Sure, here is a reply", "here's a
+#    draft"). Still treated as the assistant answering instead of her: refusal path.
+#  * ASSISTANT_STYLE_RX: assistant-sounding but not a refusal ("I'm here to help", markdown, "let me know if there's
+#    anything else"). Undesirable, so INVALID: it gets the one normal correction instead of a handover.
+# Ordinary empathy and chat ("I understand you had a rough day", "let me know if you like it", "of course I do")
+# matches none of them.
 REFUSAL_RX = re.compile(
     r"(language model|\bi (cannot|can'?t|won'?t|am unable to|'?m unable to) "
     r"(help with|help you with|assist|engage|continue|comply|provide|fulfill|create|write|generate|produce|roleplay|participate)\b|"
     r"\bi'?m unable to\b|\bi'?m (sorry|afraid),? (but )?i (cannot|can'?t|won'?t)\b|\bi'?m not able to (help with|assist|do that)\b|"
     r"\bi must (decline|refuse)\b|\bi apologi[sz]e,? but\b|"
-    r"against (my|the|our) (guidelines|polic(y|ies)|rules)|(content|usage) polic|\bnot appropriate\b|\binappropriate\b|"
+    r"against (my|the|our) (guidelines|polic(y|ies)|rules)|(content|usage) polic|"
+    r"\b(?:this|that|your|the) (?:request|content|conversation|roleplay|scenario)\b[^.!?]{0,20}\b(?:not appropriate|inappropriate)\b|"
     r"this (request|content) (violates|goes against)|\bsexually explicit content\b)", re.I)
 # Assistant boilerplate that is not her texting. "I am an AI assistant" is NOT matched: an accurate answer about
 # the assistant's role is allowed (rule 2).
-ASSISTANT_RX = re.compile(
-    r"(^|\n)\s*(sure|certainly|absolutely|of course)[,!.]? (here|i)|\bhere(?:'s| is| are) (a |an |the |some |your |her )?"
-    r"(reply|response|message|draft|option|version|bubbles?)|\bi'?d be happy to\b|\bi'?m here to help\b|\bhow can i (assist|help)\b|"
-    r"\blet me know if (you|there)\b|\bfeel free to\b|\bi understand (that|you)\b|\*\*|^#{1,4} ", re.I | re.M)
+ASSISTANT_PACKAGING_RX = re.compile(
+    r"(^|\n)\s*(sure|certainly|absolutely|of course)[,!.]? here(?:'s| is| are)\b|"
+    r"\bhere(?:'s| is| are) (a |an |the |some |your |her )?(reply|response|message|draft|option|version|bubbles?)", re.I)
+ASSISTANT_STYLE_RX = re.compile(
+    r"\bi'?d be happy to\b|\bi'?m here to help\b|\bhow can i (assist|help)\b|"
+    r"\blet me know if there(?:'s| is| are)? (?:anything|any)\b|\*\*|^#{1,4} ", re.I | re.M)
+# Kept for callers that import the old name: the union of everything that is assistant-like.
+ASSISTANT_RX = re.compile(ASSISTANT_PACKAGING_RX.pattern + '|' + ASSISTANT_STYLE_RX.pattern, re.I | re.M)
 
 # Sexual chat (Plan C NSFW rules). Explicit adult talk is PERMITTED by default and is never blocked for being explicit; the
 # profile's explicit_chat level ('explicit' | 'suggestive' | 'none') and her documented limits are the only limits.
@@ -75,7 +88,12 @@ def _sexual_problems(texts, ctx):
     if hit:
         problems.append(f"platform-banned theme in her text ('{hit.group(0)}'); decline it in one line and change the subject")
     fan_sexual = bool(SEXUAL_FAN_RX.search(fan_text))
-    if level == 'explicit' and fan_sexual and SANITISE_RX.search(joined):
+    # Declining a platform-banned theme or one of her documented limits in one line and changing the subject is what the
+    # prompt demands (HARD LINES, HER LIMITS); it is not sanitising ordinary explicit chat.
+    demanded_decline = bool(sensitive_match(PLATFORM_BANNED_RX, fan_text, fan_text)) or any(
+        term and re.search(r'(?<![a-z0-9])' + re.escape(term.lower()) + r'(?![a-z0-9])', fan_text.lower())
+        for term in getattr(profile, 'limit_terms', ()) or ())
+    if level == 'explicit' and fan_sexual and not demanded_decline and SANITISE_RX.search(joined):
         problems.append('sanitises or deflects explicit chat; she talks explicitly and matches him (SEXUAL CHAT)')
     if level != 'explicit' and EXPLICIT_RX.search(joined):
         problems.append(f'explicit wording but her chat level is {level}; tease only')
@@ -107,8 +125,9 @@ _PET_NAMES = ('babe', 'baby', 'handsome', 'daddy', 'sweetheart', 'honey', 'hun',
 _WITHHOLD = re.compile(
     r"\b(answer (my|the) question (first|before)|you (still )?(haven'?t|didn'?t|never) answer(ed)? (my|the)|"
     r"tell me (first|and (then|i'?ll))|(first|before (i|that)),? (you )?(tell|answer|show|prove|beg|convince)|"
-    r"only if you (tell|answer|say)|not until you|until you (tell|answer|say|beg|prove)|earn (it|that|this|them|the)\b|"
-    r"you (have|need|gotta|got) to (earn|convince|beg|prove|answer)|convince me|make me want to|what do i get (if|for)|"
+    r"only if you (tell|answer|say)|not until you|until you (tell|answer|say|prove)|earn (it|that|this|them|the)\b|"
+    r"you (have|need|gotta|got) to (earn|convince|beg|prove|answer)|convince me|"
+    r"make me want to (?:answer|tell|show|send|give|reply|respond|share|talk|help)|what do i get if\b|what do i get for (?:answering|telling|showing|sending|helping|replying)|"
     r"if you answer|once you answer|after you answer)", re.I)
 # Claims about who reads, writes, approves or watches these chats: only the approved identity wording may say so.
 _INVOLVEMENT = re.compile(
@@ -153,6 +172,10 @@ def quantity_claims(text):
         fillers = {w.lower() for w in match.groups()[1:3] if w}
         if fillers & _TIME_UNITS:
             continue  # "a 5 minute video" is a duration, not a count
+        from .claims import non_media_quantity
+        sentence = next((part for part in re.split(r"(?<=[.!?])\s+|\n+", text) if match.group(0) in part), text)
+        if non_media_quantity(sentence, match.group(4)):
+            continue  # "2 shots of tequila" is a drink count, not content
         raw = match.group(1).lower()
         count = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
         noun = match.group(4).lower()
@@ -201,6 +224,18 @@ def _same_question(a, b):
     return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= 0.6
 
 
+# Words that are also ordinary verbs, nouns or adjectives ("I love that", "that's sexy", "my honey bunny") count as a pet
+# name only when used as a form of address: at the start or end of a clause, after a comma, or after a greeting.
+_AMBIGUOUS_PET = frozenset({'love', 'honey', 'sexy', 'handsome', 'gorgeous'})
+_VOCATIVE_LEAD = r"(?:^|[,;:.!?]\s*|\b(?:hey|hi|hello|aw+|oh|well|yes|yeah|no|mm+|ok|okay|thanks|thank you|please|night|morning)\s+)"
+
+
+def _pet_name_in(name, low):
+    if name not in _AMBIGUOUS_PET:
+        return bool(re.search(r'\b' + name + r'\b', low))
+    return bool(re.search(_VOCATIVE_LEAD + name + r"(?=\s*(?:[,;:.!?]|$))", low))
+
+
 def _repetition_problems(texts, snapshot):
     problems, joined = [], ' '.join(texts)
     recent = _her_recent(snapshot)
@@ -219,7 +254,7 @@ def _repetition_problems(texts, snapshot):
             problems.append(f"repeats her usual opener ('{first}'); open differently")
         low = joined.lower()
         for name in _PET_NAMES:
-            if re.search(r'\b' + name + r'\b', low) and sum(1 for b in recent if re.search(r'\b' + name + r'\b', b.lower())) >= 2:
+            if _pet_name_in(name, low) and sum(1 for b in recent if _pet_name_in(name, b.lower())) >= 2:
                 problems.append(f"repeats the pet name '{name}'; vary or drop it")
                 break
         used = set(emojis)
@@ -275,17 +310,45 @@ _LOCATION = re.compile(r"\b(i live in|i'?m from|im from|my (real name|address) i
 _CITY_CLAIM = re.compile(r"\b(?:i live in|i'?m from|im from|i am from|i'?m based in|i am based in|my home city is)\s+([^.!?;\n]+)", re.I)
 
 
-def _affirmative_match(pattern, text):
+def _age_ok(match, text, documented, ctx):
+    """An age number is acceptable when it is her documented age, or when it is HIS number echoed back to him
+    ("you're 34 years old? wow"). A first-person claim ("I'm 34 years old") must always be her documented age."""
+    if documented is not None and documented in match.group(0):
+        return True
+    number = re.search(r'\d{2}', match.group(0)).group(0)
+    before = text[:match.start()][-30:]
+    if re.match(r"(?:i'?m|im|i am)\b", match.group(0), re.I) or re.search(
+            r"\b(?:i'?m|im|i am|my age is|i turn(?:ed)?|i was)\s+(?:[\w']+\s+){0,2}$", before, re.I):
+        return False
+    snapshot = getattr(ctx, 'snapshot', None) or {}
+    fan_texts = [(snapshot.get('current_message') or {}).get('body') or '']
+    fan_texts += [row.get('body') or '' for row in snapshot.get('history') or [] if row.get('direction') == 'in'][-6:]
+    return any(re.search(r'(?<!\d)' + number + r'(?!\d)', t) for t in fan_texts)
+
+
+# After a documented limit term, her own refusal of it ("anal? that's a hard no for me", "feet are off the table") is
+# honouring the limit, not crossing it. Used for limit terms only; fixed-price and meetup checks keep their own denials.
+_LIMIT_DECLINED_AFTER = re.compile(
+    r"[\s?,:;-]*(?:(?:is|are|that'?s|it'?s|that is|it is|this is)\s+)?(?:a\s+)?(?:hard\s+|firm\s+|big\s+|total\s+|definite\s+)?"
+    r"(?:no(?:\s+(?:for me|from me|way|go|thanks|thank you))?\b|off(?:\s+the\s+table|[- ]limits)|a limit|"
+    r"not (?:for me|happening|my thing|something i (?:do|want|will do)))", re.I)
+
+
+def _affirmative_match(pattern, text, *, declined_after=None):
     """Only an explicit local denial exempts a matched prohibited proposal."""
     from .claims import _clauses, _window
     auxiliary = r"(?:do not|don't|does not|doesn't|will not|won't|cannot|can't|would not|wouldn't|never|not)"
     denial = re.compile(r"\b" + auxiliary + r"\s+(?:(?:offer|offering|give|giving|provide|providing|do|doing|sell|selling|arrange|allow|have|make|discuss|support|available|comfortable)\s+)?(?:(?:a|an|any|you|with|for|out|that|the)\s+){0,3}$", re.I)
-    for clause, _ in _clauses(text.replace("’", "'")):
+    clauses = _clauses(text.replace("’", "'"))
+    for index, (clause, _) in enumerate(clauses):
         for match in pattern.finditer(clause):
             before = _window(clause, match.start())
             after = clause[match.end():]
+            if declined_after is not None and index + 1 < len(clauses):
+                after += ' ' + clauses[index + 1][0]   # "anal? that's a hard no for me": her refusal is the next sentence
             denied_before = re.search(r"\b(?:no|without)\s+(?:(?:a|an|any|more)\s+){0,2}$", before + ' ', re.I) or denial.search(before + ' ')
-            denied_after = re.match(r"\s+(?:is|are)\s+(?:not|never)\s+(?:available|allowed|offered|permitted)\b|\s+(?:isn't|aren't)\s+(?:available|allowed|offered|permitted)\b", after, re.I)
+            denied_after = (re.match(r"\s+(?:is|are)\s+(?:not|never)\s+(?:available|allowed|offered|permitted)\b|\s+(?:isn't|aren't)\s+(?:available|allowed|offered|permitted)\b", after, re.I)
+                            or (declined_after is not None and declined_after.match(after)))
             if not denied_before and not denied_after:
                 return match
     return None
@@ -380,8 +443,7 @@ def creator_problems(texts, ctx):
         if match:
             problems.append(f"{name} ('{match.group(0).strip()[:40]}')")
     age = profile.fact('age') if hasattr(profile, 'fact') else None
-    found_age = _AGE.search(joined)
-    if found_age and (age is None or age not in found_age.group(0)):
+    if any(not _age_ok(match, joined, age, ctx) for match in _AGE.finditer(joined)):
         problems.append('states an age that is not in her documented facts')
     problems.extend(_location_problems(joined, profile))
     problems.extend(_sexual_problems(texts, ctx))
@@ -393,7 +455,8 @@ def creator_problems(texts, ctx):
         if phrase and phrase.lower() in low:
             problems.append(f"uses a banned line ('{phrase}')")
     for term in getattr(profile, 'limit_terms', ()) or ():
-        if term and _affirmative_match(re.compile(r'\b' + re.escape(term.lower()) + r'\b', re.I), joined):
+        if term and _affirmative_match(re.compile(r'(?<![a-z0-9])' + re.escape(term.lower()) + r'(?![a-z0-9])', re.I), joined,
+                                       declined_after=_LIMIT_DECLINED_AFTER):
             problems.append(f"crosses one of her documented limits ('{term}')")
     return problems
 
@@ -466,16 +529,18 @@ def judge(raw, ctx):
     try:
         proposal = parse_proposal(text)
     except Refused:
-        if REFUSAL_RX.search(raw) or ASSISTANT_RX.search(raw):
+        if REFUSAL_RX.search(raw) or ASSISTANT_PACKAGING_RX.search(raw):
             return Verdict('refusal', reasons=('answered like an assistant or refused instead of writing her reply',))
         return Verdict('malformed', reasons=('answer was not the required strict JSON object',))
     proposal = replace(proposal, body=clean_text(proposal.body), parts=tuple(clean_text(p) for p in proposal.parts))
     if not proposal.body or any(not part for part in proposal.parts):
         return Verdict('empty', reasons=('empty message text',))
     joined = ' '.join(_texts(proposal))
-    if REFUSAL_RX.search(joined) or ASSISTANT_RX.search(joined):
+    if REFUSAL_RX.search(joined) or ASSISTANT_PACKAGING_RX.search(joined):
         return Verdict('refusal', reasons=('message text reads as a refusal or an assistant answer',))
     problems = proposal_problems(proposal, ctx)
+    if ASSISTANT_STYLE_RX.search(joined):
+        problems.insert(0, "sounds like an assistant, not her ('I'm here to help', markdown, offers of more help); write her own short text")
     if problems:
         return Verdict('invalid', proposal=proposal, reasons=tuple(problems))
     return Verdict('ok', proposal=proposal)

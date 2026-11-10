@@ -268,5 +268,11 @@ def search_context(s, runtime, fan_id, source):
         prior = next((message for message in earlier if normalize(message.body) not in _CONTEXT_REFERENCES), None)
         if prior is not None:
             query, source_id, used = prior.body, prior.message_id, True
+    # The catalogue lookup only needs the words of a request. A long message used to make this raise 'invalid catalogue
+    # query' and stall the whole turn without a handover; search the first 2000 bytes and say so. The writer still gets
+    # the full message (head and tail) and the stop/control checks still read the full raw text.
+    truncated = len(query.encode()) > 2000
+    if truncated:
+        query = query.encode()[:2000].decode('utf-8', 'ignore')
     return {**search_scoped(s, runtime, fan_id, query), 'scope':'approved_available_catalogue',
-            'contextUsed':used, 'querySourceMessageId':str(source_id)}
+            'contextUsed':used, 'querySourceMessageId':str(source_id), **({'queryTruncated':True} if truncated else {})}

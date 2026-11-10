@@ -137,7 +137,8 @@ _FINANCIAL_PATTERNS = (
     re.compile(r"\bthank(?:s|\s+you)?\s+(?:so\s+much\s+)?for\s+(?:buying|purchasing|paying|the\s+purchase|your\s+(?:purchase|payment|order|support))\b", re.I),
     re.compile(r"\b(?:got|received|have|saw|see|seen|noticed|love|appreciate|confirmed?)\s+your\s+(?:purchase|payment|order)\b", re.I),
     re.compile(r"\byour\s+(?:purchase|payment|order)\s+(?:went|came|is|was|has|have|been|done|confirmed|complete|success|received|through)\b", re.I),
-    re.compile(r"\byou\s+(?:now\s+|already\s+)?own\b", re.I),
+    # "you own me" / "you own my heart" is possessive banter, not a statement about an owned item.
+    re.compile(r"\byou\s+(?:now\s+|already\s+)?own\b(?!\s+(?:me|us|my|this\s+(?:body|heart)|every(?:thing|one)\s+about\s+me)\b)", re.I),
 )
 _ACCESS_PATTERNS = (
     re.compile(r"\byou(?:'ve|\s+have|\s+had)?\s+(?:already\s+|just\s+|now\s+)?unlocked\b", re.I),
@@ -200,9 +201,24 @@ _FILLER = r"(?!(?:for|the|a|an|of|to|in|on|at|and|or|with|from|is|are|was|were|t
 _QUANTITY = re.compile(r"(?<![\d.,$\u00a3\u20ac])\b(" + _NUMBER_RX + r")(?:\s+(?:more|extra|new|other|different))?\s+(?:" + _FILLER + r"[a-z]+\s+){0,2}?" + _CONTENT_NOUN + r"\b", re.I)
 
 
+# Nouns that are content only sometimes: "2 shots of tequila", "3 sets at the gym". They count as a content quantity unless
+# the same clause is clearly about something else (a drink, a workout). Unambiguous nouns (pics, videos, photos...) always count.
+_AMBIGUOUS_NOUN = re.compile(r"^(?:shots|sets|snaps|reels|stills)$", re.I)
+_NON_MEDIA_CONTEXT = re.compile(
+    r"\b(?:gym|workout|work out|reps?|squats?|deadlifts?|lift(?:ing|s)?|cardio|exercis\w*|train(?:ing|ed)?|tennis|volleyball|"
+    r"tequila|vodka|whisk(?:e)?y|rum|gin|beer|wine|champagne|jager\w*|espresso|coffee|drinks?|drank|drunk|margaritas?|bar|club|pub)\b", re.I)
+
+
+def non_media_quantity(clause, noun):
+    """True when `N <noun>` is an everyday count (drinks, gym sets), not a statement about content."""
+    return bool(_AMBIGUOUS_NOUN.match(noun) and _NON_MEDIA_CONTEXT.search(clause))
+
+
 def _quantity_claims(text):
     for clause, _question in _clauses(text):
         for match in _QUANTITY.finditer(clause):
+            if non_media_quantity(clause, match.group(0).split()[-1]):
+                continue
             raw = match.group(1).lower()
             number = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
             # "one" is the ordinary pronoun/determiner far more often than a count; only digits or a noun right after it count
@@ -264,7 +280,10 @@ def _involvement_claims(text):
             verb = _REVIEW_VERB.search(clause)
             subject = _SUBJECT.search(clause)
             scope = _REVIEW_SCOPE.search(clause)
-            hit = bool(verb and subject and scope and not _negated(clause, verb.start()) and subject.start() < scope.end())
+            # The scope word must come with the review verb ("I read them myself", "I check every message"), not be an
+            # unrelated reflexive that happens to precede it ("I touch myself when I see your messages").
+            hit = bool(verb and subject and scope and not _negated(clause, verb.start()) and subject.start() < scope.end()
+                       and (scope.start() > verb.start() or not re.fullmatch(r"(?:myself|herself|himself)", scope.group(0), re.I)))
         if hit:
             yield clause
 

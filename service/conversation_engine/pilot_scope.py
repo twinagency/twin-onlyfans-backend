@@ -508,7 +508,9 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
                     OfEngineIndependentAdmission.status.in_(('dispatching', 'unknown'))).limit(1))
                 if unresolved is not None or independent is not None:
                     raise Refused('resolve retained fan delivery before removing the fan')
-        if not _product_current(s, account, config['product']):
+        # Text-only mode sells and sends nothing, so the unused product is not a prerequisite (the binding, creator profile,
+        # permissions and the commercial/media prohibition are still required). Full mode still needs the verified product.
+        if config.get('delivery_mode') != 'text_only' and not _product_current(s, account, config['product']):
             raise Refused('pilot product or price is unavailable')
         if 'offer_coverage' in config and config.get('delivery_mode') != 'text_only':
             current_offer_coverage(s, runtime, config)
@@ -628,7 +630,8 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
             policy = s.get(OfDeliveryPolicy, account)
             connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
                                                                   OfFansConnection.status == 'active'))
-            if not _product_current(s, account, config['product']) or connection is None or connection.binding_id != runtime.binding_id:
+            if ((config.get('delivery_mode') != 'text_only' and not _product_current(s, account, config['product']))
+                    or connection is None or connection.binding_id != runtime.binding_id):
                 raise Refused('pilot activation prerequisites are not met')
             if config.get('delivery_mode') == 'text_only':
                 activation_evidence = _activate_text_only(s, store, runtime, row, config, actor=actor, reason=reason)

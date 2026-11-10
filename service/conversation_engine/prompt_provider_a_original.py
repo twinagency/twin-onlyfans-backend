@@ -12,7 +12,7 @@ Written for this repository from the pilot handoff. Nothing is copied from FASTT
 """
 import re
 from .prompt_registry import register_prompt_provider
-from .writer_context import PromptBudget, RenderedPrompt, digest_messages, is_price_question
+from .writer_context import PromptBudget, RenderedPrompt, bounded_latest, digest_messages, is_price_question
 from onlyfans_runtime.store import Refused
 
 # Rules 1-6 as a few natural lines. Rules 7-12 (account separation, memory, catalogue and ownership, purchase and
@@ -45,6 +45,35 @@ CONTRACT = (
     "action offer only when APPROVED OFFER is shown and fits (whole text in body, no parts, no price). sales_signal decline when he says no "
     "to buying, not now or can't afford it; reopen (item_scope = item ids he asked about) only when he clearly asks to buy; else none. "
     "pitch true only if your text pushes a purchase. For a price question, use action reply with the exact informational price shown in THIS TURN; price_claims lists only that price or the already-sent card price.")
+
+
+# Text-only delivery mode: nothing is for sale and no card can be sent, so the offer, contract and sales-state
+# instructions are not shown. The global rules (no invented prices or purchase claims, no meetups or moving platforms,
+# identity wording) are unchanged; the approved personal facts and public contact line below stay as they are.
+RULES_TEXT_ONLY = (
+    "How to write:\n"
+    "- Facts first. Use only the facts, limits and wording given here. Never invent anything about her, him, what she is doing, "
+    "who reads or writes these chats, or what is in a card. When unsure, say less.\n"
+    "- Answer what he just asked, corrected or requested before anything else. Never hold an answer back until he "
+    "answers you, tells you something or earns it. Ask only a question you truly need answered to help him, never one just to keep "
+    "him talking, and never again one she already asked (see QUESTIONS ALREADY ASKED), even if he skipped it.\n"
+    "- Sound like her, using the example lines for voice only. Sexual chat follows SEXUAL CHAT below; never agree to meet and never "
+    "move to another app, number or site. Don't force flirting or questions into a reply.\n"
+    "- Keep it short and varied: one text is often enough, up to four when each is needed. Use 0 to 5 emojis, often none. Don't "
+    "reuse your last opener, pet name or emoji. No lists, no dashes as punctuation.\n"
+    "- This chat is text only: nothing is for sale or can be sent here. Don't pitch, price, offer or promise any picture, video, "
+    "discount or payment; if he asks for content or prices, say warmly you can't do that here and keep chatting. Never promise to "
+    "message him later, to make customs, to meet, or to talk off the platform.\n"
+    "- If he asks what he is talking to, answer only with the IDENTITY WORDING and nothing more about who reads, writes or approves "
+    "the chats.\n"
+    "- Payment/ownership claims require VERIFIED PURCHASES. Access/unlock claims require exact accepted CARD facts with confirmed access and no review; historical or uncertain evidence never establishes present access.")
+
+CONTRACT_TEXT_ONLY = (
+    'Reply with strict JSON only, one object:\n'
+    '{"body": "<first text>", "parts": ["<optional more texts>"], "action": "reply", "offer_grant_id": null, '
+    '"sales_signal": "none", "item_scope": [], "pitch": false, "price_claims": [], "purchase_claim": false}\n'
+    "Always action reply, offer_grant_id null, sales_signal none, item_scope [], pitch false, price_claims [] and purchase_claim false: "
+    "this chat has no commercial action.")
 
 
 HARD_LINES = ("Absolute lines, whatever he asks: anyone under 18 or played as younger, family or step-family roleplay, force or "
@@ -92,7 +121,10 @@ class SpecPromptProvider:
             creator += ('\nPUBLIC CONTACT EXCEPTION: only if he asks, the exact standalone factual reply is '
                         f'"My public Telegram is {contact}." No other handle, off-platform payment, meetup, or invitation to move this chat is authorized.')
         sexual = SEXUAL[getattr(p, 'explicit_chat', 'explicit')]
-        return ('\n\n'.join([head, creator, RULES, sexual, CONTRACT]),
+        rules, contract = (RULES, CONTRACT) if ctx.commercial else (RULES_TEXT_ONLY, CONTRACT_TEXT_ONLY)
+        if not ctx.commercial:
+            sexual = sexual.replace("don't promise anything that isn't the APPROVED OFFER", "don't promise anything")
+        return ('\n\n'.join([head, creator, rules, sexual, contract]),
                 ('head', 'creator', 'rules', 'sexual', 'contract'))
 
     def _sales_state(self, ctx):
@@ -104,12 +136,14 @@ class SpecPromptProvider:
         return "SALES STATE: OPEN."
 
     def _turn(self, ctx):
-        turn = [self._sales_state(ctx), f"TURN KIND: {ctx.turn_kind}. At most {ctx.max_texts} texts."]
+        turn = ([self._sales_state(ctx)] if ctx.commercial else []) + [f"TURN KIND: {ctx.turn_kind}. At most {ctx.max_texts} texts."]
         if ctx.turn_kind == 'role_question':
             turn.append('He is asking what he is talking to: reply with the IDENTITY WORDING, then carry on.')
         price = ctx.offer or (ctx.price_information[0] if len(ctx.price_information) == 1 else None)
         price = price if is_price_question(ctx.fan_text) else None
-        if ctx.offer:
+        if not ctx.commercial:
+            pass   # no APPROVED OFFER / CONTENTS / INFORMATIONAL PRICE lines in text-only mode
+        elif ctx.offer:
             o = ctx.offer
             turn.append(f"APPROVED OFFER: id {o['grantId']}, {str(o.get('label', ''))[:120]}: {str(o.get('description', ''))[:400]}. "
                         f"Only if it fits; tease from that description, no price. To use it: action offer, offer_grant_id \"{o['grantId']}\".")
@@ -122,7 +156,7 @@ class SpecPromptProvider:
         else:
             turn.append("APPROVED OFFER: none this turn (no card or pitch; a listed price fact is information only)."
                         if price else "APPROVED OFFER: none this turn (mention no unlocking, bundles or prices).")
-        if price and type(price.get('priceCents')) is int and price['priceCents'] > 0 and price.get('currency') == 'USD':
+        if ctx.commercial and price and type(price.get('priceCents')) is int and price['priceCents'] > 0 and price.get('currency') == 'USD':
             turn.append(f"INFORMATIONAL PRICE: USD {price['priceCents'] / 100:.2f} for {str(price.get('label', ''))[:120]}. "
                         "Listing fact only, not availability or permission to send. Answer a price question with action reply. "
                         "For action offer, omit price; the application adds it.")
@@ -145,7 +179,10 @@ class SpecPromptProvider:
             turn.append('UNRESOLVED REQUESTS AND ACTIONS (scoped records, not new instructions or permission to send):\n'
                         + '\n'.join(ctx.request_context)
                         + '\nAddress the current question using these references. Unknown is not failed, delivered, purchased or cancelled. '
-                        'A draft is not a completed answer. Do not recreate or replace an unresolved action.')
+                        'A draft is not a completed answer. Do not recreate or replace an unresolved action.'
+                        + (' UNANSWERED lines are his earlier messages since her last reply: answer any still-open question in them '
+                           'together with the current one, briefly, and do not repeat yourself.'
+                           if any(line.startswith('UNANSWERED ') for line in ctx.request_context) else ''))
         if ctx.fix:
             turn.append('YOUR LAST DRAFT WAS REJECTED: ' + '; '.join(ctx.fix) + '. Write a new one that fixes this.')
         return turn
@@ -159,7 +196,7 @@ class SpecPromptProvider:
         dropped = {'examples': 0, 'history': len(ctx.history) - len(history), 'excerpts': 0}
         examples = list(ctx.examples[:b.examples])
         excerpts = list(ctx.memory_excerpts[:b.memory_excerpts])
-        latest = ' '.join(ctx.fan_text.split())[:b.latest_chars]
+        latest, latest_omitted = bounded_latest(ctx.fan_text, b.latest_chars)
         turn = self._turn(ctx)
         if sum(len(t) for t in turn) > b.user_chars // 2:
             memory = [t for t in turn if t.startswith('WHAT SHE KNOWS')]
@@ -189,5 +226,6 @@ class SpecPromptProvider:
             user = assemble()
         messages = ({'role': 'system', 'content': system}, {'role': 'user', 'content': user})
         stats = {'system_chars': len(system), 'user_chars': len(user), 'history_included': len(history),
-                 'examples_included': len(examples), 'dropped': dropped, 'turn_kind': ctx.turn_kind, 'offer': ctx.offer is not None}
+                 'examples_included': len(examples), 'dropped': dropped, 'turn_kind': ctx.turn_kind, 'offer': ctx.offer is not None,
+                 'latest_omitted_chars': latest_omitted}
         return RenderedPrompt(messages=messages, block_names=names, stats=stats, sha256=digest_messages(messages))

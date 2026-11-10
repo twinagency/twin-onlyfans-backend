@@ -189,10 +189,13 @@ class PromptBudget:
     history_messages: int = 16
     history_message_chars: int = 400
     latest_chars: int = 1200
+    latest_review_chars: int = 6000   # a latest message longer than this is not written for: it goes to a human (no model call)
     memory_chars: int = 900
+    memory_items: int = 10             # eligible learned memories rendered (eligibility is decided before this bound)
     memory_excerpts: int = 3
     request_chars: int = 1800
     requests: int = 8
+    unanswered: int = 5                # earlier fan messages since her last reply shown as UNANSWERED (most recent first kept)
     purchases: int = 20
     examples: int = 12
     example_chars: int = 140
@@ -221,6 +224,7 @@ class PromptContext:
     fix: tuple = ()                   # reasons the last draft was rejected
     prefixed: bool = False            # in-character retry
     max_texts: int = 4
+    commercial: bool = True           # False in text-only delivery mode: no offer, contract or sales-state instructions
 
 
 @dataclass(frozen=True)
@@ -238,22 +242,46 @@ class PromptProvider(Protocol):
     def render(self, ctx: PromptContext) -> RenderedPrompt: ...
 
 
+def bounded_latest(text, limit):
+    """(shown_text, omitted_chars). A long latest message keeps its beginning AND its end (corrections and questions
+    usually come last) with an explicit omission marker, never a silent prefix cut. Whitespace is normalised first."""
+    flat = ' '.join(str(text or '').split())
+    if len(flat) <= limit:
+        return flat, 0
+    marker_for = lambda n: f' [... {n} characters omitted from the middle of this long message; the beginning and the end are shown, do not guess the omitted part ...] '
+    omitted = len(flat) - limit
+    for _ in range(3):   # the marker itself uses room, so settle the omitted count
+        marker = marker_for(omitted)
+        room = max(0, limit - len(marker))
+        omitted = len(flat) - room
+    marker = marker_for(omitted)
+    room = max(0, limit - len(marker))
+    head = room // 3
+    tail = room - head
+    return flat[:head].rstrip() + marker + flat[len(flat) - tail:].lstrip(), len(flat) - head - tail
+
+
 def digest_messages(messages):
     return sha256(json.dumps(messages, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 # ---- context building (code decides; no model involved) -----------------------------
+_REAL_END = r"(?=\s*(?:[?.!,]|$|\s(?:or|person|human|girl|woman|lady|babe|baby|here|right now|lol|haha|though|actually|really)\b))"
 _ROLE_RX = re.compile(
-    r"\b(?:are you (?:an? )?(?:real|human|bot|ai|robot|chatbot|fake|actually (?:her|real|you)|a person|a girl|automated)"
-    r"|is this (?:an? )?(?:bot|ai|real|robot|chatbot|fake|automated|really (?:her|you))"
-    r"|am i (?:talking|chatting|speaking|texting) (?:to|with) (?:an? )?(?:real|bot|ai|human|person|someone)"
-    r"|who am i (?:talking|chatting|speaking|texting) (?:to|with)"
-    r"|(?:talking|chatting|speaking|texting) (?:to|with) (?:an? )?(?:agency|chatter|team|staff|employee|someone else)"
+    r"\b(?:(?:are|r) (?:you|u|ya) (?:even |actually |really |an? )*(?:(?:bot|ai|robot|chatbot|person|automated|human)\b"
+    r"|(?:real|girl|her|you|fake)" + _REAL_END + r")"
+    r"|(?:you|u) (?:a|an) (?:bot|robot|ai|chatbot|real (?:person|girl|human))\b"
+    r"|is this (?:an? )?(?:(?:bot|ai|robot|chatbot|automated)\b|(?:really |actually )?(?:real|fake)" + _REAL_END + r"|really (?:her|you)\b)"
+    r"|am i (?:really |actually |still )?(?:talking|chatting|speaking|texting|messaging) (?:to|with) (?:an? |the )?"
+    r"(?:real|bot|ai|human|person|someone|agency|chatter|team|staff|employee)\b"
+    r"|who am i (?:really |actually )?(?:talking|chatting|speaking|texting) (?:to|with)"
+    r"|is (?:someone|somebody|anyone) else (?:typing|texting|writing|answering|replying|reading|there)"
     r"|who runs this account|do you work for an? agency"
     r"|are you (?:with|using|working for) (?:an? )?agency"
     r"|(?:are you|you are|you're|is this) (?:an? )?chatter"
     r"|is (?:an? )?(?:agency|chatter|team) (?:running|answering|writing)"
-    r"|who(?:'s| is) (?:this|typing|really)|this isn'?t (?:really )?(?:her|you))\b", re.I)
+    r"|who(?:'s| is) (?:this|that)(?= ?(?:exactly|really|actually|though|then|now|again)?\s*(?:\?|$))"
+    r"|who(?:'s| is) (?:really )?(?:typing|texting|writing|answering|behind (?:this|the account))|this isn'?t (?:really )?(?:her|you))\b", re.I)
 _CONTENT_RX = re.compile(r"\b(send|show|got|have|any|sell|buy|want|see)\b.{0,40}\b(pics?|pictures?|photos?|vids?|videos?|nudes?|content|ppv|set|bundle|more of you|clip)\b|"
                          r"\b(pics?|photos?|vids?|videos?|nudes?|ppv)\b.{0,20}\b(please|pls|of you|for me)\b", re.I)
 
@@ -306,8 +334,8 @@ def offer_for(snapshot, profile, fan_text):
     permission for that catalogue item. A missing permission is "no offer", never "any offer".
     """
     journey = snapshot.get('journey') or {}
-    if journey.get('offers_allowed') is False:
-        return None
+    if journey.get('offers_allowed') is False or snapshot.get('delivery_mode') == 'text_only':
+        return None   # text-only delivery has no commercial action at all
     offer = pick_offer(snapshot, fan_text)
     if offer is None or profile is None or not profile.may_offer(offer['itemId']):
         return None
@@ -362,7 +390,10 @@ def memory_lines_from(view, budget):
                           if isinstance(v, dict) and v.get('source') == 'operator')
         aliases = {'location':'home_city', 'current_location':'home_city', 'name':'real_name',
                    'age':'his_age', 'job':'occupation', 'interests':'hobbies'}
-        for item in (learned.get('memories') or [])[:10]:
+        # Eligibility (fan subject, valid shape, not overridden by an operator correction, has source evidence) is decided
+        # on the WHOLE list first; only then is the eligible list bounded, and any eligible item left out is reported.
+        eligible = []
+        for item in (learned.get('memories') or []):
             if not isinstance(item, dict) or item.get('subject') != 'fan':
                 continue
             key, value, status = item.get('field'), item.get('value'), item.get('status')
@@ -374,6 +405,10 @@ def memory_lines_from(view, budget):
                           if isinstance(e, dict) and isinstance(e.get('source'), str)), None)
             if proof is None:
                 continue
+            eligible.append((item, key, value, status, proof))
+        if len(eligible) > budget.memory_items:
+            clipped = True   # reported through the 'omitted by budget' notice below
+        for item, key, value, status, proof in eligible[:budget.memory_items]:
             state = {'cancelled': 'cancelled, historical; not active or action authority',
                      'expired': 'expired, historical; outcome unconfirmed',
                      'superseded': 'superseded, historical; not current fact'}.get(status, status)
@@ -421,6 +456,13 @@ def memory_lines_from(view, budget):
     return tuple(bounded), excerpts, True
 
 
+def _attachment_fact(count, with_text=False):
+    """An inbound attachment is a fact about the message; what it shows is never known to the writer."""
+    n = f'{count} file' if count == 1 else f'{count} files'
+    return (f'[+{n} attached; contents not visible to you]' if with_text
+            else f'[attachment only: {n}; contents not visible to you, do not guess what it shows]')
+
+
 def _history_rows(snapshot, budget):
     current_id = snapshot['current_message']['id']
     rows = []
@@ -429,6 +471,8 @@ def _history_rows(snapshot, budget):
             continue
         who = 'FAN' if row['direction'] == 'in' else 'HER'
         text = (row.get('body') or '').strip()
+        if row['direction'] == 'in' and (row.get('media_count') or 0) > 0:
+            text = (text + ' ' if text else '') + _attachment_fact(row['media_count'], bool(text))
         if row['direction'] == 'out' and (row.get('media_count') or row.get('price_cents')):
             if (row.get('price_cents') or 0) > 0:
                 cards = [card for card in (snapshot.get('offer_reference') or {}).get('cards', [])
@@ -463,7 +507,7 @@ def request_context_from(snapshot, budget):
               ('CARD', cards, budget.request_chars // 3),
               ('REQUEST', [r for r in requests if r not in active], budget.request_chars),
               ('ACTION', [r for r in actions if r not in unknown], budget.request_chars)]
-    lines, size, omitted = [], 0, False
+    lines, size, omitted, shown_sources = [], 0, False, set()
     total = max(0, budget.request_chars - (150 if cards or references.get('cardsCoverage') == 'incomplete' else 90))
     for kind, records, quota in groups:
         used = 0
@@ -490,7 +534,29 @@ def request_context_from(snapshot, budget):
                 omitted = True
                 continue
             lines.append(line);size += len(line);used += len(line)
+            if kind == 'REQUEST':
+                shown_sources.add(str(row.get('source_message_id')))
         omitted = omitted or len(records) > budget.requests
+    # Earlier messages of his since her last delivered reply that no REQUEST line above covers (a burst: the newest message
+    # became the current request, the older ones were superseded or never planned). Derived from the same message and request
+    # records, not a new ledger; whatever does not fit is reported as omitted, never silently dropped.
+    history = [r for r in snapshot.get('history', []) if isinstance(r, dict)]
+    last_out = max((i for i, r in enumerate(history) if r.get('direction') == 'out'), default=-1)
+    pending = [r for r in history[last_out + 1:] if r.get('direction') == 'in' and r.get('id') != snapshot['current_message']['id']
+               and str(r.get('id')) not in shown_sources and ((r.get('body') or '').strip() or r.get('media_count'))]
+    if len(pending) > budget.unanswered:
+        omitted = True
+        pending = pending[-budget.unanswered:]
+    used = 0
+    for row in pending:
+        text = (row.get('body') or '').strip()[:160]
+        if (row.get('media_count') or 0) > 0:
+            text = (text + ' ' if text else '') + _attachment_fact(row['media_count'], bool(text))
+        line = 'UNANSWERED ' + json.dumps({'message_id': row.get('id'), 'text': text}, ensure_ascii=False, sort_keys=True)
+        if used + len(line) > budget.request_chars // 3 or size + len(line) > total:
+            omitted = True
+            continue
+        lines.append(line); size += len(line); used += len(line)
     incomplete = references.get('cardsCoverage') == 'incomplete' or references.get('cardsTruncated')
     if omitted or incomplete or snapshot.get('open_requests_truncated') or snapshot.get('pending_actions_truncated'):
         lines.append('Additional unresolved/card records omitted or coverage incomplete; do not infer completion or a known outcome.'
@@ -501,6 +567,12 @@ def request_context_from(snapshot, budget):
 def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, budget=PromptBudget()):
     fan_text = snapshot['current_message']['body']
     offer = offer_for(snapshot, profile, fan_text)
+    if not (fan_text or '').strip():
+        # A media-only message is an attachment fact, not an empty message and not a description of what it shows.
+        current = next((r for r in snapshot.get('history', []) if isinstance(r, dict)
+                        and r.get('id') == snapshot['current_message']['id']), {})
+        if (current.get('media_count') or 0) > 0:
+            fan_text = _attachment_fact(current['media_count'])
     journey = snapshot.get('journey') or {}
     identity_line = (getattr(profile, 'role_statement', '') or journey.get('approved_identity_line') or '').strip()
     lines, excerpts, available = memory_lines_from(snapshot.get('memory'), budget)
@@ -513,8 +585,10 @@ def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, bud
         history=_history_rows(snapshot, budget), memory_lines=lines, memory_excerpts=excerpts, memory_available=available,
         request_context=request_context_from(snapshot, budget),
         sales_mode=snapshot.get('sales_mode', 'open'), sales_scope=scope, scope_items=scope_items, offer=offer,
-        price_information=tuple(i for i in snapshot.get('price_information', []) if profile.may_offer(i['itemId'])),
+        price_information=(() if snapshot.get('delivery_mode') == 'text_only' else
+                           tuple(i for i in snapshot.get('price_information', []) if profile.may_offer(i['itemId']))),
         outstanding_card=matched[0] if matched else None,
         purchases=tuple(p['label'] for p in purchases[:budget.purchases]) if isinstance(purchases, list) else None,
         identity_line=identity_line, recent_questions=recent_her_questions(snapshot),
-        examples=tuple(examples), fix=tuple(fix), prefixed=prefixed)
+        examples=tuple(examples), fix=tuple(fix), prefixed=prefixed,
+        commercial=snapshot.get('delivery_mode') != 'text_only')

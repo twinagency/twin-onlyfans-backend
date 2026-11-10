@@ -341,10 +341,11 @@ class EngineService:
             runtime = self.store._runtime(s, tenant, account)
             from .pilot_scope import planning_scope, planning_block
             pilot_stamp = planning_scope(s, runtime, fan_id, self.model, draft_only=self.draft_only)
-            if pilot_stamp is not None and not self.draft_only and planning_block(s, runtime, fan_id) is not None:
+            blocked = planning_block(s, runtime, fan_id) if pilot_stamp is not None and not self.draft_only else None
+            if blocked is not None:
                 # A send-blocking hold already covers this fan: do not spend a model call on a reply that
                 # cannot go out. The open request is retained and resumes after the hold is resolved.
-                raise Refused('pilot send-blocking evidence holds planning')
+                raise Refused(f'pilot send-blocking evidence holds planning: {blocked}')  # keep the real shared-authority reason
             owner = s.get(OfEngineOwner, (account, fan_id))
             state = s.get(OfConversationState, (account, fan_id))
             policy = s.get(OfDeliveryPolicy, account)

@@ -28,8 +28,8 @@ class Grounding:
     media_reference: bool | None = None        # current request/reference may depend on media; never action authority
     current_offer_prices: frozenset = frozenset()  # informational replies only; frozen eligible terms
     access_labels: tuple = ()                  # accepted cards with confirmed access, not payment/ownership
-    # Product wording (price without a currency, media type, duration). Off unless the snapshot shows a product is being
-    # discussed (a scoped price/grant/card referent, or a request about content or its price).
+    # Product wording (price without a currency, media type, duration). Without a product in the snapshot (a scoped
+    # price/grant/card referent, or a request about content or its price) only draft clauses that name a product are checked.
     product_context: bool = False
     media_kinds: frozenset = frozenset()       # 'picture' / 'video' kinds the scoped referent(s) are known to contain
     durations: frozenset = frozenset()         # seconds; no snapshot carries a duration today, so none can be stated
@@ -257,8 +257,8 @@ def _quantity_claims(text):
 
 # --- product wording: price without a currency, media type and duration ----------------------------------------
 # These recognise an assertion ABOUT THE PRODUCT being discussed ("the photo costs four", "it is a ten-minute video"),
-# structurally (subject + verb + value), not a bare number or a bare word like "video". They run only when the snapshot
-# shows a product is under discussion, and the referent's facts (price, kinds, duration) come only from the scoped
+# structurally (subject + verb + value), not a bare number or a bare word like "video". They run on the whole draft when
+# the snapshot shows a product under discussion, otherwise on the clauses that name a product, and the referent's facts (price, kinds, duration) come only from the scoped
 # snapshot: nothing here supplies a missing fact. A negated, quoted, attributed, conditional or questioning clause is
 # not a claim.
 _KIND_WORDS = {'picture': r"(?:pics?|pictures?|photos?|photographs?|images?|selfies|stills?)",
@@ -345,9 +345,20 @@ def _duration_claims(text):
                     yield number * scale[match.group(2)[0].lower()]
 
 
+# The draft itself can introduce a product ("the photo costs four", "it is a ten-minute video") when the fan only said hello.
+# With no product in the snapshot, only a clause that itself names a product (a media noun or "price") is examined, so
+# ordinary numbers and "it costs 4 to park" stay untouched; the facts still come only from the scoped snapshot, so with no
+# evidence nothing supports the assertion.
+_DRAFT_PRODUCT = re.compile(r"\b" + _ANY_KIND + r"\b|\bprices?\b", re.I)
+
+
+def _product_clauses(text):
+    return [clause for clause, _ in _clauses(text.replace('\u2019', "'")) if _DRAFT_PRODUCT.search(clause)]
+
+
 def _check_product_wording(texts, grounding, verified_prices):
     if not grounding.product_context:
-        return
+        texts = [clause for text in texts for clause in _product_clauses(text)]
     for text in texts:
         if any(cents not in verified_prices for cents in _bare_price_claims(text)):
             raise Refused('unsupported price claim in model text')

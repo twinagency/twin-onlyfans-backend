@@ -233,6 +233,50 @@ def in_interval(ts, intervals):
     return ts is not None and any(parse_ts(a) <= ts <= parse_ts(b) for a, b in intervals)
 
 
+def attempt_identity(row):
+    """What a delivery attempt is an attempt OF: (event, destination, authenticated payload).
+
+    The delivery-attempt id and status differ legitimately between a failed attempt and its retry, so
+    they are not part of it.  The idempotency key is only the lookup handle: it is never proof of
+    sameness by itself.  Any missing/malformed part means no identity (None = unresolved evidence).
+    """
+    key, event, url, payload = (row.get('idempotency_key'), row.get('event'), row.get('url'),
+                                row.get('payload'))
+    if (type(key) is not str or not key or type(event) is not str or not event
+            or type(url) is not str or not url or type(payload) is not dict):
+        return None
+    return (key, event, url, sha(canon(payload)))
+
+
+def retry_index(rows, is_success):
+    """key -> identities of the verified successful deliveries carrying that key."""
+    index = {}
+    for row in rows:
+        if is_success(row):
+            ident = attempt_identity(row)
+            if ident is not None:
+                index.setdefault(ident[0], set()).add(ident)
+    return index
+
+
+def retry_state(row, index):
+    """'resolved' only if a verified success is the same event, destination and payload as this
+    failed attempt; 'conflict' if the key was delivered but for something else; else 'none'."""
+    key = row.get('idempotency_key')
+    if type(key) is not str or key not in index:
+        return 'none'
+    ident = attempt_identity(row)
+    return 'resolved' if ident is not None and ident in index[key] else 'conflict'
+
+
+def covered_by_resolution(row, ts, intervals, *, url, events, account_id):
+    """A recorded incident resolution waives only failures inside its interval that belong to the
+    monitored destination, event set and account; it never waives anything else."""
+    payload = row.get('payload')
+    return (in_interval(ts, intervals) and row.get('url') == url and row.get('event') in events
+            and type(payload) is dict and payload.get('account_id') == account_id)
+
+
 def account(window, *, url, events, account_id, resolved_intervals=(), prior_recent=(), has_prior=False):
     """Every row in the window must be a verified success or an explicitly resolved failure."""
     rows = window['rows']
@@ -242,17 +286,19 @@ def account(window, *, url, events, account_id, resolved_intervals=(), prior_rec
     missing = [list(i) for i in prior_recent if tuple(i) not in present]
     if missing:
         raise HistoryError('accounted_delivery_missing')
-    ok_keys = {r.get('idempotency_key') for r in rows if success(r, url=url, events=events, account_id=account_id)}
-    ok_keys.discard(None)
-    unresolved = 0
+    index = retry_index(rows, lambda r: success(r, url=url, events=events, account_id=account_id))
+    unresolved, conflicting = 0, 0
     for row in rows:
         if success(row, url=url, events=events, account_id=account_id):
             continue
-        if row.get('idempotency_key') in ok_keys or in_interval(row_ts(row), resolved_intervals):
+        state = retry_state(row, index)
+        if state == 'resolved' or covered_by_resolution(row, row_ts(row), resolved_intervals, url=url,
+                                                        events=events, account_id=account_id):
             continue
         unresolved += 1
+        conflicting += state == 'conflict'
     if unresolved:
-        raise HistoryError('unresolved_failed_delivery')
+        raise HistoryError('unresolved_failed_delivery' + (':retry_identity_mismatch' if conflicting else ''))
 
 
 def advance(cp, window, *, webhook_id, url, config, boundary, now):

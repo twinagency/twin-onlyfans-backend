@@ -6,7 +6,7 @@ from pathlib import Path
 from fans_api_adapter.event_scope import classify_raw, SUPPORTED, IRRELEVANT, MATERIAL
 import re
 from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec,CLASSES
-from delivery_history import canon,sha
+from delivery_history import canon,sha,retry_index,retry_state
 FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
 PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
@@ -63,16 +63,16 @@ def validate(root):
             raise RuntimeError('incident window has unmatched reported delivery')
     receipts={r['key']:r for r in local['receipts']}
     findings=[];matched=[];superseded=[]
-    ok_keys={r.get('idempotency_key') for r in rows if r.get('succeeded') is True and type(r.get('status_code')) is int
-             and 200<=r['status_code']<300 and r.get('url')==URL and type(r.get('payload')) is dict
-             and r['payload'].get('account_id')==PROVIDER}-{None}
+    ok_index=retry_index(rows,lambda r:r.get('succeeded') is True and type(r.get('status_code')) is int
+                         and 200<=r['status_code']<300 and r.get('url')==URL and type(r.get('payload')) is dict
+                         and r['payload'].get('account_id')==PROVIDER)
     for row in rows:
         key=row.get('idempotency_key');payload=row.get('payload')
         if (row.get('succeeded') is not True or type(row.get('status_code')) is not int
                 or not 200<=row['status_code']<300 or row.get('url')!=URL
                 or type(payload) is not dict or payload.get('account_id')!=PROVIDER):
-            # A failed attempt is reconciled only by a verified successful retry of the same key.
-            if key is not None and key in ok_keys:
+            # A failed attempt is reconciled only by a verified successful retry of the same event, destination and payload.
+            if retry_state(row,ok_index)=='resolved':
                 superseded.append(key);continue
             raise RuntimeError('failed or ambiguous provider delivery')
         raw=json.dumps(payload,separators=(',',':')).encode()

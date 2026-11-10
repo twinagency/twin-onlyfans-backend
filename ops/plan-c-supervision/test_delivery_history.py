@@ -195,7 +195,9 @@ class AccountingTests(Base):
         self.assertEqual(self.cp()['accounted_count'], 6)
 
     def test_failure_with_later_verified_retry_is_resolved_and_does_not_poison_future_checks(self):
-        provider = Provider([row(1, 2, ok=False, key='retry-me'), row(2, 3, key='retry-me'), row(3, 4)])
+        failed, retry = row(1, 2, ok=False, key='retry-me'), row(2, 3, key='retry-me')
+        retry['payload'] = dict(failed['payload'])      # a retry redelivers the same event body (U2 fixture correction)
+        provider = Provider([failed, retry, row(3, 4)])
         self.verify(provider)
         for n in range(3):                              # failed attempt keeps appearing in every overlap window
             provider.rows.append(row(10 + n, 5 + n))
@@ -249,6 +251,137 @@ class AccountingTests(Base):
         self.verify(provider)
         with self.assertRaisesRegex(h.HistoryError, 'accounted_delivery_missing'):
             self.verify(Provider([]), now_min=61)   # the cursor delivery vanished: not a quiet period
+
+
+def attempt(i, minutes, ok, key='evt-1', **change):
+    """One delivery attempt of the same logical event; only the attempt id/time/status vary."""
+    r = row(i, minutes, ok=ok, key=key)
+    r['payload'] = {'account_id': ACCT, 'event_id': key, 'text': 'hello'}
+    for field, value in change.items():
+        if field == 'account':
+            r['payload'] = {**r['payload'], 'account_id': value}
+        elif field == 'body':
+            r['payload'] = {**r['payload'], 'text': value}
+        else:
+            r[field] = value
+    return r
+
+
+class RetryIdentityTests(Base):
+    """U2: a success resolves a failed attempt only for the same event, destination, account and payload."""
+
+    def test_exact_retry_with_different_attempt_ids_and_times_is_resolved(self):
+        failed, retry = attempt(1, 2, False), attempt(99, 7, True)
+        self.assertNotEqual(failed['id'], retry['id'])
+        self.assertNotEqual(failed['created_at'], retry['created_at'])
+        self.verify(Provider([failed, retry, attempt(3, 4, True, key='other')]))
+        self.assertEqual(self.cp()['seq'], 1)
+
+    def test_same_key_but_changed_event_body_account_or_destination_stays_held(self):
+        changes = (('event', {'event': 'counter.updated'}), ('body', {'body': 'different text'}),
+                   ('account', {'account': 'acct_other'}), ('destination', {'url': 'https://other.example/x'}))
+        for name, change in changes:
+            with self.subTest(change=name):
+                failed = attempt(1, 2, False, **change)
+                provider = Provider([failed, attempt(2, 3, True)])
+                with self.assertRaisesRegex(h.HistoryError, 'unresolved_failed_delivery:retry_identity_mismatch'):
+                    self.verify(provider)
+                self.assertFalse(self.checkpoint.exists())
+
+    def test_the_reviewed_probe_shapes(self):
+        ok = {'id': 'delivery-ok', 'idempotency_key': 'same-key', 'created_at': h.fmt(at(5)), 'succeeded': True,
+              'status_code': 202, 'url': URL, 'event': 'messages.received', 'payload': {'account_id': ACCT, 'text': 'hello'}}
+        retry = {**ok, 'id': 'delivery-failed', 'created_at': h.fmt(at(4)), 'succeeded': False, 'status_code': 500}
+        self.verify(Provider([retry, ok]))                                   # matching retry accepted
+        self.checkpoint.unlink()
+        conflict = {**retry, 'event': 'counter.updated', 'payload': {'account_id': ACCT, 'reason': 'different-event'}}
+        with self.assertRaises(h.HistoryError):                              # different event with the same key held
+            self.verify(Provider([conflict, ok]))
+
+    def test_missing_identity_is_unresolved_evidence(self):
+        for field in ('event', 'url', 'payload', 'idempotency_key'):
+            with self.subTest(missing=field):
+                failed = attempt(1, 2, False)
+                del failed[field]
+                with self.assertRaises(h.HistoryError):
+                    self.verify(Provider([failed, attempt(2, 3, True)]))
+        for field, value in (('payload', 'text'), ('payload', None), ('event', ''), ('idempotency_key', 7)):
+            with self.subTest(malformed=(field, value)):
+                failed = {**attempt(1, 2, False), field: value}
+                with self.assertRaises(h.HistoryError):
+                    self.verify(Provider([failed, attempt(2, 3, True)]))
+        self.assertFalse(self.checkpoint.exists())
+
+    def test_payload_key_order_does_not_change_identity(self):
+        failed, retry = attempt(1, 2, False), attempt(2, 3, True)
+        retry['payload'] = dict(reversed(list(retry['payload'].items())))
+        self.verify(Provider([failed, retry]))
+
+    def test_success_without_matching_identity_cannot_resolve_via_a_different_success_of_same_key(self):
+        failed = attempt(1, 2, False, body='b')
+        ok_a, ok_b = attempt(2, 3, True, body='a'), attempt(3, 4, True, body='b')
+        self.verify(Provider([failed, ok_a, ok_b]))                  # one of the successes is the exact retry
+        self.checkpoint.unlink()
+        with self.assertRaisesRegex(h.HistoryError, 'retry_identity_mismatch'):
+            self.verify(Provider([failed, ok_a]))
+
+    def test_retry_on_a_later_page_with_duplicate_and_shifting_pages(self):
+        filler = [row(100 + i, 10 + i * 0.1) for i in range(230)]
+        provider = Provider([attempt(1, 2, False), attempt(2, 8, True)] + filler)
+        provider.hook = lambda n, p: (p.rows.append(row(900, 30)), setattr(p, 'hook', None)) if n == 2 else None
+        info = self.verify(provider)
+        self.assertGreaterEqual(info['pages'], 3)
+        self.assertEqual(self.cp()['seq'], 1)
+
+    def test_retry_and_failure_sharing_a_timestamp_resolve_in_any_provider_order(self):
+        for newest_first in (True, False):
+            with self.subTest(newest_first=newest_first):
+                if self.checkpoint.exists():
+                    self.checkpoint.unlink()
+                self.verify(Provider([attempt(1, 5, False), attempt(2, 5, True), row(3, 5)], newest_first=newest_first))
+
+    def test_late_retry_resolves_a_held_failure_and_late_conflict_is_held_after_restart(self):
+        provider = Provider([attempt(1, 2, False), row(2, 3)])
+        with self.assertRaises(h.HistoryError):
+            self.verify(provider)                                     # no retry yet: held, no checkpoint
+        self.assertFalse(self.checkpoint.exists())
+        provider.rows.append(attempt(3, 9, True))                     # the retry arrives late
+        self.verify(provider, now_min=61)
+        provider.rows.append(attempt(4, 3, False, key='evt-2', event='counter.updated'))   # late, older than cursor
+        provider.rows.append(attempt(5, 4, True, key='evt-2'))        # same key, different event: not a retry
+        before = self.checkpoint.read_bytes()
+        with self.assertRaisesRegex(h.HistoryError, 'retry_identity_mismatch'):
+            self.verify(provider, now_min=62)                         # a fresh process (state only on disk)
+        self.assertEqual(self.checkpoint.read_bytes(), before)
+
+    def test_unresolved_conflicting_failure_cannot_vanish_behind_the_cursor(self):
+        provider = Provider([attempt(1, 2, False, body='x'), attempt(2, 3, True)])
+        for n in range(3):
+            provider.rows.append(row(10 + n, 20 + n))                 # later healthy traffic never launders it
+            with self.assertRaises(h.HistoryError):
+                self.verify(provider, now_min=60 + n)
+        self.assertFalse(self.checkpoint.exists())
+
+    def test_incident_resolution_applies_only_to_its_interval_and_monitored_events(self):
+        interval = [(h.fmt(at(4)), h.fmt(at(7)))]
+        self.verify(Provider([row(1, 5, ok=False), row(2, 6)]), resolved_intervals=interval)   # covered
+        for name, bad in (('after the interval', row(1, 20, ok=False)),
+                          ('unmonitored event', {**row(1, 5, ok=False), 'event': 'accounts.disconnected'}),
+                          ('other destination', {**row(1, 5, ok=False), 'url': 'https://other.example/x'}),
+                          ('other account', attempt(1, 5, False, account='acct_other')),
+                          ('no payload', {k: v for k, v in row(1, 5, ok=False).items() if k != 'payload'})):
+            with self.subTest(outside=name):
+                self.checkpoint.unlink(missing_ok=True)
+                with self.assertRaises(h.HistoryError):
+                    self.verify(Provider([bad, row(2, 6), row(3, 21)]), resolved_intervals=interval)
+
+    def test_resolved_interval_never_waives_a_later_same_key_conflict(self):
+        interval = [(h.fmt(at(4)), h.fmt(at(7)))]
+        provider = Provider([row(1, 5, ok=False), row(2, 6)])
+        self.verify(provider, resolved_intervals=interval)
+        provider.rows += [attempt(3, 30, False, key='evt-9', event='counter.updated'), attempt(4, 31, True, key='evt-9')]
+        with self.assertRaisesRegex(h.HistoryError, 'retry_identity_mismatch'):
+            self.verify(provider, now_min=61, resolved_intervals=interval)
 
 
 class DurableStateTests(Base):

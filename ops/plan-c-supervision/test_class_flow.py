@@ -145,6 +145,15 @@ class IntervalValidation(unittest.TestCase):
         self.rows = [{**failed, 'idempotency_key': 'other'}, self.row]
         with self.assertRaises(RuntimeError): self.run_case()
 
+    def test_same_key_with_a_different_event_payload_or_destination_is_not_a_retry(self):
+        failed = {**self.row, 'succeeded': False, 'status_code': 500, 'id': 'attempt-1'}
+        other_payload = {**self.row['payload'], 'payload': {'fromUser': {'id': 318022380}, 'text': 'changed'}}
+        for change in ({'event': 'accounts.disconnected'}, {'payload': other_payload}, {'url': 'https://other.example/x'},
+                       {'payload': None}, {'event': None}):
+            with self.subTest(change=list(change)):
+                self.rows = [{**failed, **change}, {**self.row, 'id': 'attempt-2'}]
+                with self.assertRaises(RuntimeError): self.run_case()
+
 
 if __name__ == '__main__':
     unittest.main()

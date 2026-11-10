@@ -713,6 +713,124 @@ def unresolved(store, tenant, account, actor=None):
 
 
 # ------------------------------------------------------------------ reconcile
+def _reconcile_provider_queue(store, tenant, account, item_id, body):
+    """Stopped, text-only operator review of every retained variant of ONE queue key.
+
+    The existing reconcile operator is accountable for the referenced provider and
+    fan-history review. Hashes record that evidence; they do not authenticate a
+    provider response supplied by an untrusted caller. No send/handback/activation
+    authority is created, and independent contact, financial and send holds stay.
+    """
+    from db.onlyfans_engine_models import OfEnginePilotWebhookDigest, OfFansConnection, OfFansWebhook
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    from fans_api_adapter.queue_review import queue_envelope, timestamp
+    from .pilot_scope import require, authorize, digest_resolution_key
+    from datetime import timezone
+    required={'commandKey','actor','evidenceRef','scopeRevision','eventEpoch','eventKey',
+              'payloadSha256','rawBody','queueReview'}
+    if type(body) is not dict or set(body)!=required:
+        raise BadRequest('exact queue review evidence fields required')
+    key,actor=_key(body['commandKey']),_actor(body['actor'])
+    revision,epoch=_int(body['scopeRevision'],1),_int(body['eventEpoch'],1,2**63-1)
+    event_key,digest=body['eventKey'],body['payloadSha256']
+    proof=body['queueReview']
+    if (type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}',event_key)
+            or type(digest) is not str or not _HEX64.fullmatch(digest)
+            or not evidence_allowed(PLAN_C_TRANSPORT,body['evidenceRef'])
+            or type(proof) is not dict or set(proof)!={'rawBodies','observedAt','queueListingSha256',
+                'pendingQueues','externalWritersExcluded','fanHistory'}
+            or proof['pendingQueues']!=0 or type(proof['pendingQueues']) is not int
+            or proof['externalWritersExcluded'] is not True
+            or type(proof['queueListingSha256']) is not str or not _HEX64.fullmatch(proof['queueListingSha256'])
+            or type(proof['rawBodies']) is not list or not 1<=len(proof['rawBodies'])<=16
+            or type(proof['fanHistory']) is not list):
+        raise BadRequest('complete reviewed queue and fan evidence required')
+    try:
+        observed=timestamp(proof['observedAt'])
+        variants={};queue_ids=set();dates=[];provider_accounts=set()
+        for original in proof['rawBodies']:
+            if type(original) is not str:
+                raise ValueError('invalid queue bytes')
+            raw=original.encode('utf-8')
+            if not 0<len(raw)<=8192:
+                raise ValueError('unbounded queue bytes')
+            parsed,qid=queue_envelope(raw);sha=hashlib.sha256(raw).hexdigest()
+            if sha in variants:
+                raise ValueError('duplicate queue bytes')
+            variants[sha]=raw;queue_ids.add(qid);dates.append(timestamp(parsed['payload']['date']))
+            provider_accounts.add(parsed['account_id'])
+        if len(queue_ids)!=1 or variants.get(digest,b'').decode('utf-8')!=body['rawBody']:
+            raise ValueError('queue identity mismatch')
+        history={}
+        for row in proof['fanHistory']:
+            if type(row) is not dict or set(row)!={'fanId','sha256','coveredFrom','coveredThrough','activityReviewed'}:
+                raise ValueError('incomplete fan history review')
+            fan=_int(row['fanId'],1,2**63-1)
+            if (fan in history or row['activityReviewed'] is not True or type(row['sha256']) is not str
+                    or not _HEX64.fullmatch(row['sha256']) or timestamp(row['coveredFrom'])>min(dates)
+                    or timestamp(row['coveredThrough'])<observed):
+                raise ValueError('fan evidence does not cover the reviewed interval')
+            history[fan]=row
+    except (ValueError,TypeError,KeyError,UnicodeError,Refused):
+        raise BadRequest('queue evidence is malformed or incomplete') from None
+    binding=_require_gated(store,tenant,account)
+    ident=digest_resolution_key(binding,epoch,event_key,digest)
+    if item_id!='provider_event:'+ident or key==ident:
+        raise BadRequest('provider-event identity mismatch')
+    request_hash=_digest([account,item_id,body])
+    group_ident=_digest(['queue-review',binding,epoch,event_key,sorted(variants),request_hash])
+    if key in {digest_resolution_key(binding,epoch,event_key,sha) for sha in variants} or key==group_ident:
+        raise BadRequest('queue command key conflicts with an evidence identity')
+    before={'id':item_id,'eventEpoch':epoch,'eventKey':event_key,'scopeRevision':revision,
+            'payloadSha256s':sorted(variants),'rawBodies':proof['rawBodies'],'queueId':next(iter(queue_ids)),
+            'providerAccount':next(iter(provider_accounts)) if len(provider_accounts)==1 else None,
+            'review':{k:v for k,v in proof.items() if k!='rawBodies'}}
+    def run():
+        with Session(store.engine) as s,s.begin():
+            runtime=store._runtime(s,tenant,account)
+            scope,config=require(s,runtime)
+            authorize(config,actor,'reconcile')
+            policy=s.get(OfDeliveryPolicy,account)
+            if (runtime.binding_id!=binding or scope.revision!=revision or scope.status!='stopped'
+                    or runtime.enabled or policy is None or policy.enabled or config.get('delivery_mode')!='text_only'):
+                raise Conflict('queue review requires the current stopped text-only scope')
+            if set(history)!=set(config['fans']):
+                raise Conflict('both current test fans require reviewed history')
+            now=utcnow().replace(tzinfo=timezone.utc)
+            if not 0<=(now-observed).total_seconds()<=300:
+                raise Conflict('queue review evidence is stale or from the future')
+            connection=s.get(OfFansConnection,(account,epoch))
+            if (connection is None or connection.binding_id!=binding or connection.status!='active'
+                    or provider_accounts!={connection.provider_account_id}):
+                raise Conflict('queue review provider connection changed')
+            retained=list(s.scalars(select(OfEnginePilotWebhookDigest).where(
+                OfEnginePilotWebhookDigest.account_id==account,OfEnginePilotWebhookDigest.epoch==epoch,
+                OfEnginePilotWebhookDigest.event_key==event_key)))
+            if {r.payload_sha256 for r in retained}!=set(variants):
+                raise Conflict('queue review must cover every retained variant')
+            original=s.get(OfFansWebhook,(account,epoch,event_key))
+            if original is not None:
+                raise Conflict('projected or quarantined event requires its existing recovery owner')
+            result={'ok':True,'accountId':account,'id':item_id,'action':'reconcile','commandKey':key,
+                    'outcome':'queue_event_group_reviewed','resolved':True,'sendAuthorized':False,
+                    'activationAuthorized':False,'reviewedVariants':len(variants)}
+            if s.get(OfLaunchCommand,(account,group_ident)) is None:
+                _record(s,account,binding,group_ident,'plan_c_queue_review',request_hash,actor,
+                        body['evidenceRef'],before,result)
+            for sha in sorted(variants):
+                marker=digest_resolution_key(binding,epoch,event_key,sha)
+                prior=s.get(OfLaunchCommand,(account,marker))
+                if prior is not None:
+                    if prior.binding_id!=binding or prior.kind!='plan_c_queue_digest_resolution':
+                        raise Conflict('queue digest resolution identity conflict')
+                else:
+                    _record(s,account,binding,marker,'plan_c_queue_digest_resolution',request_hash,actor,
+                            body['evidenceRef'],{'groupReview':group_ident,'payloadSha256':sha},result)
+            return result
+    return _idempotent(store,account,binding,key,'plan_c_reconcile',request_hash,actor,
+                       body['evidenceRef'],before,run)
+
+
 def _reconcile_provider_event(store, tenant, account, item_id, body):
     """Exact retained bytes and documented semantics, never a blanket clear/retry."""
     from db.onlyfans_engine_models import OfEnginePilotWebhookDigest, OfFansConnection, OfFansWebhook
@@ -879,6 +997,8 @@ def reconcile(store, tenant, account, item_id, body):
     unreconciled_access on revoked access evidence: audit only (acknowledged, state untouched).
     human_hold / handover_request: refused; they end with hand back or the request workflow."""
     if type(item_id) is str and item_id.startswith('provider_event:'):
+        if type(body) is dict and 'queueReview' in body:
+            return _reconcile_provider_queue(store, tenant, account, item_id, body)
         return _reconcile_provider_event(store, tenant, account, item_id, body)
     if type(item_id) is str and item_id.startswith('held_projection:'):
         return _reconcile_held_projection(store, tenant, account, item_id, body)

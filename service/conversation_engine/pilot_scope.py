@@ -340,10 +340,23 @@ def unresolved_webhook_digests(runtime):
     resolved = select(OfLaunchCommand.command_key).where(OfLaunchCommand.account_id == row.account_id,
         OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.command_key == key,
         OfLaunchCommand.kind == 'plan_c_webhook_resolution').correlate(row).exists()
+    queue_resolved = select(OfLaunchCommand.command_key).where(OfLaunchCommand.account_id == row.account_id,
+        OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.command_key == key,
+        OfLaunchCommand.kind == 'plan_c_queue_digest_resolution').correlate(row).exists()
+    # Every conflicting variant must have its own queue-review marker. A new
+    # variant immediately invalidates the group's old disposition for all fans.
+    other_key_text = (literal('plan-c-digest-resolve:' + runtime.binding_id + ':') + cast(other.epoch, String) + ':'
+        + func.encode(func.sha256(func.convert_to(other.event_key, 'UTF8')), 'hex') + ':' + other.payload_sha256)
+    other_key = func.encode(func.sha256(func.convert_to(other_key_text, 'UTF8')), 'hex')
+    other_reviewed = select(OfLaunchCommand.command_key).where(OfLaunchCommand.account_id == other.account_id,
+        OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.command_key == other_key,
+        OfLaunchCommand.kind == 'plan_c_queue_digest_resolution').correlate(other).exists()
+    unreviewed_variant = select(other.payload_sha256).where(other.account_id == row.account_id,
+        other.epoch == row.epoch, other.event_key == row.event_key, ~other_reviewed).correlate(row).exists()
     return select(row).join(OfFansConnection, and_(OfFansConnection.account_id == row.account_id,
         OfFansConnection.epoch == row.epoch)).where(row.account_id == runtime.account_id,
         OfFansConnection.binding_id == runtime.binding_id, or_(row.safety_hold.is_(True), conflict),
-        or_(~resolved, conflict))
+        or_(~resolved, conflict), or_(~queue_resolved, unreviewed_variant))
 
 
 def delivery_block(s, runtime, fan, *, commercial=False):

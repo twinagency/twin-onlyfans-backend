@@ -84,7 +84,10 @@ try:
   delivery_page_count=window['pages'],delivery_duplicates_folded=window['duplicates_folded'])
  out.update(delivery_interval_start=interval_start,incident_interval_start=incident['last_confirmed_healthy_utc'])
  local=sql("select json_build_object('receipts',(select coalesce(json_agg(json_build_object('key',w.event_key,'hash',w.payload_sha256,'raw',encode(w.raw_body,'base64'),'status',w.status,'projection',p.status)),'[]'::json) from of_fans_webhook w left join of_fans_projection p using(account_id,epoch,event_key) where w.account_id='of-323358988' and w.epoch=1),'digests',(select coalesce(json_agg(json_build_object('key',event_key,'hash',payload_sha256,'hold',safety_hold)),'[]'::json) from of_engine_pilot_webhook_digest where account_id='of-323358988' and epoch=1));")
- save('local-receipts.json',local);local=json.loads(local)
+ local=json.loads(local)
+ queue_reviews=sql("select coalesce(json_agg(json_build_object('before',c.before_json::json,'result',c.result_json::json)),'[]'::json) from of_launch_command c join of_runtime r on r.account_id=c.account_id and r.binding_id=c.binding_id where c.account_id='of-323358988' and c.kind='plan_c_queue_review';")
+ local['queue_reviews']=json.loads(queue_reviews)
+ save('local-receipts.json',json.dumps(local,sort_keys=True).encode())
  receipts={r['key']:r for r in local['receipts']};digests={}
  for r in local['digests']:digests.setdefault(r['key'],[]).append(r)
  matched=[];missing=[]
@@ -94,6 +97,24 @@ try:
   if row.get('succeeded') is not True or not 200<=row.get('status_code',0)<300 or row.get('url')!=supervisor.PUBLIC or type(payload) is not dict or payload.get('account_id')!=env['FANSAPI_ACCT']:
    if delivery_history.retry_state(row,ok_index)=='resolved':continue   # same event/destination/payload retried successfully; that success is reconciled below
    missing.append({'key':key,'reason':'failed_or_ambiguous_delivery'});continue
+  # Collection only identifies a candidate exact audit. The image-owned
+  # validator independently checks the full queue schema and current digest set.
+  queue_candidate=False
+  hashes={x['hash'] for x in local['digests'] if x['key']==key}
+  for audit in local['queue_reviews']:
+   proof,result=audit.get('before',{}),audit.get('result',{})
+   if (proof.get('eventKey')!=key or proof.get('providerAccount')!=env['FANSAPI_ACCT']
+       or set(proof.get('payloadSha256s',[]))!=hashes or result.get('resolved') is not True
+       or result.get('outcome')!='queue_event_group_reviewed'):continue
+   originals=proof.get('rawBodies',[])
+   if type(originals) is not list or not 1<=len(originals)<=16:continue
+   try:
+    bodies=[x.encode('utf-8') for x in originals]
+    queue_candidate=({sha(x) for x in bodies}==hashes and any(json.loads(x)==payload for x in bodies))
+   except (ValueError,TypeError,AttributeError):queue_candidate=False
+   if queue_candidate:break
+  if queue_candidate:
+   matched.append({'key':key,'local_kind':'audited_queue_group_review'});continue
   rec=receipts.get(key)
   if rec:
    raw=base64.b64decode(rec['raw'])

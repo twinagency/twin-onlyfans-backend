@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from fans_api_adapter.event_scope import classify_raw, SUPPORTED, IRRELEVANT, MATERIAL
+from fans_api_adapter.queue_review import reviewed_queue_delivery
 import re
 from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec,CLASSES
 from delivery_history import canon,sha,retry_index,retry_state
@@ -77,6 +78,11 @@ def validate(root):
             raise RuntimeError('failed or ambiguous provider delivery')
         raw=json.dumps(payload,separators=(',',':')).encode()
         verdict=classify_raw(raw)
+        if row.get('event')!=payload.get('event'):raise RuntimeError('provider event changed')
+        if reviewed_queue_delivery(local,key,payload,PROVIDER):
+            findings.append({'event_key':key,'event':payload['event'],'disposition':'audited_queue_group_review',
+                             'limitation':'operator reviewed provider queue and both fan histories; no send authority'})
+            continue
         if verdict.cls not in (SUPPORTED,IRRELEVANT,MATERIAL):raise RuntimeError('provider event is malformed or not classified')
         event,fan=verdict.event,verdict.fan
         if row.get('event')!=event:raise RuntimeError('provider event changed')

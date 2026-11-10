@@ -435,7 +435,12 @@ class Store:
                                'release_takeover':'handback', 'resume_automation':'handback'}
                 permission = permissions.get(action) or ('handback' if mode == 'automated' else
                              'takeover' if mode == 'human_controlled' else 'stop')
+                # Internal reductions only: request_takeover (more human control) for the journey detector and the
+                # webhook, no_contact for the engine. None can activate, resume or hand back; the journey actor is
+                # honoured only outside an HTTP agency scope and never for an operator-supplied name.
                 safe_system = ((actor == 'fans-webhook' and mode == 'human_controlled' and action == 'request_takeover')
+                               or (actor == 'engine-journey' and mode == 'human_controlled' and action == 'request_takeover'
+                                   and current_scope.get() is None)
                                or (actor in {'engine', 'offline-engine'} and mode == 'no_contact' and action == 'mark_no_contact'))
                 if not safe_system:
                     authorize_pilot(pilot_config, actor, permission)

@@ -114,6 +114,11 @@ class ModelRuntime:
         if journey.get('human_required'):
             turn.handover('journey_' + str(journey['human_required']))
             raise Refused('this conversation needs a human; request handed to a human')
+        latest = turn.snapshot['current_message']['body']
+        if type(latest) is str and len(latest) > self.budget.latest_review_chars:
+            # Explicit handled outcome for oversized input: no prompt is built, no model call or cost, and no invented answer.
+            turn.handover('latest_input_oversized', {'chars': len(latest), 'limit': self.budget.latest_review_chars})
+            raise Refused('latest message is too long to answer automatically; request handed to a human')
         if classify_turn(turn.snapshot['current_message']['body']) == 'role_question' and not self._identity_line(profile, journey):
             turn.handover('identity_no_approved_wording')
             raise Refused('no approved identity wording; request handed to a human')
@@ -293,6 +298,11 @@ class ModelRuntime:
             if cfg.upstream_provider:
                 ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=True)
             verdict = Verdict('invalid', reasons=('answer was longer than the output bound',)) if oversize else judge(text, jctx)
+            if getattr(result, 'finish_reason', None) == 'length' and verdict.outcome != 'refusal':
+                # The provider says it stopped at the length limit: the text is incomplete (or empty because the limit was
+                # spent before any text). That is not a refusal and not a silent completion; it gets the normal single
+                # corrected, costed regeneration, never more. A genuine refusal in the text stays a refusal.
+                verdict = Verdict('invalid', reasons=('the previous answer was cut off by the output length limit; write one shorter reply',))
             recorded_outcome = 'verified_ok' if cfg.upstream_provider and verdict.outcome == 'ok' else verdict.outcome
             ledger.set_outcome(turn.account, reservation.call_id, recorded_outcome)
             if verdict.outcome == 'ok':

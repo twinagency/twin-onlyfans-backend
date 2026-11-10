@@ -600,6 +600,28 @@ def unresolved(store, tenant, account, actor=None):
             if held is not None:
                 items.append(_item('unattributed_webhook', 'review', 'operator', 'review_provider_evidence',
                     'Signed provider evidence could not be safely attributed or projected. Sends remain held pending review.'))
+            for epoch_, key_, detail_ in s.execute(select(OfFansProjection.epoch, OfFansProjection.event_key,
+                    OfFansProjection.detail).join(OfFansWebhook, and_(
+                    OfFansWebhook.account_id == OfFansProjection.account_id,
+                    OfFansWebhook.epoch == OfFansProjection.epoch, OfFansWebhook.event_key == OfFansProjection.event_key))
+                    .join(OfFansConnection, and_(OfFansConnection.account_id == OfFansWebhook.account_id,
+                          OfFansConnection.epoch == OfFansWebhook.epoch)).where(
+                    OfFansProjection.account_id == account, OfFansProjection.status == 'held',
+                    OfFansProjection.detail.in_(_REPROJECTABLE_DETAILS), OfFansConnection.binding_id == binding,
+                    or_(fan_expr.in_(tuple(map(str, allowed))), fan_expr.is_(None)))
+                    .order_by(OfFansProjection.updated_at, OfFansProjection.event_key).limit(50)):
+                items.append(_item('held_projection', projection_resolution_key(binding, epoch_, key_), 'operator',
+                    'reproject_held_event', 'A supported provider event is held (' + str(detail_) + '). Re-drive it '
+                    'once its missing evidence exists; this grants no send authority.',
+                    eventEpoch=epoch_, eventKey=key_, scopeRevision=scope.revision))
+            for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
+                    OfFansEvidence.kind == 'human_sent', OfFansEvidence.status == 'held',
+                    OfFansEvidence.reason == 'queued_send_to_engine_owned_fan',
+                    OfFansEvidence.fan_id.in_(allowed)).order_by(OfFansEvidence.created_at).limit(50)):
+                cid, revision = conv(row.fan_id)
+                items.append(_item('held_send_evidence', row.evidence_id, 'operator', 'review_queued_send',
+                    f'A queued send reached fan {row.fan_id}. Only that fan is held until reviewed.',
+                    cid, revision, row.created_at, evidenceId=row.evidence_id))
 
         if scope is not None:
             from .pilot_scope import unresolved_webhook_digests, digest_resolution_key
@@ -694,7 +716,7 @@ def _reconcile_provider_event(store, tenant, account, item_id, body):
     """Exact retained bytes and documented semantics, never a blanket clear/retry."""
     from db.onlyfans_engine_models import OfEnginePilotWebhookDigest, OfFansConnection, OfFansWebhook
     from fans_api_adapter.events import _parse
-    from fans_api_adapter.event_scope import known_irrelevant_event
+    from fans_api_adapter.event_scope import classify_body, IRRELEVANT, MATERIAL, COUNTER_EVENTS
     from .pilot_scope import require, authorize, digest_resolution_key
     required = {'commandKey','actor','evidenceRef','scopeRevision','eventEpoch','eventKey','payloadSha256','rawBody'}
     if type(body) is not dict or set(body) != required:
@@ -741,8 +763,9 @@ def _reconcile_provider_event(store, tenant, account, item_id, body):
                 parsed = _parse(raw)
             except Refused:
                 raise Conflict('malformed provider evidence remains held') from None
-            if parsed['account_id'] != connection.provider_account_id or not known_irrelevant_event(parsed):
-                raise Conflict('evidence does not prove a documented irrelevant event')
+            verdict = classify_body(parsed)
+            if parsed['account_id'] != connection.provider_account_id or verdict.cls not in (IRRELEVANT, MATERIAL):
+                raise Conflict('evidence does not prove a documented irrelevant or reviewable fan event')
             conflict = s.scalar(select(OfEnginePilotWebhookDigest.payload_sha256).where(
                 OfEnginePilotWebhookDigest.account_id==account,OfEnginePilotWebhookDigest.epoch==epoch,
                 OfEnginePilotWebhookDigest.event_key==event_key,
@@ -751,8 +774,9 @@ def _reconcile_provider_event(store, tenant, account, item_id, body):
             if conflict is not None or original is not None and original.payload_sha256 != digest:
                 raise Conflict('conflicting provider key remains held')
             prior = s.get(OfLaunchCommand,(account,ident))
+            material = verdict.cls == MATERIAL
             result = {'ok':True,'accountId':account,'id':item_id,'action':'reconcile','commandKey':key,
-                'outcome':'documented_irrelevant_event_classified','resolved':True}
+                'outcome':'material_event_reviewed' if material else 'documented_irrelevant_event_classified','resolved':True}
             if prior is not None:
                 if prior.binding_id != binding or prior.kind != 'plan_c_webhook_resolution':
                     raise Conflict('provider resolution identity conflict')
@@ -760,9 +784,88 @@ def _reconcile_provider_event(store, tenant, account, item_id, body):
             if row.safety_hold is not True:
                 raise Conflict('provider event is not awaiting classification')
             _record(s,account,binding,ident,'plan_c_webhook_resolution',request_hash,actor,body['evidenceRef'],
-                {**before,'classification':'documented_irrelevant_counter','eventType':parsed['event']},result)
+                {**before,'classification':('material_fan_event' if material else 'documented_irrelevant_counter'
+                    if parsed['event'] in COUNTER_EVENTS else 'documented_irrelevant_event'),
+                 'eventType':parsed['event'],'fan':verdict.fan},result)
             return result
     return _idempotent(store,account,binding,key,'plan_c_reconcile',request_hash,actor,body['evidenceRef'],before,run)
+
+
+_REPROJECTABLE_DETAILS = ('deletion_mapping_missing_or_ambiguous', 'deletion_binding_unproven',
+                          'deletion_epoch_unproven', 'pilot_fan_scope_changed')
+
+
+def projection_resolution_key(binding, epoch, event_key):
+    return hashlib.sha256(f'plan-c-projection-resolve:{binding}:{epoch}:{hashlib.sha256(event_key.encode()).hexdigest()}'.encode()).hexdigest()
+
+
+def _reconcile_held_projection(store, tenant, account, item_id, body):
+    """Re-drive one held projection of a SUPPORTED event from its retained exact bytes.
+
+    Only holds caused by missing/late mapping evidence (deletion before its message, fan scope that has
+    since been restored) can be re-driven; conflicts, historical bindings, challenge recovery, payment and
+    unknown-recipient holds are refused. Re-driving runs the normal projection owner again, so it can only
+    succeed when the evidence is now present, and it creates no send, model or policy authority.
+    """
+    from db.onlyfans_engine_models import OfFansConnection, OfFansWebhook, OfFansWebhookConflict, OfEnginePilotWebhookDigest
+    from db.onlyfans_fans_intake_models import OfFansProjection
+    from fans_api_adapter.event_scope import classify_raw, SUPPORTED
+    from fans_api_adapter.events import FansEventIntake
+    from .pilot_scope import require, authorize
+    required = {'commandKey', 'actor', 'evidenceRef', 'scopeRevision', 'eventEpoch', 'eventKey'}
+    if type(body) is not dict or set(body) != required:
+        raise BadRequest('exact held-projection evidence fields required')
+    key, actor = _key(body['commandKey']), _actor(body['actor'])
+    revision, epoch = _int(body['scopeRevision'], 1), _int(body['eventEpoch'], 1, 2**63-1)
+    event_key = body['eventKey']
+    if (type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key)
+            or not evidence_allowed(PLAN_C_TRANSPORT, body['evidenceRef'])):
+        raise BadRequest('exact held-projection evidence required')
+    binding = _require_gated(store, tenant, account)
+    with Session(store.engine) as s:
+        runtime = store._runtime(s, tenant, account, lock=False)
+        _, config = require(s, runtime)
+        authorize(config, actor, 'reconcile')
+    if item_id != 'held_projection:' + projection_resolution_key(binding, epoch, event_key):
+        raise BadRequest('held-projection identity mismatch')
+    request_hash = _digest([account, item_id, body])
+    before = {'id': item_id, 'eventEpoch': epoch, 'eventKey': event_key, 'scopeRevision': revision}
+
+    def run():
+        with Session(store.engine) as s, s.begin():
+            runtime = store._runtime(s, tenant, account)
+            if runtime.binding_id != binding:
+                raise Conflict('scope changed')
+            scope, config = require(s, runtime)
+            authorize(config, actor, 'reconcile')
+            if scope.revision != revision:
+                raise Conflict('pilot revision changed')
+            connection = s.get(OfFansConnection, (account, epoch))
+            proj = s.get(OfFansProjection, (account, epoch, event_key), with_for_update=True)
+            raw = s.get(OfFansWebhook, (account, epoch, event_key))
+            if connection is None or connection.binding_id != binding or proj is None or raw is None:
+                raise NotFound('held projection unavailable')
+            if proj.status != 'held' or proj.detail not in _REPROJECTABLE_DETAILS:
+                raise Conflict('projection is not an evidence-recoverable hold')
+            if hashlib.sha256(bytes(raw.raw_body)).hexdigest() != raw.payload_sha256 or raw.status != 'accepted':
+                raise Conflict('retained provider bytes do not match')
+            conflicting = s.scalar(select(OfFansWebhookConflict.payload_sha256).where(
+                OfFansWebhookConflict.account_id == account, OfFansWebhookConflict.epoch == epoch,
+                OfFansWebhookConflict.event_key == event_key).limit(1)) or s.scalar(
+                select(OfEnginePilotWebhookDigest.payload_sha256).where(
+                    OfEnginePilotWebhookDigest.account_id == account, OfEnginePilotWebhookDigest.epoch == epoch,
+                    OfEnginePilotWebhookDigest.event_key == event_key,
+                    OfEnginePilotWebhookDigest.payload_sha256 != raw.payload_sha256).limit(1))
+            if conflicting is not None:
+                raise Conflict('conflicting provider key remains held')
+            if classify_raw(bytes(raw.raw_body)).cls != SUPPORTED:
+                raise Conflict('event is not a supported projection')
+            proj.status, proj.detail, proj.updated_at = 'pending', 'operator_reproject', utcnow()
+        status = FansEventIntake(store)._project(account, epoch, event_key)
+        return {'ok': True, 'accountId': account, 'id': item_id, 'action': 'reconcile', 'commandKey': key,
+                'outcome': 'reprojected' if status == 'projected' else 'reprojected_' + str(status),
+                'projection': status, 'resolved': status in ('projected', 'ignored')}
+    return _idempotent(store, account, binding, key, 'plan_c_reconcile', request_hash, actor, body['evidenceRef'], before, run)
 
 
 def reconcile(store, tenant, account, item_id, body):
@@ -776,6 +879,8 @@ def reconcile(store, tenant, account, item_id, body):
     human_hold / handover_request: refused; they end with hand back or the request workflow."""
     if type(item_id) is str and item_id.startswith('provider_event:'):
         return _reconcile_provider_event(store, tenant, account, item_id, body)
+    if type(item_id) is str and item_id.startswith('held_projection:'):
+        return _reconcile_held_projection(store, tenant, account, item_id, body)
     if type(body) is not dict or set(body) != {'commandKey', 'actor', 'evidenceRef'}:
         raise BadRequest('exact command keys required')
     key, actor = _key(body['commandKey']), _actor(body['actor'])
@@ -815,6 +920,22 @@ def reconcile(store, tenant, account, item_id, body):
                         or (allowed is not None and row.fan_id not in allowed) or (row.status == 'confirmed' and row.applied)):
                     raise NotFound('item unavailable')
                 outcome = 'acknowledged'
+            elif kind == 'held_send_evidence':
+                # A queued send to an owned fan holds only that fan. An audited operator review releases only
+                # this row: no takeover, no other hold and no send authority change.
+                from fans_api_adapter.evidence_scope import webhook_binding
+                row = s.get(OfFansEvidence, (account, ident), with_for_update=True)
+                if (row is None or row.kind != 'human_sent' or webhook_binding(s, row) != binding
+                        or (allowed is not None and row.fan_id not in allowed)
+                        or row.reason not in ('queued_send_to_engine_owned_fan', 'operator_reconciled_queued_send')):
+                    raise NotFound('item unavailable')
+                if row.status == 'dismissed':
+                    raise Conflict('item is already resolved')
+                if row.status != 'held':
+                    raise Conflict('item is not ready for reconciliation')
+                row.status, row.resolved_by, row.reason, row.updated_at = (
+                    'dismissed', actor, 'operator_reconciled_queued_send', now)
+                outcome = 'dismissed'
             elif kind in ('unlinked_transaction', 'unreconciled_access'):
                 row = s.get(OfFansEvidence, (account, ident), with_for_update=True)
                 expected = ('transaction', 'chargeback') if kind == 'unlinked_transaction' else ('unlock',)

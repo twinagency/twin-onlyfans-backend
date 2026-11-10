@@ -28,6 +28,11 @@ class Grounding:
     media_reference: bool | None = None        # current request/reference may depend on media; never action authority
     current_offer_prices: frozenset = frozenset()  # informational replies only; frozen eligible terms
     access_labels: tuple = ()                  # accepted cards with confirmed access, not payment/ownership
+    # Product wording (price without a currency, media type, duration). Off unless the snapshot shows a product is being
+    # discussed (a scoped price/grant/card referent, or a request about content or its price).
+    product_context: bool = False
+    media_kinds: frozenset = frozenset()       # 'picture' / 'video' kinds the scoped referent(s) are known to contain
+    durations: frozenset = frozenset()         # seconds; no snapshot carries a duration today, so none can be stated
 
 
 def grounding_from_snapshot(snapshot, proposal=None):
@@ -68,7 +73,26 @@ def grounding_from_snapshot(snapshot, proposal=None):
                           if isinstance(card, dict) and isinstance(card.get('label'), str)
                           and card.get('sendState') == 'accepted' and card.get('accessState') == 'confirmed'
                           and card.get('financialReview') is False and card.get('messageDeleted') is not True)
-    return Grounding(frozenset(quantities), labels, media_reference, prices, access_labels)
+    kinds, durations = set(), set()
+    referents = [*[g for g in grants if isinstance(g, dict)],
+                 *[p for p in snapshot.get('price_information') or [] if isinstance(p, dict)],
+                 *[o for o in (snapshot.get('offer_reference') or {}).get('offers') or [] if isinstance(o, dict)],
+                 *[c for c in (snapshot.get('offer_reference') or {}).get('cards') or [] if isinstance(c, dict)]]
+    for ref in referents:
+        media = ref.get('media') if isinstance(ref.get('media'), dict) else {}
+        if type(media.get('pictures')) is int and media['pictures'] > 0:
+            kinds.add('picture')
+        if type(media.get('videos')) is int and media['videos'] > 0:
+            kinds.add('video')
+        if type(ref.get('durationSeconds')) is int and ref['durationSeconds'] > 0:
+            durations.add(ref['durationSeconds'])
+        for field in ('label', 'description'):
+            if isinstance(ref.get(field), str):
+                kinds.update(_kinds_in(ref[field]))
+    from .writer_context import is_price_question
+    product_context = bool(referents) or media_reference is True or is_price_question(message)
+    return Grounding(frozenset(quantities), labels, media_reference, prices, access_labels,
+                     product_context, frozenset(kinds), frozenset(durations))
 
 
 _NUMBER_WORDS = {'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8,
@@ -231,6 +255,108 @@ def _quantity_claims(text):
             yield number
 
 
+# --- product wording: price without a currency, media type and duration ----------------------------------------
+# These recognise an assertion ABOUT THE PRODUCT being discussed ("the photo costs four", "it is a ten-minute video"),
+# structurally (subject + verb + value), not a bare number or a bare word like "video". They run only when the snapshot
+# shows a product is under discussion, and the referent's facts (price, kinds, duration) come only from the scoped
+# snapshot: nothing here supplies a missing fact. A negated, quoted, attributed, conditional or questioning clause is
+# not a claim.
+_KIND_WORDS = {'picture': r"(?:pics?|pictures?|photos?|photographs?|images?|selfies|stills?)",
+               'video': r"(?:videos?|vids?|clips?|reels?|gifs?)"}
+_ANY_KIND = '(?:' + '|'.join(_KIND_WORDS.values()) + ')'
+_WORD_ALT = '|'.join(sorted(_NUMBER_WORDS, key=len, reverse=True))
+_NUM = r"(\d+(?:[.,]\d{1,2})?|(?:" + _WORD_ALT + r")(?:[\s-]+(?:" + _WORD_ALT + r"))?)"
+_TIME_UNIT = r"(?:minutes?|mins?|seconds?|secs?|hours?|hrs?)"
+_NOT_A_PRICE = (r"(?![\d.,]*\d)(?!\s*(?:%|percent|times?|more|of\b|" + _TIME_UNIT + r"|days?|weeks?|months?|years?|"
+                r"dollars?|bucks|usd|aud|eur|gbp|cad|credits?|stars?|" + _ANY_KIND + r"\b))")
+_PRICE_VERB = r"(?:costs?|costing|priced|prices?|charges?|charged|pays?|paying|goes\s+for|going\s+for|sells?\s+for|sold\s+for)"
+_BARE_PRICES = (
+    re.compile(r"\b" + _PRICE_VERB + r"\b(?:\s+(?:is|was|at|of|just|only|about|around|like|you|me))*\s+" + _NUM + r"\b" + _NOT_A_PRICE, re.I),
+    re.compile(r"\b" + _ANY_KIND + r"\s+(?:is|are|was)\s+(?:only\s+|just\s+)?" + _NUM + r"\b" + _NOT_A_PRICE, re.I),
+    re.compile(r"\b" + _NUM + r"\s+(?:for|per)\s+(?:the|a|an|this|that|each|one|it|them|both|all)\b", re.I),
+)
+_ATTRIBUTED = re.compile(r"\b(?:you|u|he|she|they)\s+(?:said|say|says|mentioned|wrote|thought|think|thinks|heard|told\s+me|asked|read|saw|claimed)\b"
+                         r"|\b(?:said|says|saying|quote|quoted)\b", re.I)
+_HYPOTHETICAL = re.compile(r"\b(?:were|imagine|suppose|pretend|hypothetical(?:ly)?|wish)\b", re.I)
+_PRODUCT_SUBJECT = re.compile(r"\b(?:it|this|that|these|those|they|one|prices?)\b|\b" + _ANY_KIND + r"\b", re.I)
+_TYPE_CLAIM = re.compile(r"\b(?:it|this|that|they|these|those)(?:'s|'re|\s+is|\s+are|\s+was|\s+will\s+be)\s+"
+                         r"(?:just\s+|only\s+|actually\s+|really\s+)?(?:(?:a|an|the|one|my)\s+)?"
+                         r"(?:(?!(?:not|no|never|a|an|the)\b)[\w-]+\s+){0,2}(" + _ANY_KIND + r")\b(?!\s+(?:call|chat|game|games|shoot|tape))", re.I)
+_DURATION_CLAIMS = (
+    # copula: a length needs "long" or a media noun after it ("it is a ten minute drive" is not a claim about the product)
+    re.compile(r"\b(?:it|this|that|they|these|those)(?:'s|'re|\s+is|\s+are|\s+was|\s+will\s+be)\s+(?:just\s+|only\s+|actually\s+|about\s+|around\s+)?"
+               r"(?:an?\s+)?" + _NUM + r"[\s-]*(" + _TIME_UNIT + r")(?:[\s-]*long\b|[\s-]+" + _ANY_KIND + r"\b)", re.I),
+    re.compile(r"\b(?:it|this|that|they|these|those)\s+(?:runs?|lasts?|goes\s+for)\s+(?:just\s+|only\s+|about\s+|around\s+|roughly\s+)*"
+               r"(?:an?\s+)?" + _NUM + r"[\s-]*(" + _TIME_UNIT + r")\b", re.I),
+    re.compile(r"\b" + _ANY_KIND + r"\s+(?:is|are|was|runs?|lasts?|goes\s+for)\s+(?:just\s+|only\s+|about\s+|around\s+|roughly\s+)*"
+               r"(?:an?\s+)?" + _NUM + r"[\s-]*(" + _TIME_UNIT + r")\b", re.I),
+)
+
+
+def _kinds_in(text):
+    return {kind for kind, rx in _KIND_WORDS.items() if re.search(r"\b" + rx + r"\b", text, re.I)}
+
+
+def _number_value(raw):
+    raw = raw.lower().replace(',', '.')
+    if raw[0].isdigit():
+        whole, _, frac = raw.partition('.')
+        return int(whole) * 100 + int((frac + '00')[:2])
+    return sum(_NUMBER_WORDS[w] for w in re.split(r"[\s-]+", raw) if w in _NUMBER_WORDS) * 100
+
+
+def _asserted(clause, question, start):
+    """True when the match at `start` is the writer asserting it (not a question, negation, condition, quote or report)."""
+    if question or _negated(clause, start) or _HYPOTHETICAL.search(clause):
+        return False
+    window = _window(clause, start, 8)
+    if _CONDITIONAL.search(window) or _ATTRIBUTED.search(window) or clause[:start].count('"') % 2 or clause[:start].count('\u201c') > clause[:start].count('\u201d'):
+        return False
+    return True
+
+
+def _bare_price_claims(text):
+    """Cents asserted as the product's price without a currency word or sign ("the photo costs four")."""
+    for clause, question in _clauses(text.replace('\u2019', "'")):
+        if not _PRODUCT_SUBJECT.search(clause):
+            continue
+        for rx in _BARE_PRICES:
+            for match in rx.finditer(clause):
+                if rx is _BARE_PRICES[2] and not re.search(r"\b" + _ANY_KIND + r"\b", clause, re.I):
+                    continue
+                if _asserted(clause, question, match.start()):
+                    yield _number_value(match.group(1))
+
+
+def _media_type_claims(text):
+    for clause, question in _clauses(text.replace('\u2019', "'")):
+        for match in _TYPE_CLAIM.finditer(clause):
+            if not _NEGATION.search(match.group(0)) and _asserted(clause, question, match.start()):
+                yield next(kind for kind, rx in _KIND_WORDS.items() if re.fullmatch(rx, match.group(1), re.I))
+
+
+def _duration_claims(text):
+    scale = {'s': 1, 'm': 60, 'h': 3600}
+    for clause, question in _clauses(text.replace('\u2019', "'")):
+        for rx in _DURATION_CLAIMS:
+            for match in rx.finditer(clause):
+                if not _NEGATION.search(match.group(0)) and _asserted(clause, question, match.start()):
+                    number = _number_value(match.group(1)) // 100
+                    yield number * scale[match.group(2)[0].lower()]
+
+
+def _check_product_wording(texts, grounding, verified_prices):
+    if not grounding.product_context:
+        return
+    for text in texts:
+        if any(cents not in verified_prices for cents in _bare_price_claims(text)):
+            raise Refused('unsupported price claim in model text')
+        if any(kind not in grounding.media_kinds for kind in _media_type_claims(text)):
+            raise Refused('unsupported media type claim in model text')
+        if any(seconds not in grounding.durations for seconds in _duration_claims(text)):
+            raise Refused('unsupported media duration claim in model text')
+
+
 # --- customs and role/identity claims ---------------------------------------------------------------------------
 _CUSTOM_TERM = re.compile(r"\bcustoms?\b|\bcustom[\s-]+(?:made|video|vid|pic|pics|photo|photos|clip|clips|content|set|request|order)\b"
                           r"|\b(?:personali[sz]ed|made[\s-]to[\s-]order)\s+(?:video|vid|pic|pics|photo|photos|clip|clips|content|set)\b"
@@ -347,6 +473,7 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
     if proposal.pitch and sales_mode == 'paused':
         raise Refused('sales are paused')
     _check_quantities(texts, grounding)
+    _check_product_wording(texts, grounding, set(verified_prices))
     for text in texts:
         if grounding.media_reference is False and _inventory_conversation_claim(text):
             raise Refused('media availability does not determine conversation permission; follow the documented creator limits')

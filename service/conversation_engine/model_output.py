@@ -153,7 +153,8 @@ _VIDEO_NOUNS = r"(?:vids?|videos?|clips?)"
 _OTHER_NOUNS = r"(?:media|items?|pieces?|files?)"
 _TIME_UNITS = {'minute', 'minutes', 'min', 'mins', 'second', 'seconds', 'sec', 'secs', 'hour', 'hours', 'hr', 'hrs',
                'day', 'days', 'week', 'weeks'}
-_QUANTITY = re.compile(r"\b(\d{1,3}|" + '|'.join(_NUMBER_WORDS) + r")\s+(?:(\w+)\s+)??(?:(\w+)\s+)??("
+# not the cents of a price ("$3.00 for the photo" is a price, not "00 pictures")
+_QUANTITY = re.compile(r"(?<![$\u00a3\u20ac])(?<!\d\.)\b(\d{1,3}|" + '|'.join(_NUMBER_WORDS) + r")\s+(?:(\w+)\s+)??(?:(\w+)\s+)??("
                        + _PICTURE_NOUNS + '|' + _VIDEO_NOUNS + '|' + _OTHER_NOUNS + r")\b", re.I)
 
 

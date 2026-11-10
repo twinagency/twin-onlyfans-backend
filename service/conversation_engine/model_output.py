@@ -127,7 +127,7 @@ _WITHHOLD = re.compile(
     r"tell me (first|and (then|i'?ll))|(first|before (i|that)),? (you )?(tell|answer|show|prove|beg|convince)|"
     r"only if you (tell|answer|say)|not until you|until you (tell|answer|say|prove)|earn (it|that|this|them|the)\b|"
     r"you (have|need|gotta|got) to (earn|convince|beg|prove|answer)|convince me|"
-    r"make me want to (?:answer|tell|show|send|give|reply|respond|share|talk|help)|what do i get (?:if|for) (?:answering|telling|showing|sending|helping|replying)|"
+    r"make me want to (?:answer|tell|show|send|give|reply|respond|share|talk|help)|what do i get if\b|what do i get for (?:answering|telling|showing|sending|helping|replying)|"
     r"if you answer|once you answer|after you answer)", re.I)
 # Claims about who reads, writes, approves or watches these chats: only the approved identity wording may say so.
 _INVOLVEMENT = re.compile(

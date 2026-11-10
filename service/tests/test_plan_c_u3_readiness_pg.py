@@ -303,7 +303,7 @@ def test_budget_failure_still_denies_with_a_fan_hold_present(rig, guard, sup, tm
         settle(client, rig)
         host = Host(sup, rig, client, tmp_path, monkeypatch)
         host.check()
-        host.team = (100 + 260, 1000 - 5)                  # provider credits beyond the early-stop threshold
+        host.team = (100 + 310, 1000 - 5)                  # provider credits beyond the early-stop threshold (300)
         with pytest.raises(guard.GuardFailure, match='credit_early_stop'):
             host.check()
         host.team = (90, 1000)                             # inconsistent monitor evidence also denies
@@ -412,7 +412,7 @@ def test_identity_security_and_credit_errors_are_not_retried(rig, guard, sup, tm
     host = stopped_host(sup, rig, tmp_path, monkeypatch)
     hard = guard.GuardFailure
     if which == 'credit_early_stop':
-        host.team = (100 + 260, 995)
+        host.team = (100 + 310, 995)
         expect = 'credit_early_stop'
     elif which == 'credit_monitor':
         host.mp.setattr(sup, 'team_usage', lambda baseline: (_ for _ in ()).throw(hard('credit_monitor_unavailable')))

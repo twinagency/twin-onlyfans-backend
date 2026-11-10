@@ -1480,13 +1480,24 @@ class TextAuthority:
                 self._hold_unknown(s, row, "dispatch_expired", tenant_id)
             return len(rows)
 
-    def repair(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False):
+    def repair(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False, allowed_fans=None):
+        """Project saved accepted receipts (network-free; this method cannot call a transport).
+
+        ``allowed_fans`` is the bounded normal-worker-recovery form: only those fans of the current binding
+        are repaired, and one receipt that cannot be projected (conflicting canonical identity, invalid saved
+        evidence) stays held exactly as before without stopping the rest or the worker tick.
+        """
         if type(limit) is not int or not 1 <= limit <= 100 or type(synthetic_engine_only) is not bool:
             raise Refused("invalid repair limit")
+        if allowed_fans is not None and (not synthetic_engine_only or type(allowed_fans) is not frozenset or not allowed_fans
+                or any(type(fan) is not int or not 0 < fan < 2**63 for fan in allowed_fans)):
+            raise Refused("invalid repair fan scope")
         with Session(self.engine) as s, s.begin():
             runtime = self._historical_runtime(s, tenant_id, account_id)
             query = select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account_id,
                 OfTextIntent.status == "accepted", OfTextIntent.projected_at.is_(None))
+            if allowed_fans is not None:
+                query = query.where(OfTextIntent.fan_id.in_(allowed_fans))
             if synthetic_engine_only:
                 from db.onlyfans_engine_models import OfEngineDecision
                 policy = s.get(OfDeliveryPolicy, account_id)
@@ -1496,4 +1507,11 @@ class TextAuthority:
                     (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(
                     OfTextIntent.binding_id == runtime.binding_id, OfEngineDecision.binding_id == runtime.binding_id)
             ids = s.scalars(query.order_by(OfTextIntent.created_at, OfTextIntent.intent_id).limit(limit)).all()
-        return sum(self.materialize(tenant_id, account_id, identity, synthetic_engine_only=synthetic_engine_only) for identity in ids)
+        repaired = 0
+        for identity in ids:
+            try:
+                repaired += bool(self.materialize(tenant_id, account_id, identity, synthetic_engine_only=synthetic_engine_only))
+            except Refused:
+                if allowed_fans is None:
+                    raise
+        return repaired

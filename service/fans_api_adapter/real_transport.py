@@ -259,6 +259,15 @@ class FansApiRealTransport:
                                                            synthetic_engine_only=True,
                                                            allowed_fans=frozenset(map(int, self.allowed_chats)))
 
+    def recover_accepted(self):
+        """Restart recovery for a crash between the saved accepted receipt and its transcript projection.
+
+        Network-free: TextAuthority.repair re-projects the saved receipt only (no POST, no new key), restricted to
+        the current binding's engine intents of the allowed fans. Returns how many receipts were materialized.
+        """
+        return TextAuthority(self.store).repair(self.tenant_id, self.account_id, limit=32, synthetic_engine_only=True,
+                                                allowed_fans=frozenset(map(int, self.allowed_chats)))
+
     def reconcile_accepted(self, intent_id):
         """Retain an unknown send; a POST is not a read-only reconciliation.
 

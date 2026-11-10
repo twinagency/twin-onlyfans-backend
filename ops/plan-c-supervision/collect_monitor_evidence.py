@@ -4,7 +4,8 @@ from urllib.parse import urlencode
 ROOT=Path('/srv/projects/twin-plan-c-pilot-20261109')
 sys.path.insert(0,str(ROOT/'supervision-v11'))
 import supervisor
-from incident_state import classify_journal,incident_spec,WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT
+import delivery_history
+from incident_state import classify_journal,journal_class,incident_spec,WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT
 from guard_core import credit_estimate
 if len(sys.argv)!=2:raise SystemExit('one exclusive collection directory is required')
 d=Path(sys.argv[1]).resolve()
@@ -22,14 +23,15 @@ def sql(query):
 out={'state':'blocked','incident_sha256':None}
 try:
  marker=(ROOT/'supervision-v11/outage-open.json').read_bytes();out['incident_sha256']=sha(marker)
- spec=incident_spec(out['incident_sha256'])
+ spec=incident_spec(out['incident_sha256'],marker)
  if spec is None:raise RuntimeError('incident changed')
  incident=json.loads(marker);save('original-incident.json',marker)
  state=supervisor.db_state()
- if state['status']!='stopped' or state['revision']!=spec['scope_revision']:raise RuntimeError('stopped revision changed')
+ if state['status']!='stopped' or (spec['scope_revision'] is not None and state['revision']!=spec['scope_revision']):raise RuntimeError('stopped revision changed')
  if subprocess.check_output(['docker','ps','-q','--filter','name=twin-plan-c-pilot-active-sender']).strip():raise RuntimeError('sender running')
  journal=subprocess.check_output(['journalctl','-u','plan-c-pilot-supervisor.service','--since',incident['last_confirmed_healthy_utc'],'--no-pager','-o','cat'],timeout=10)
- classify_journal(journal,spec['classification'])
+ if spec['pinned']:classify_journal(journal,spec['classification'])
+ else:spec['classification']=journal_class(journal);spec['scope_revision']=state['revision']
  out['journal_sha256']=save('journal.txt',journal)
  env={}
  for line in supervisor.ENV.read_text().splitlines():
@@ -51,32 +53,46 @@ try:
  expected=supervisor.readjson(ROOT/'evidence/webhook-registration.log')
  if any(show.get(k)!=expected.get(k) for k in ('id','url','account_ids','account_scope')) or show.get('enabled') is not True or show.get('has_signing_secret') is not True or set(show.get('events',[]))!=set(expected['events']) or show.get('paused',False) is not False:raise RuntimeError('dedicated webhook changed')
  interval_start=incident['last_confirmed_healthy_utc']
- if out['incident_sha256'] in (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT):
+ pinned_webhook=out['incident_sha256'] in (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT)
+ if pinned_webhook:
   intent=ROOT/'evidence/webhook-enable-v2/put-intent.json'
   interval_start=datetime.datetime.fromtimestamp(intent.stat().st_mtime,datetime.timezone.utc).isoformat()
- q=urlencode({'date_start':interval_start,'limit':100,'offset':0})
- deliveries=get('/api/webhooks/'+wid+'/deliveries?'+q,'deliveries.json')
- if deliveries['_pagination'].get('next_page') is not None:raise RuntimeError('provider interval is not complete within bounded page')
+ elif not spec['pinned']:
+  # Never earlier than the recorded enable boundary; the interval start is the last confirmed healthy instant.
+  boundary=supervisor.readjson(ROOT/'supervision-v11/delivery-enable-boundary.json')
+  if boundary.get('url')!=supervisor.PUBLIC or boundary.get('webhook_id')!=wid:raise RuntimeError('enable boundary identity changed')
+  interval_start=max(delivery_history.parse_ts(interval_start),delivery_history.parse_ts(boundary['boundary_utc'])).isoformat()
+ def pages(start,prefix,merged_name):
+  def one(start_iso,limit,offset,name):
+   return get('/api/webhooks/'+wid+'/deliveries?'+urlencode({'date_start':start_iso,'limit':limit,'offset':offset}),name)
+  merged,window=delivery_history.collect_pages(one,start=start,prefix=prefix)
+  save(merged_name,json.dumps(merged,sort_keys=True).encode())
+  return merged,window
+ deliveries,window=pages(interval_start,'deliveries-page','deliveries.json')
  rows=deliveries['data']
  if type(rows) is not list:raise RuntimeError('invalid interval listing')
- if out['incident_sha256'] in (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT):
-  recent=get('/api/webhooks/'+wid+'/deliveries?'+urlencode({'date_start':incident['last_confirmed_healthy_utc'],'limit':100,'offset':0}),'incident-deliveries.json')
-  if recent['_pagination'].get('next_page') is not None or type(recent['data']) is not list:
-   raise RuntimeError('incident window listing incomplete')
+ if pinned_webhook:
+  recent,_=pages(incident['last_confirmed_healthy_utc'],'incident-deliveries-page','incident-deliveries.json')
   full={r.get('idempotency_key'):r for r in rows}
   for r in recent['data']:
    if full.get(r.get('idempotency_key'))!=r:
     raise RuntimeError('incident window changed during collection')
   out.update(incident_delivery_count=len(recent['data']),anchor_context='known prior receipt predates this incident',original_failure_subcause='not retained')
+ if not spec['pinned']:
+  out.update(resolution_kind='class_based',incident_id=spec['incident_id'])
+ out.update(delivery_url=supervisor.PUBLIC,delivery_url_sha256=delivery_history.sha(supervisor.PUBLIC.encode()),config_version=delivery_history.config_version(show),
+  delivery_page_count=window['pages'],delivery_duplicates_folded=window['duplicates_folded'])
  out.update(delivery_interval_start=interval_start,incident_interval_start=incident['last_confirmed_healthy_utc'])
  local=sql("select json_build_object('receipts',(select coalesce(json_agg(json_build_object('key',w.event_key,'hash',w.payload_sha256,'raw',encode(w.raw_body,'base64'),'status',w.status,'projection',p.status)),'[]'::json) from of_fans_webhook w left join of_fans_projection p using(account_id,epoch,event_key) where w.account_id='of-323358988' and w.epoch=1),'digests',(select coalesce(json_agg(json_build_object('key',event_key,'hash',payload_sha256,'hold',safety_hold)),'[]'::json) from of_engine_pilot_webhook_digest where account_id='of-323358988' and epoch=1));")
  save('local-receipts.json',local);local=json.loads(local)
  receipts={r['key']:r for r in local['receipts']};digests={}
  for r in local['digests']:digests.setdefault(r['key'],[]).append(r)
  matched=[];missing=[]
+ ok_keys={r.get('idempotency_key') for r in rows if delivery_history.success(r,url=supervisor.PUBLIC,events=set(expected['events']),account_id=env['FANSAPI_ACCT'])}-{None}
  for row in rows:
   key=row.get('idempotency_key');payload=row.get('payload')
   if row.get('succeeded') is not True or not 200<=row.get('status_code',0)<300 or row.get('url')!=supervisor.PUBLIC or type(payload) is not dict or payload.get('account_id')!=env['FANSAPI_ACCT']:
+   if key in ok_keys:continue   # superseded by a later successful retry of the same key; that success is reconciled below
    missing.append({'key':key,'reason':'failed_or_ambiguous_delivery'});continue
   rec=receipts.get(key)
   if rec:

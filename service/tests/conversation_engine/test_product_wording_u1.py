@@ -98,7 +98,7 @@ def test_media_type_from_the_label_of_the_scoped_price_information():
     'maybe it would cost four if it were a video', 'do you think it costs four?', 'is it a ten-minute video?',
     "it doesn't cost four", 'it does not cost four, it is three',
     'I have a ten minute video call later', 'It is a ten minute drive from here', "it's a video game night for me",
-    'I have two cats and I just woke up', 'it costs four hours of work to edit', 'that costs 4 percent more',
+    'I have two coffees in me and I just woke up', 'it costs four hours of work to edit', 'that costs 4 percent more',
     'ten minutes and I am free', 'one sec, grabbing my coffee',
 ])
 def test_negated_quoted_hypothetical_and_unrelated_wording_is_not_a_product_claim(body):

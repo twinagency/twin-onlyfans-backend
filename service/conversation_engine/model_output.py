@@ -108,7 +108,14 @@ _RULES = (
     ('claims to be human or denies being automated', re.compile(
         r"\b(i'?m|im|i am)\s+(a\s+)?(really\s+)?(real|human)\b|\bnot an? (ai|bot|robot)\b|\bno agency\b|\bnot an agency\b|"
         r"\bit'?s (really |actually )?me typing\b|\breal person\b", re.I)),
-    ('claims exclusivity', re.compile(r"\b(only (talking|texting|chatting) (to|with) you|you'?re the only one|just yours)\b", re.I)),
+    ('claims exclusivity', re.compile(
+        r"\b(only (talking|texting|chatting) (to|with) you|you'?re the only one|just yours)\b|"
+        # "I'm only texting you", "i only talk to you babe", "no one else but you", "I'm not talking to anyone else"; her ordinary
+        # "I only text you back when my shift ends" is not a claim about other people.
+        r"\bi(?:['’]m|\s+am|m)?\s+(?:only)\s+(?:ever\s+)?(?:talk|text|chat|speak|messag)\w*(?:\s+(?:to|with))?\s+you\b"
+        r"(?!\s+(?:back|again|when|after|once|if|before|while|during|on|at|in|because|since|for|until|about|between))|"
+        r"\b(?:nobody|no\s*one)\s+else\s+(?:but|except|besides)\s+you\b|"
+        r"\bi(?:['’]m|\s+am|m)?\s+(?:not|never)\s+(?:talk|text|chat|speak|messag)\w*\s+(?:to|with)\s+(?:anyone|anybody|any\s*one|no\s*one|nobody)\s+else\b", re.I)),
     ('relationship or future promise', re.compile(r"\b(one day we|someday we|marry (you|me)|be your girlfriend|i love you too|our future)\b", re.I)),
     ('claims content was made for him', re.compile(r"\b(made|filmed|recorded|shot|did) (this|it|that|these) (just |only |specially )?for you\b|\bjust for you\b.{0,20}\b(video|pics?|set|clip)\b", re.I)),
     ('claims to have sent or posted content', re.compile(
@@ -447,6 +454,11 @@ def creator_problems(texts, ctx):
     if any(not _age_ok(match, joined, age, ctx) for match in _AGE.finditer(joined)):
         problems.append('states an age that is not in her documented facts')
     problems.extend(_location_problems(joined, profile))
+    from .claims import creator_fact_problems
+    snapshot = getattr(ctx, 'snapshot', None) or {}
+    fan_texts = [(snapshot.get('current_message') or {}).get('body') or '']
+    fan_texts += [row.get('body') or '' for row in snapshot.get('history') or [] if row.get('direction') == 'in'][-6:]
+    problems.extend(creator_fact_problems(texts, profile, fan_texts))
     problems.extend(_sexual_problems(texts, ctx))
     low = joined.lower()
     for term in getattr(profile, 'private_terms', ()) or ():

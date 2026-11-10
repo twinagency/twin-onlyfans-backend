@@ -19,7 +19,8 @@ SENDER='http://127.0.0.1:55464'
 RESERVATIONS=[('mass-queue-observation-v1/mass-queue-observation-v1-reservation.json',1),('transaction-total-v1/transaction-total-v1-reservation.json',1),('fresh-photo-v1/fresh-photo-v1-reservation.json',12),('full-photo-v1/full-photo-v1-reservation.json',20),('bounded-photo-get-v1/bounded-photo-get-v1-reservation.json',20)]
 OPTIONAL=[('live-preflight-8a91179-20261111/queue-read-reservation.json',1),
  ('live-preflight-8a91179-20261111/fan-history-two-read-reservation.json',2),
- ('live-preflight-8a91179-20261111/fan-history-queue-times-reservation.json',2)]
+ ('live-preflight-8a91179-20261111/fan-history-queue-times-reservation.json',2),
+ ('queue-proof-711-v4/manual-reservation.json',4)]
 RESERVATIONS.append(('provider-photo-v2/provider-photo-v2-reservation.json',10))
 RESERVATIONS += [('webhook-readiness-inspection-v1/reservation.json',2),
  ('webhook-enable-v1/reservation.json',3),('webhook-enable-v2/reservation.json',3),

@@ -574,9 +574,23 @@ class FansEventIntake:
         if payload.get('isFromQueue') is True:
             # A scheduled/mass send is not a reply in this chat, so it is not takeover evidence. But a queued send that
             # reached a fan the engine owns is a competing writer the local fence cannot stop (it was queued at the
-            # provider): surface it for a person instead of ignoring it.
+            # provider). It must stop THAT fan's sends: a held human_sent evidence row is read by delivery_block on
+            # the send path (and by planning), and only an audited operator resolution releases it. It is not
+            # classified as takeover and never touches another fan.
+            from conversation_engine.pilot_scope import current as current_pilot
+            from db.onlyfans_models import OfRuntime
             owner = s.get(OfEngineOwner, (connection.account_id, fan_id))
-            if owner is not None and owner.mode == 'active':
+            pilot, pilot_config = current_pilot(s, s.get(OfRuntime, connection.account_id))
+            owned = (owner is not None and owner.mode == 'active') or (
+                pilot is not None and fan_id in pilot_config['fans'])
+            if owned:
+                row, outcome = ev.add(s, connection.account_id, dedupe=f'sent:{message_id}', kind='human_sent',
+                    source='webhook', event_key=raw.event_key, fan_id=fan_id, message_id=message_id,
+                    occurred=ev.stamp(payload.get('createdAt')), raw_sha256=raw.payload_sha256, now=now)
+                if outcome == 'conflict':
+                    return 'held', 'conflicting_duplicate'
+                if outcome == 'new':
+                    row.status, row.reason = 'held', 'queued_send_to_engine_owned_fan'
                 ev.attention(s, connection.account_id, fan_id)
                 return 'projected', 'queued_send_to_engine_owned_fan'
             return 'ignored', 'queued_broadcast'

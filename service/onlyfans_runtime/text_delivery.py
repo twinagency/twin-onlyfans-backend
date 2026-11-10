@@ -915,11 +915,23 @@ class TextAuthority:
                     or row.policy_revision != transport_generation):
                 raise Refused("dispatch is not eligible for identity preflight")
 
-    def consume_dispatch(self, tenant_id, grant: Dispatch, *, transport_generation=None):
-        """Commit the final one-use network marker, never an I/O transaction."""
+    def consume_dispatch(self, tenant_id, grant: Dispatch, *, transport_generation=None, retry_after_posts=None):
+        """Commit the final one-use network marker, never an I/O transaction.
+
+        ``retry_after_posts`` (2 or more -> never below 1) authorizes ONE further wire attempt of an
+        already-consumed grant after the transport saw a provider-proven not-sent result. It never consumes the
+        grant again: it re-runs every pre-wire check below (account/fan scope, controls, binding, freshness,
+        approval, pilot/budget gates) under the same lock, atomically advances a durable attempt counter so a
+        concurrent worker cannot take the same retry, and keeps the immutable key/payload. Any failed check
+        refuses WITHOUT changing the intent (the earlier attempt is already proven not sent); the transport then
+        settles it as not accepted and makes no further POST.
+        """
         self._validate_grant(grant)
         if transport_generation is not None and (type(transport_generation) is not int or transport_generation < 0):
             raise Refused("invalid transport generation")
+        retry = retry_after_posts is not None
+        if retry and (type(retry_after_posts) is not int or not 1 <= retry_after_posts <= 2):
+            raise Refused("invalid retry attempt")
         # Immediately-before-the-wire safety scan (R1): a stop request that landed after planning is judged now.
         self._safety_scan_intent(tenant_id, grant.account_id, grant.intent_id, status="dispatching")
         with Session(self.engine) as s, s.begin():
@@ -927,9 +939,17 @@ class TextAuthority:
             row = self._intent(s, grant.account_id, grant.intent_id)
             if self._grant(row) != grant:
                 raise Refused("dispatch grant mismatch")
-            if row.wire_started_at is not None or row.status != "dispatching":
+            if retry:
+                if row.wire_started_at is None or row.status != "dispatching":
+                    raise Refused("no wire attempt is open for a retry")
+                expected_marker = None if retry_after_posts == 1 else f"wire_attempt:{retry_after_posts}"
+                if row.reason != expected_marker:
+                    raise Refused("wire retry already taken")
+            elif row.wire_started_at is not None or row.status != "dispatching":
                 raise Refused("dispatch grant was already consumed or settled")
             now = self._db_now(s)
+            if retry and (row.wire_version != 1 or row.deadline <= now or row.expires_at <= now):
+                raise Refused("wire retry window closed")
             if row.wire_version != 1 or row.deadline <= now or row.expires_at <= now:
                 self._hold_unknown(s, row, "legacy_dispatch_unverified" if row.wire_version != 1 else "dispatch_expired",
                                    tenant_id)
@@ -981,6 +1001,8 @@ class TextAuthority:
             if concurrent:
                 from native_pilot import admission
                 cooldown = admission.cooldown_at(policy)
+                if retry and reason is None and concurrent_admission.is_after(cooldown, now):
+                    reason = "account_throttled"
                 if reason is None and concurrent_admission.is_after(cooldown, now):
                     # A provider-wide cooldown can land after admission but before
                     # the wire. Put this still-unsent intent back in the queue rather
@@ -1005,6 +1027,11 @@ class TextAuthority:
                 reason = "attempt_ownership_changed"
             if reason is None and policy.used_units > policy.limit_units:
                 reason = "cap_exhausted"
+            if retry:
+                if reason is not None:
+                    raise Refused("wire retry no longer authorized: " + reason)
+                row.reason, row.updated_at = f"wire_attempt:{retry_after_posts + 1}", now
+                return self._grant(row)
             if reason == "pilot_evidence_pending" or reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
                 # No wire marker exists yet. Release this attempt's reservation
                 # and retain the intent for a fresh admission after ingress drains.

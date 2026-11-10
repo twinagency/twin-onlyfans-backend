@@ -196,7 +196,8 @@ class FansApiRealTransport:
         key = idempotency_key(grant.account_id, grant.intent_id)
         proof = dict(account_id=grant.account_id, fan_id=grant.fan_id, intent_id=grant.intent_id,
                      attempt_id=grant.attempt_id, payload_hash=grant.payload_hash)
-        result = self._post(grant.fan_id, key, grant.body, grant.media_ids, grant.preview_ids, grant.price_cents)
+        result = self._post(grant.fan_id, key, grant.body, grant.media_ids, grant.preview_ids, grant.price_cents,
+                            retry_gate=lambda posts: self._retry_allowed(authority, tenant_id, grant, dispatch, posts))
         stamp = datetime.now(timezone.utc).isoformat()
         if result.state == 'accepted':
             return Accepted(**proof, message_id=int(result.data['message_id']), occurred_at=stamp,
@@ -205,10 +206,26 @@ class FansApiRealTransport:
             return NotAccepted(**proof, occurred_at=stamp, evidence_ref=f'fansapi-{result.state.replace("_", "-")}:' + grant.attempt_id)
         return None  # unknown, conflict, key mismatch: stays unresolved and holds only this fan
 
-    def _post(self, chat_id, key, body, media, previews, price_cents):
+    def _retry_allowed(self, authority, tenant_id, grant, dispatch, posts):
+        """Re-authorize ONE more wire attempt of an already consumed grant (never consumes it twice).
+
+        The transport-level scope (pilot scope, binding epoch, active connection, fansapi policy) is re-read, then
+        TextAuthority.consume_dispatch(retry_after_posts=...) re-runs every authority check (controls/takeover/
+        no_contact/stop, freshness, approval, pilot and unit budget) and atomically advances the durable attempt
+        counter. Any refusal means no further POST: the earlier attempt was already proven not sent.
+        """
+        try:
+            self._scope(dispatch)
+            again = authority.consume_dispatch(tenant_id, grant, retry_after_posts=posts)
+        except Refused:
+            return False
+        return again == grant
+
+    def _post(self, chat_id, key, body, media, previews, price_cents, retry_gate=None):
         """At most `max_attempts` (<= 3) POSTs TOTAL, first included, same key and payload every time.
 
-        Only an explicit, proven-not-sent response permits another POST. A conflict means a request may already
+        Only an explicit, proven-not-sent response permits another POST, and then only after `retry_gate`
+        (a fresh authority re-check, see _retry_allowed) allows it. A conflict means a request may already
         be executing: stop immediately. The provider does not guarantee idempotency keys remain retained, so a
         subsequent POST cannot safely serve as a read-only status check.
         """
@@ -228,6 +245,8 @@ class FansApiRealTransport:
                 return result
             if attempt + 1 < self.max_attempts:
                 self.sleep(self.retry_delay * (attempt + 1))
+                if retry_gate is None or not retry_gate(attempt + 1):
+                    return result  # the proven-not-sent result stands; no further POST
         return result
 
     def recover_interrupted(self):

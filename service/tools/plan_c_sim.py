@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import httpx
 import json
 import logging
 import os
@@ -378,7 +379,8 @@ class Simulation:
                                  reason='Plan C simulation delivery policy (fansapi, pacing on)', transport_kind='fansapi')
         epoch = FansWebhookAdapter(self.store).bind_simulated(TENANT, ACCOUNT, ffs.ACCT, ffs.CREATOR)
         client = build_client(RealFansConfig('sim-fixture-token', ffs.ACCT, 'https://api.fansapi.com', 20),
-                              creator_id=ffs.CREATOR, epoch=epoch, transport=self.fake.transport())
+                              creator_id=ffs.CREATOR, epoch=epoch,
+                              transport=httpx.MockTransport(self.fake.transport().handle_request))
         self.client = client
         self.sync = sync_vault(self.store, TENANT, ACCOUNT, client)
         if not self.sync['complete'] or self.sync['upserted'] != 3:

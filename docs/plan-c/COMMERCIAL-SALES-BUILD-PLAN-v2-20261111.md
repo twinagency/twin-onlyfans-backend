@@ -1,4 +1,4 @@
-# Twin commercial conversation and sales: build plan v1
+# Twin commercial conversation and sales: build plan v2
 
 Prepared 11 November 2026, Brisbane. This is the implementation specification, not a qualification or launch approval.
 
@@ -10,7 +10,7 @@ Extend the existing Twin engine so an onboarded creator can converse naturally, 
 |---|---|
 | Inventory | Latest 1,000 unique photos/videos combined per creator; identified by source creation time with a stable ID tie-break. This is the current catalogue selection, not a lifetime ownership limit. |
 | Products | Single photos, single videos, approved photo/video/mixed bundles. Every paid asset belongs to the approved selection. Explicitly approved bundles only; no spontaneous combinations. |
-| Price | Reuse approved product prices. During onboarding, suggest prices from exact historical products first, then comparable content from that creator. One batch approval before eligibility. The writer never chooses the billed amount. |
+| Price | Agency sets category prices manually; no AI or historical-price calculation is authorised. AI categorises only; uncertainty goes to Miscellaneous without an automatic price or sales approval. Batch creation uses the agency price; no historical/model-derived prices. The writer never chooses the billed amount. |
 | Discount | Optional approved lower price for a product, usable when the fan asks for a cheaper option. No guessed percentages, stacked discounts, below-floor bargaining or automatic repricing of an already-sent card. |
 | Ownership | Exclude a whole bundle if any included paid asset is owned. Keep preview semantics explicit. Never infer non-ownership from missing records. |
 | Tips | Receive and acknowledge validated voluntary tips. No proactive tip requests, promised rewards or automatic access entitlement in this release. |
@@ -36,6 +36,8 @@ Preserve the current trial, existing jobs, purchases, unknown outcomes and unrel
 
 ## 3. Verified integration gaps
 
+The new agency category-draft command initially reuses the existing verified-vault contract. That contract currently requires native vault observations/connection evidence. FansAPI-only onboarding must be integrated into the shared provenance/readiness owner with explicit provider identity; do not fabricate native evidence, silently fall back to another connector or treat the initial draft command as a qualified FansAPI workflow.
+
 Paths below are relative to the verified backend root above.
 
 | Existing owner | Actual baseline restriction | Required change |
@@ -43,7 +45,7 @@ Paths below are relative to the verified backend root above.
 | `service/vault_import_policy.py` | Optional recent window selects 1,500 photos plus 700 videos. | Versioned selection of 1,000 combined; compatible job/progress transition. |
 | `service/conversation_engine/catalogue.py` | Catalogue coverage/search bounded to 200 catalogue rows; only part of the catalogue is considered above that. | Explicit approved commercial selection, paged/indexed lookup and truthful coverage. Media and product counts are different. |
 | `service/db/onlyfans_engine_models.py`, `pilot_scope.py` | Singleton scope row; exactly two fans, one $3 photo. | Evolve existing durable scope to an explicit commercial version and per-account lookup, preserving legacy pilot semantics and evidence. Add an additive migration where required. |
-| `service/onlyfans_runtime/offer_import.py` | Already groups historical media/price variants and creates reviewed fixed-price drafts. A priced message alone is not proof of a sale. | Reuse this owner; add missing sales-status qualification, selected-media filtering and batch review. |
+| `service/onlyfans_runtime/offer_import.py` | Already groups historical media/price variants and creates reviewed fixed-price drafts. A priced message alone is not proof of a sale. | Reuse source/ownership evidence from this owner; manual category pricing supplies the selling price. No automatic historical-price inference. |
 | `service/onlyfans_runtime/media_delivery.py` | Fixed price cannot differ; override cannot be below saved catalogue price. | Explicit approved standard/discount variants in existing catalogue terms and immutable grant/intent snapshots. |
 | `service/conversation_engine/commerce.py` | Normal preparation chooses the single configured product; exact grant/terms/ownership checks already exist. | Select and prepare approved commercial products through the same authority; preserve lineage and final checks. |
 | `prompt_provider_a_original.py`, `model_output.py`, `claims.py` | Prompt and output/edit checks prohibit discounts and bundles. | Update all consumers of the approved commercial contract together; preserve legacy text-only and pilot restrictions. |
@@ -66,8 +68,8 @@ Use existing vault/content-sync, offer-import, profile and ownership owners:
 1. Select the latest 1,000 unique photo/video IDs combined, with stable ordering, resumable progress and explicit partial/complete/failed states. If mixed pagination requires merging streams, establish the combined ordering before declaring selection complete. Do not download all full-resolution media merely to establish selection or ownership.
 2. Retain historical metadata, source messages and purchase/access evidence outside that selection. Never delete these because a new asset enters the window. Window rotation cannot rewrite accepted-card contents or past purchases.
 3. Prepare factual descriptions through the existing media-analysis path, retaining asset/version provenance and human corrections. Unknown details remain unknown. Creator facts, style and product facts retain separate validation.
-4. Reuse exact historical offer variants and existing approved catalogue entries. Match the complete paid asset set and previews; never divide a bundle price into unit prices without an explicit approved rule. Distinguish asking prices, observed unlocks, transactions and reversals.
-5. For unpriced items, prepare comparable-content suggestions within that creator only. Show evidence and confidence for batch approval. Missing comparable evidence leaves price pending. Existing catalogue permissions, media reuse rights and creator boundaries still apply.
+4. Historical prices remain optional reference evidence only; they never set a commercial price automatically. Match complete paid asset sets and previews for ownership and provenance. Never divide an old bundle price into unit prices. Distinguish asking prices, observed unlocks, transactions and reversals.
+5. Agency assigns prices to categories; unpriced categories stay pending. AI proposes only evidenced categories and routes uncertain or ambiguous items to Miscellaneous. Miscellaneous is not a selling classification. Agency correction/confirmation is required before category-priced drafts. No new model pricing suggestions or historical-price calculation. Existing media reuse rights and creator boundaries still apply.
 6. Approve fixed singles and explicit bundles, standard price and optional discount price. Record currency, paid/previews, media type/count/duration, creator restrictions, source and terms revision. Keep historical observations distinct from approved current terms.
 7. Capture new events while historical import runs and reconcile the import interval. Reuse durable cursors and deduplication. Reconcile totals/coverage and retain failed pages. No invented lifetime completeness from a recent window or elapsed 24 hours.
 
@@ -107,7 +109,7 @@ Keep every in-scope historical issue open until its actual regression and valid 
 | Onboard/resume/rotate | Correct combined selection and restart; no lost history, corrections or purchases; new items remain unapproved until ready. |
 | Conversation | Original/burst questions answered; corrections and uncertainty survive prompt budgets; no unsupported activity, identity or product claims; varied writing. |
 | Single photo/video/bundle | Normal preparation creates authority; accurate answer and exact approved contents/price reach one paid card. |
-| Pricing/discount | Exact-product and comparable suggestions distinguished; approval required; permitted discount accepted, invented amount/percentage refused; old card price unchanged. |
+| Pricing/discount | Only manual agency prices accepted; no AI/history price fallback; permitted discount accepted, invented amount/percentage refused; old card price unchanged. |
 | Ownership | Old purchase of selected media excludes the product; partly-owned bundle excluded; unknown coverage never becomes “unowned”. |
 | Sale continuity | Refusal, renewed interest, existing-card references and sales holds preserve valid ordinary chat without repeated cards. |
 | Staff interleaving | Outside text/card/queue/deletion before planning, after generation and before send invalidates stale work appropriately; no false purchase match. |
@@ -133,7 +135,7 @@ After the last application change, commit, build an immutable image without over
 
 Report separate results for source implementation, offline combined qualification, real model/provider qualification and commercial activation. Include commit/image/schema/config hashes, changed owners, failure-to-test mapping, raw result index, real/simulated boundaries, costs and remaining issues. “Implemented” or a larger test count does not mean “launched”.
 
-Before actual activation, supply each creator's approved identity/profile, selected catalogue/prices and discount permissions, audience, named recovery owner and spending limits. Existing account permissions/budgets remain authoritative until explicitly changed. Financial/dependency/safety cases still need a responsible human; ordinary messages do not require per-message approval.
+Before actual activation, supply each creator's approved identity/profile, category names and manually chosen category prices, selected catalogue and discount permissions, audience, named recovery owner and spending limits. Existing account permissions/budgets remain authoritative until explicitly changed. Financial/dependency/safety cases still need a responsible human; ordinary messages do not require per-message approval.
 
 No verified benchmark presently establishes onboarding time, ten-creator throughput, comparable-price accuracy or remaining real qualification cost. Measure them before promising those outcomes. New evidence may require a targeted correction; record its reason, affected contracts and regression, rather than changing direction silently.
 

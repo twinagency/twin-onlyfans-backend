@@ -406,6 +406,74 @@ def create_product(store, tenant, account, *, product, command_key, actor):
         return acknowledgement
 
 
+
+def create_category_drafts(store, tenant, account, *, category, command_key, actor):
+    """Agency-priced, atomic category batch using existing disabled catalogue drafts.
+
+    Folder membership is organisation, not selling permission. Agency confirmation,
+    verified media and reviewed descriptions remain required; no model/history price
+    is read and this command never enables a product or account.
+    """
+    from db.models import VaultFolder, VaultFolderItem
+    _identity(command_key, actor)
+    if actor.startswith('worker-import:'):
+        raise Refused('agency pricing permission required')
+    keys = {'folderId', 'priceCents', 'classificationConfirmed', 'products'}
+    if type(category) is not dict or set(category) != keys:
+        raise InvalidVault('Provide one category and its explicit agency price.')
+    folder_id = category['folderId']
+    if (type(folder_id) is not int or not 0 < folder_id < 2**31
+            or category['classificationConfirmed'] is not True
+            or type(category['products']) is not list or not 1 <= len(category['products']) <= 25):
+        raise InvalidVault('Confirm the category and select 1-25 product drafts.')
+    products = []
+    for value in category['products']:
+        if type(value) is not dict or set(value) != {'label', 'description', 'mediaIds', 'previewMediaIds'}:
+            raise InvalidVault('Each draft needs reviewed text and exact media references.')
+        products.append(validate_product({**value, 'priceCents': category['priceCents'], 'enabled': False}))
+    hashes = [digest(sorted(int(mid) for mid in product['mediaIds'])) for product in products]
+    if len(set(hashes)) != len(hashes):
+        raise InvalidVault('A product may occur only once in a category batch.')
+    fingerprint = digest({'kind': 'agency-category-drafts.v1', 'category': category})
+    commands = [digest({'kind': 'agency-category-drafts.v1', 'command': command_key, 'index': i})
+                for i in range(len(products))]
+    with Session(store.engine) as session, session.begin():
+        runtime = store._runtime(session, tenant, account)
+        priors = [session.get(OfVaultProductCreate, (account, key)) for key in commands]
+        if any(priors):
+            if not all(priors) or any((row.actor, row.request_hash) != (actor, fingerprint) for row in priors):
+                raise Refused('vault idempotency conflict')
+            return {'items': [json.loads(row.acknowledgement_json) for row in priors]}
+        folder = session.scalar(select(VaultFolder).where(VaultFolder.id == folder_id,
+            VaultFolder.account_id == account, VaultFolder.deleted_at.is_(None)).with_for_update(read=True))
+        if folder is None:
+            raise Refused('vault folder unavailable')
+        if folder.name.strip().casefold() in {'miscellaneous', 'misc', 'unknown', 'uncategorized', 'unclassified', 'unsure'}:
+            raise Refused('uncertain category needs classification before pricing')
+        connection = _connection(session, runtime)
+        all_media = {int(mid) for product in products for mid in product['mediaIds']}
+        members = set(session.scalars(select(VaultFolderItem.media_id).where(
+            VaultFolderItem.account_id == account, VaultFolderItem.folder_id == folder_id,
+            VaultFolderItem.media_id.in_(all_media)).with_for_update(read=True)))
+        if members != all_media:
+            raise Refused('category membership changed')
+        result = []
+        for key, product in zip(commands, products):
+            media = [int(mid) for mid in product['mediaIds']]
+            row = create_catalog_single(session, runtime, connection, media=media,
+                previews=[int(mid) for mid in product['previewMediaIds']], label=product['label'],
+                description=product['description'], price_cents=product['priceCents'],
+                enabled=False, pricing_mode='fixed')
+            acknowledgement = {'itemId': str(row.id), 'commandKey': key, 'categoryId': str(folder.id),
+                'categoryName': folder.name, 'item': editable(row, 0)}
+            session.add(OfVaultProductCreate(account_id=account, command_key=key, item_id=row.id,
+                request_hash=fingerprint, media_hash=digest(sorted(media)), actor=actor,
+                product_json=canonical({**product, 'agencyCategoryId': str(folder.id)}),
+                acknowledgement_json=canonical(acknowledgement), created_at=row.created_at))
+            result.append(acknowledgement)
+        return {'items': result}
+
+
 def create_catalog_single(s, runtime, connection, *, media, previews, label, description, price_cents,
                           enabled, pricing_mode):
     """Transaction-scoped validated creator shared by manual and import paths.

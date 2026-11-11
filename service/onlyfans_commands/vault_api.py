@@ -230,3 +230,23 @@ async def message_media(request: Request, account_id: str, fan_id: str, message_
         return refuse("message_media_unavailable", 404, "That message attachment is unavailable.")
     except Exception:
         return refuse("message_media_unavailable", 503, "That message attachment could not be read.")
+
+
+@router.post("/accounts/{account_id}/vault/category-drafts")
+async def category_drafts(request: Request, account_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse):
+        return context
+    try:
+        if request.query_params:
+            raise InvalidVault("Category drafts do not accept query parameters.")
+        value = await body(request, {"category", "commandKey", "actor"})
+        if isinstance(value, JSONResponse):
+            return value
+        from onlyfans_runtime.vault_management import create_category_drafts
+        acknowledgement = await asyncio.to_thread(create_category_drafts, *context, account_id,
+            category=value["category"], command_key=value["commandKey"], actor=value["actor"])
+        return response({"ok": True, "applied": True, "accountId": account_id,
+            "commandKey": value["commandKey"], **acknowledgement})
+    except Exception as exc:
+        return failure(exc)

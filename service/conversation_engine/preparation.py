@@ -16,6 +16,7 @@ from db.onlyfans_engine_models import OfEnginePilotScope,OfFansConnection
 from db.onlyfans_delivery_models import OfDeliveryPolicy
 from onlyfans_runtime.launch_operations_models import OfLaunchCommand
 from onlyfans_runtime.store import Refused,utcnow
+from . import scope_contract
 
 VERSION="preparation.v1"
 
@@ -130,9 +131,15 @@ def validate(config):
     return json.loads(encoded(config))
 
 def current(s,runtime,*,lock=False):
-    query=select(OfEnginePilotScope).where(OfEnginePilotScope.account_id==runtime.account_id)
-    row=s.scalar(query.with_for_update() if lock else query)
+    """Preparation authority of this account: a preparation row, or its commercial promotion until it is launched.
+
+    A promoted row that is still configured keeps drawing on the same read budget (shown through the shared three-key
+    projection). Once it is active or stopped it belongs to the pilot guard / the commercial commands, never to this owner."""
+    row=scope_contract.row_for(s,runtime,lock=lock)
     if row is None or row.scope_id==1:return None,None
+    if scope_contract.claim(row)==scope_contract.COMMERCIAL:
+        config=scope_contract.validated(row,runtime,scope_contract.COMMERCIAL)
+        return (row,scope_contract.preparation_projection(config)) if row.status=="configured" else (None,None)
     if row.binding_id!=runtime.binding_id:raise Refused("preparation binding changed")
     try:config=validate(json.loads(row.config_json))
     except (ValueError,TypeError,Refused):raise Refused("invalid preparation authority") from None
@@ -140,10 +147,23 @@ def current(s,runtime,*,lock=False):
         raise Refused("preparation authority fingerprint changed")
     return row,config
 
+def _held_scope(s,runtime):
+    return s.execute(select(OfEnginePilotScope.status,OfEnginePilotScope.config_json,OfEnginePilotScope.scope_id).where(
+        OfEnginePilotScope.account_id==runtime.account_id,OfEnginePilotScope.scope_id>1)).first()
+
 def assert_send_allowed(s,runtime):
-    # Row identity is enough to hold even a damaged/stopped preparation scope.
-    if s.scalar(select(OfEnginePilotScope.scope_id).where(
-            OfEnginePilotScope.account_id==runtime.account_id,OfEnginePilotScope.scope_id>1)) is not None:
+    """Delivery admission. Row identity alone holds a preparation or damaged scope; a promoted scope sends only once active."""
+    held=_held_scope(s,runtime)
+    if held is None:return
+    if scope_contract.claim(held)==scope_contract.COMMERCIAL:
+        if held.status!="active":raise Refused("commercial scope is not active")
+        return
+    raise Refused("preparation cannot authorize replies or sales")
+
+def assert_enable_allowed(s,runtime):
+    """Policy enablement: preparation and damaged scopes never; a promoted scope only through its operator's activation."""
+    held=_held_scope(s,runtime)
+    if held is not None and scope_contract.claim(held)!=scope_contract.COMMERCIAL:
         raise Refused("preparation cannot authorize replies or sales")
 
 def _disabled(s,runtime):
@@ -190,6 +210,7 @@ def configure(store,tenant,account,config,*,expected_revision,command_key,actor,
             raise Refused("reconcile unresolved sends before preparation")
         raw=s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id==account).with_for_update())
         if raw is not None and raw.scope_id==1:raise Refused("existing pilot authority is retained")
+        if raw is not None and scope_contract.claim(raw)==scope_contract.COMMERCIAL:raise Refused("promoted to a commercial scope; preparation is no longer configurable")
         row,old=current(s,runtime,lock=True)
         if (row.revision if row else 0)!=expected_revision:raise Refused("preparation revision conflict")
         if old is not None and (old["provider_account"],old["creator_id"],old["qualification"]["mode"])!=(config["provider_account"],config["creator_id"],config["qualification"]["mode"]):
@@ -227,6 +248,9 @@ def stop(store,tenant,account,*,expected_revision,command_key,actor,reason):
         if prior is not None:
             if prior.kind!="preparation" or prior.request_hash!=request_hash:raise Refused("preparation command conflict")
             return {**json.loads(prior.result_json),"replayed":True}
+        raw=s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id==account).with_for_update())
+        if raw is not None and raw.scope_id>1 and scope_contract.claim(raw)==scope_contract.COMMERCIAL:
+            raise Refused("promoted to a commercial scope; stop it through the commercial command")
         row,config=current(s,runtime,lock=True)
         if row is None or type(expected_revision) is not int or row.revision!=expected_revision:raise Refused("preparation revision conflict")
         before=_view(row,config)
@@ -241,11 +265,19 @@ def view(store,tenant,account):
     from db.onlyfans_vault_models import OfVaultSyncJob
     with Session(store.engine) as s:
         runtime=store._runtime(s,tenant,account,lock=False);row,config=current(s,runtime)
+        promoted=False
+        if row is None:
+            # A promoted scope stays visible here in every status (its detail lives in the commercial view).
+            held=scope_contract.row_for(s,runtime)
+            if held is not None and held.scope_id>1 and scope_contract.claim(held)==scope_contract.COMMERCIAL:
+                row=held;promoted=True
+                config=scope_contract.preparation_projection(scope_contract.validated(held,runtime,scope_contract.COMMERCIAL))
         if row is None:
             policy=s.get(OfDeliveryPolicy,account)
             return {"configured":False,"canPrepare":not runtime.enabled and
                 (policy is None or not policy.enabled and not policy.media_enabled and policy.transport_kind=="fansapi")}
         result={"configured":True,**_view(row,config)}
+        if promoted or row.transition_command_key is not None:result["commercial"]={"state":"promoted","status":row.status}
         connection=s.scalar(select(OfFansConnection).where(OfFansConnection.account_id==account,
             OfFansConnection.binding_id==runtime.binding_id,OfFansConnection.status=="active",
             OfFansConnection.provider_account_id==config["provider_account"],OfFansConnection.provider_creator_id==config["creator_id"]))

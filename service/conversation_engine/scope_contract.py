@@ -15,6 +15,8 @@ from hashlib import sha256
 import json
 import re
 
+from sqlalchemy import select
+
 from onlyfans_runtime.store import Refused
 
 LEGACY, PREPARATION, COMMERCIAL = 'legacy', 'preparation', 'commercial'
@@ -204,3 +206,58 @@ def product_of(config):
 def profile_items(config):
     """Catalogue item ids the creator profile must approve for this scope (legacy: the pilot product only)."""
     return () if is_commercial(config) else (str(config['product']['id']),)
+
+
+# ---------------------------------------------------------------- per-account lookup
+_MESSAGES = {  # (binding changed, invalid, fingerprint changed): the historical wording of each owner
+    LEGACY: ('pilot creator binding changed', 'pilot configuration is invalid', 'pilot configuration fingerprint changed'),
+    PREPARATION: ('preparation binding changed', 'invalid preparation authority', 'preparation authority fingerprint changed'),
+    COMMERCIAL: ('commercial binding changed', 'invalid commercial authority', 'commercial authority fingerprint changed'),
+}
+
+
+def row_for(s, runtime, *, lock=False):
+    """The one scope row of THIS account, whatever its scope_id; never another account's row."""
+    from db.onlyfans_engine_models import OfEnginePilotScope
+    query = select(OfEnginePilotScope).where(OfEnginePilotScope.account_id == runtime.account_id)
+    return s.scalar(query.with_for_update() if lock else query)
+
+
+def claim(row):
+    """The contract a stored row claims, read without validating it; None when the claim is unreadable.
+
+    scope_id 1 is the legacy pilot by identity. Any other row must claim preparation or commercial: a row above 1 that
+    reads like a legacy configuration is damage, not a pilot.
+    """
+    if row.scope_id == 1:
+        return LEGACY
+    try:
+        kind = contract_kind(json.loads(row.config_json))
+    except (TypeError, ValueError, Refused):
+        return None
+    return None if kind == LEGACY else kind
+
+
+def validated(row, runtime, kind):
+    """Fully validated configuration of a row whose claim is `kind`; any mismatch or damage fails closed."""
+    binding, invalid, changed = _MESSAGES[kind]
+    if row.binding_id != runtime.binding_id:
+        raise Refused(binding)
+    try:
+        config = validate(kind, json.loads(row.config_json))
+    except (TypeError, ValueError, Refused):
+        raise Refused(invalid) from None
+    if fingerprint(config) != row.fingerprint or encoded(config) != row.config_json:
+        raise Refused(changed)
+    return config
+
+
+def load(s, runtime, *, lock=False):
+    """(row, config, kind) for the runtime's own account, or (None, None, None) when it has no scope row."""
+    row = row_for(s, runtime, lock=lock)
+    if row is None:
+        return None, None, None
+    kind = claim(row)
+    if kind is None:
+        raise Refused(_MESSAGES[PREPARATION][1])
+    return row, validated(row, runtime, kind), kind

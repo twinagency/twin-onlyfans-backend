@@ -291,6 +291,11 @@ def backfill_complete(s, account, fan_id):
     from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection
     from onlyfans_runtime.launch_operations_models import OfLaunchCommand
     from . import scope_contract as contracts
+    from fans_api_adapter import history_import
+    if history_import.started(s, account):
+        # An account with a configured history import is governed by derived per-fan coverage (chat, transactions,
+        # chargebacks, gaps, webhooks), not by whether some earlier run once listed the fan, whatever its start date.
+        return history_import.fan_state(s, account, fan_id)['state'] == 'complete'
     runtime = s.get(OfRuntime, account)
     # Strict provider-history coverage applies to THIS account's own legacy or commercial scope; any other account keeps
     # the lenient whole-run coverage. Another account's scope never makes this account strict or lenient.

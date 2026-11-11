@@ -133,6 +133,10 @@ def assert_unowned(session, account_id, fan_id, snapshot, *, manual=False):
         # (e.g. an unmapped paid message) never sends, and any owned member (preview included) excludes the whole product.
         from conversation_engine.ownership_gate import ownership_gate
         ownership_gate(session, account_id, fan_id, snapshot)
+    # Imported history (purchases, reversals, unknown coverage) for accounts that configured a history import.
+    # Unknown ownership blocks only a new paid card; free content and other accounts are unaffected.
+    from conversation_engine.history_ownership import assert_card_allowed
+    assert_card_allowed(session, account_id, fan_id, snapshot)
 
 
 def project(session, intent, message_id, stamp):

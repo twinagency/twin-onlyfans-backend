@@ -92,6 +92,7 @@ def provider_unlocked_media(s, runtime, fan_id, *, limit=10000):
 
 
 def _unowned(s, account, fan_id, terms):
+    # assert_unowned also applies the imported-history ownership rule (owned / unknown paid assets) when configured.
     assert_unowned(s, account, fan_id, terms)
     try:
         owned = owned_media_in_session(s, account, fan_id, limit=10000)

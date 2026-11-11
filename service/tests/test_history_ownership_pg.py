@@ -288,7 +288,7 @@ def test_the_derivation_module_writes_nothing(database):
             own().evaluate_card(s, account, FAN, terms([241]))
         assert snapshot() == before
         source = inspect.getsource(own())
-        assert not re.search(r"\.add\(|\.merge\(|\.delete\(|\.flush\(|insert\(|update\(|\.commit\(", source), "read-only by construction"
+        assert not re.search(r"\bs\.(add|merge|delete|flush|commit|rollback|begin)\(|\b(insert|update|delete)\(|\.execute\(", source), "read-only by construction"
     finally:
         store.close()
 

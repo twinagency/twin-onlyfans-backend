@@ -68,15 +68,19 @@ class CallRow:
     updated_at: object
     reserved_microusd: int
     actual_microusd: int | None
+    retry_not_before: object = None
 
 
 def _row(r):
     return CallRow(r.call_id, r.seq, r.chain_pos, r.chain_step, r.model, r.status, r.outcome, r.snapshot_sha256,
-                   r.response_text, r.updated_at, r.reserved_microusd, r.actual_microusd)
+                   r.response_text, r.updated_at, r.reserved_microusd, r.actual_microusd, r.retry_not_before)
 
 
 def _counted():
     return func.coalesce(func.sum(text("CASE WHEN status = 'released' THEN 0 WHEN status = 'settled' OR (status = 'unknown' AND usage_known AND actual_microusd IS NOT NULL) THEN actual_microusd ELSE reserved_microusd END")), 0)
+
+
+MAX_FAILURE_DETAIL = 2000  # bytes of sanitized JSON evidence per released call (DB CHECK enforces the same)
 
 
 class ModelLedger:
@@ -287,10 +291,27 @@ class ModelLedger:
                 row.error_class = 'usage_missing'
             return row.status
 
-    def release(self, account, call_id, worker_id, *, outcome, error_class):
+    def release(self, account, call_id, worker_id, *, outcome, error_class, retry_delay_seconds=None, failure_detail=None):
+        """A proven zero-cost end. A retryable availability refusal also records when the SAME request may be asked
+        again (`retry_not_before`, durable across restarts); the bounded sanitized `failure_detail` is evidence only."""
+        if retry_delay_seconds is not None and (type(retry_delay_seconds) is not int or not 0 <= retry_delay_seconds <= 3600):
+            raise Refused('invalid model retry delay')
+        detail = None
+        if failure_detail is not None:
+            if type(failure_detail) is not dict:
+                raise Refused('invalid model failure detail')
+            detail = json.dumps(failure_detail, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+            if len(detail) > MAX_FAILURE_DETAIL:
+                detail = json.dumps({'status': failure_detail.get('status'), 'truncated': True}, sort_keys=True,
+                                    separators=(',', ':'))
         with Session(self.engine) as s, s.begin():
             row = self._mine(s, account, call_id, worker_id, 'reserved', 'calling')
-            row.status, row.outcome, row.error_class, row.updated_at = 'released', outcome, error_class, self.clock()
+            now = self.clock()
+            row.status, row.outcome, row.error_class, row.updated_at = 'released', outcome, error_class, now
+            if retry_delay_seconds is not None:
+                row.retry_not_before = now + timedelta(seconds=retry_delay_seconds)
+            if detail is not None:
+                row.failure_detail_json = detail
 
     def mark_unknown(self, account, call_id, worker_id, *, outcome, error_class, generation_id='', endpoint_sha256=''):
         with Session(self.engine) as s, s.begin():

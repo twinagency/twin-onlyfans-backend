@@ -32,7 +32,7 @@ import uuid
 
 from onlyfans_runtime.store import Refused
 
-from .model_client import (ChatRequest, ModelBusy, ModelCallError, ModelHTTPStatus, ModelIncompleteResponse,
+from .model_client import (ChatRequest, ModelBusy, ModelCallError, ModelHTTPStatus, ModelIncompleteResponse, http_refusal,
                            ModelNotSent, ModelOutcomeUnknown, ModelUnavailable)
 from .model_config import input_token_upper_bound
 from .model_ledger import CONTENT_FAILURES, IDENTITY_UNSETTLED, LENGTH_LIMITED, ModelLedger
@@ -175,6 +175,7 @@ class ModelRuntime:
         chain = [(i, step, model, prefixed) for i, (step, model, prefixed) in enumerate(cfg.chain())]
         pos, dead, content_failed, fix, outcomes, refused = 0, set(), False, [], [], False
         unavailable, blocked = False, False  # primary failed for availability / failed in a way that never falls back
+        http_refused = []  # same-snapshot provider refusals a retry cannot fix (HTTP 400/401/403/404/422...)
         now = self._clock()
         for row in rows:
             same = row.snapshot_sha256 == turn.snapshot_sha256
@@ -211,12 +212,22 @@ class ModelRuntime:
                     unavailable = True
                 else:
                     blocked = True  # 400/401/403 and unclassified failures never fall back
-                if now - row.updated_at < timedelta(seconds=cfg.transport_retry_seconds):
-                    dead.add(row.model)  # a recent failure: don't hammer that model
+                    if row.status == 'released' and http_refusal(row.outcome):
+                        http_refused.append(row.outcome)
+                # The durable due time (provider Retry-After or the transport cooldown) when recorded; rows from before
+                # it existed fall back to the fixed cooldown from their last update.
+                due = getattr(row, 'retry_not_before', None) or row.updated_at + timedelta(seconds=cfg.transport_retry_seconds)
+                if now < due:
+                    dead.add(row.model)  # not yet due: don't hammer that model
                     pos = max(pos, row.chain_pos + 1)
         if len(rows) >= cfg.max_calls_per_generation:
             turn.handover('model_call_limit', {'outcomes': [r.outcome or r.status for r in rows]})
             raise Refused('model call limit reached; request handed to a human')
+        if http_refused:
+            # The provider refused the request itself (auth, configuration, moderation): asking again later cannot
+            # fix it. Visible human work instead of a silent open request or a timed blind retry.
+            turn.handover('model_http_refused', {'outcomes': http_refused[-4:]})
+            raise Refused('provider refused the model request; request handed to a human')
         if refused:
             # A refusal (or the silent empty completion DeepSeek/OpenRouter return for one) is not re-asked in other
             # words or on another model/provider route: it is human work.
@@ -252,10 +263,16 @@ class ModelRuntime:
             try:
                 result = self.client.chat(request)  # the only network step; no database transaction is open
             except (ModelNotSent, ModelHTTPStatus) as exc:
+                retryable = is_availability_failure(exc.error_class)  # not_sent / HTTP 408, 429, 5xx
+                delay = max(cfg.transport_retry_seconds, getattr(exc, 'retry_after', None) or 0) if retryable else None
                 ledger.release(turn.account, reservation.call_id, self.worker_id,
-                               outcome=exc.error_class, error_class=exc.error_class)
+                               outcome=exc.error_class, error_class=exc.error_class,
+                               retry_delay_seconds=min(delay, 3600) if delay is not None else None,
+                               failure_detail=getattr(exc, 'detail', None))
                 dead.add(model); pos = chain_pos + 1
-                unavailable, blocked = unavailable or is_availability_failure(exc.error_class), blocked or not is_availability_failure(exc.error_class)
+                unavailable, blocked = unavailable or retryable, blocked or not retryable
+                if not retryable and http_refusal(exc.error_class):
+                    http_refused.append(exc.error_class)
                 continue
             except ModelOutcomeUnknown as exc:
                 incomplete = isinstance(exc, ModelIncompleteResponse)
@@ -323,4 +340,7 @@ class ModelRuntime:
                 self._reject(turn, 'model_empty' if verdict.outcome == 'empty' else 'model_refused', outcomes, fix)
         if content_failed:
             self._reject(turn, 'model_rejected', outcomes, fix)
+        if http_refused:
+            turn.handover('model_http_refused', {'outcomes': http_refused[-4:]})
+            raise Refused('provider refused the model request; request handed to a human')
         raise ModelUnavailable('model is unavailable; the request stays open')

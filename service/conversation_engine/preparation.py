@@ -224,11 +224,16 @@ def prepare_one(store,tenant,account,*,client_factory):
                 from db.onlyfans_fans_intake_models import OfFansLink
                 link=s.get(OfFansLink,(account,config["creator_id"]))
                 if same and link is not None and link.provider_account_id==config["provider_account"] and link.state=="connected":
-                    complete=s.scalar(select(OfVaultSyncJob.job_id).where(OfVaultSyncJob.account_id==account,
+                    latest=s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account,
                         OfVaultSyncJob.binding_id==runtime.binding_id,OfVaultSyncJob.connection_revision==connection.epoch,
-                        OfVaultSyncJob.provider_kind=="fansapi",OfVaultSyncJob.provider_account==config["provider_account"],
-                        OfVaultSyncJob.status=="complete").limit(1))
-                    if complete is not None:return {"state":"complete"}
+                        OfVaultSyncJob.provider_kind=="fansapi",OfVaultSyncJob.provider_account==config["provider_account"])
+                        .order_by(OfVaultSyncJob.requested_at.desc(),OfVaultSyncJob.job_id.desc()).limit(1))
+                    # A new explicit refresh supersedes the completed shortcut.
+                    # A semantic import failure needs an explicit new sync command;
+                    # transient read failures keep the same pending cursor.
+                    if latest is not None and latest.status=="complete":return {"state":"complete"}
+                    if latest is not None and latest.status in ("failed","superseded"):
+                        return {"state":"held","error":latest.last_error}
                 epochs=s.scalars(select(OfFansConnection.epoch).where(OfFansConnection.account_id==account)).all()
                 epoch=connection.epoch if same else max(epochs,default=0)+1
                 revision=row.revision

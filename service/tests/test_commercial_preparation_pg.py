@@ -258,3 +258,45 @@ def test_existing_worker_preparation_mode_defaults_off_without_native_key_or_sen
     with Session(database[1]) as s:
         row=s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id==account))
         assert row.provider_requests_used==0 and s.get(OfFansConnection,(account,1)) is None
+
+
+def test_explicit_refresh_is_not_hidden_by_an_older_completed_import(database):
+    from onlyfans_runtime.vault_management import request_sync
+    store,account,cfg=setup(database);calls=[];mid=501
+    def wire(req):
+        calls.append(req.url.path)
+        return identity(cfg) if req.url.path=="/api/accounts" else page([_item(mid)])
+    assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["state"]=="complete"
+    old=prep.view(store,TENANT,account)["vault"]["jobId"]
+    queued=request_sync(store,TENANT,account,expected_connection_revision=1,command_key="e"*64,actor=ACTOR)
+    mid=502
+    result=prep.prepare_one(store,TENANT,account,client_factory=factory(wire))
+    assert result["state"]=="complete" and result.get("vault",{}).get("jobId")==queued["jobId"]
+    assert queued["jobId"]!=old and len(calls)==4
+    with Session(database[1]) as s:
+        assert s.get(VaultItem,(account,501)) is not None
+        job=s.get(OfVaultSyncJob,(account,queued["jobId"]))
+        assert json.loads(job.window_json)["selected"]==["502"]
+    assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["state"]=="complete"
+    assert len(calls)==4
+    store.close()
+
+def test_failed_import_needs_explicit_new_sync_command_instead_of_automatic_read_loop(database):
+    from onlyfans_runtime.vault_management import request_sync
+    store,account,cfg=setup(database);calls=[];bad=True
+    def wire(req):
+        calls.append(req.url.path)
+        if req.url.path=="/api/accounts":return identity(cfg)
+        if bad:
+            a,b=_item(501),_item(502)
+            a["createdAt"]="2026-01-01T00:00:00Z";b["createdAt"]="2026-02-01T00:00:00Z"
+            return page([a,b])
+        return page([_item(502)])
+    assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["vault"]["error"]=="vault_order_or_replay"
+    assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["state"]=="held"
+    assert len(calls)==2
+    queued=request_sync(store,TENANT,account,expected_connection_revision=1,command_key="e"*64,actor=ACTOR)
+    bad=False
+    assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["vault"]["jobId"]==queued["jobId"]
+    assert len(calls)==4
+    store.close()

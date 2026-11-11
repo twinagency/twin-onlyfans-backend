@@ -268,3 +268,517 @@ def reserve(s, account, source, credits, now):
     s.execute(insert.on_conflict_do_update(index_elements=["account_id", "source", "hour"], set_={
         "requests": OfFansReadMeter.requests + 1, "credits_reserved": OfFansReadMeter.credits_reserved + credits,
         "updated_at": now}))
+
+
+# ---------------------------------------------------------------- planning
+_ORDER = {"transactions": 0, "chargebacks": 1, "chats": 2}
+_EPOCH = datetime(1970, 1, 1)
+
+
+def _row_time(item):
+    """Best-effort provider timestamp of one row (naive UTC), or None. Used only for counters, never for state."""
+    from datetime import timezone
+    try:
+        node = item
+        if type(node) is dict and type(node.get("payment")) is dict:
+            node = {**node["payment"], **{k: v for k, v in node.items() if k != "payment"}}
+        value = node.get("createdAt") or node.get("created_at")
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _discover(s, account, now):
+    """List every fan we already know locally or whom payment evidence names, once, with a reading priority.
+
+    There is no verified provider chat-list call, so the universe is never claimed to be enumerated; a fan who
+    has not messaged and has no payment is simply not listed and stays unknown.
+    """
+    from datetime import timedelta
+    from sqlalchemy import and_, exists, update
+    from db.models import Fan, Message
+    from db.onlyfans_fans_intake_models import OfFansEvidence
+    cur, evidence = OfFansHistoryCursor, OfFansEvidence
+    listed = exists().where(and_(cur.account_id == account, cur.fan_id == Fan.fan_id))
+    new = {r[0] for r in s.execute(select(Fan.fan_id).where(Fan.account_id == account, ~listed).limit(5000))}
+    payer_listed = exists().where(and_(cur.account_id == account, cur.fan_id == evidence.fan_id))
+    payers = {r[0] for r in s.execute(select(evidence.fan_id).where(evidence.account_id == account,
+        evidence.kind.in_(("unlock", "transaction", "chargeback")), ~payer_listed).distinct().limit(5000))}
+    since = now - timedelta(days=1)
+    live = select(Message.fan_id).where(Message.account_id == account, Message.direction == "in", Message.created_at >= since)
+    if new | payers:
+        live_now = {r[0] for r in s.execute(live.where(Message.fan_id.in_(new | payers)).distinct())}
+        values = [{"account_id": account, "fan_id": fan, "status": "needed", "created_at": now, "updated_at": now,
+                   "priority": 0 if fan in live_now else 2 if fan in payers else 3} for fan in sorted(new | payers)]
+        for start in range(0, len(values), 1000):
+            s.execute(pg_insert(cur).values(values[start:start + 1000]).on_conflict_do_nothing(index_elements=["account_id", "fan_id"]))
+    s.execute(update(cur).where(cur.account_id == account, cur.status.in_(("needed", "running")), cur.priority > 0,
+        cur.fan_id.in_(live.distinct())).values(priority=0, updated_at=now))
+
+
+def _blocked(s, account, source):
+    return s.scalar(select(OfFansImportGap.gap_id).where(OfFansImportGap.account_id == account, OfFansImportGap.source == source,
+        OfFansImportGap.kind == "page", OfFansImportGap.exhausted.is_(True), OfFansImportGap.resolved_at.is_(None)).limit(1)) is not None
+
+
+def _plan(s, account, now):
+    """(ready work items, due times being waited for). Pure of provider I/O; lists newly known fans."""
+    from sqlalchemy import func, or_
+    rows = {r.source: r for r in s.scalars(select(OfFansImportSource).where(OfFansImportSource.account_id == account,
+        OfFansImportSource.source.in_(HISTORY_SOURCES)))}
+    if len(rows) != len(HISTORY_SOURCES):
+        return [], []
+    _discover(s, account, now)
+    ready, waits = [], []
+    cur = OfFansHistoryCursor
+    for source in HISTORY_SOURCES:
+        row = rows[source]
+        item = {"source": source, "order": _ORDER[source], "paced": row.last_read_at or _EPOCH, "retries": row.retry_attempts}
+        if source == "chats":
+            pending = s.scalar(select(cur.fan_id).where(cur.account_id == account, cur.status.in_(("needed", "running"))).limit(1)) is not None
+        else:
+            state = json.loads(row.cursor_json)
+            pending = not state.get("end_reached") and not _blocked(s, account, source)
+        if not pending:
+            continue
+        if row.requests_used >= row.requests_budget or row.last_error == "source_budget_exhausted":
+            # Visible, not a failure: only a higher explicit budget (configure) clears it.
+            row.last_error = "source_budget_exhausted"
+            continue
+        if row.next_read_at is not None and row.next_read_at > now:
+            waits.append(row.next_read_at)
+            continue
+        if source == "chats":
+            choice = s.scalar(select(cur).where(cur.account_id == account, cur.status.in_(("needed", "running")),
+                or_(cur.retry_not_before.is_(None), cur.retry_not_before <= now)).order_by(cur.priority, cur.fan_id).limit(1))
+            if choice is None:
+                waits.append(s.scalar(select(func.min(cur.retry_not_before)).where(cur.account_id == account,
+                    cur.status.in_(("needed", "running")), cur.retry_not_before > now)))
+                continue
+            item.update(fan=choice.fan_id, next_page=choice.next_page, retries=choice.retry_attempts, live=choice.priority == 0)
+        else:
+            item.update(state=state, live=False)
+        ready.append(item)
+    return ready, [w for w in waits if w is not None]
+
+
+def eligibility(s, account, now=None):
+    """'ready' (a read is due), 'delayed' (waiting for a persisted due time) or 'idle' (nothing automatic is left)."""
+    now = now or utcnow()
+    ready, waits = _plan(s, account, now)
+    if ready:
+        return {"state": "ready", "at": None}
+    if waits:
+        return {"state": "delayed", "at": min(waits)}
+    return {"state": "idle", "at": None}
+
+
+def _next_work(store, account, now):
+    with Session(store.engine) as s, s.begin():
+        ready, waits = _plan(s, account, now)
+    if not ready:
+        return None
+    # A fan in live conversation goes first; otherwise the source read longest ago takes its turn.
+    ready.sort(key=lambda w: (0 if w.get("live") else 1, w["paced"], w["order"]))
+    return ready[0]
+
+
+# ---------------------------------------------------------------- reading one page
+def _digest(value):
+    return sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def _clean(text):
+    return re.sub(r"[^a-z0-9 _:.\-]", "", str(text).lower())[:96]
+
+
+def _ref(work):
+    source = work["source"]
+    if source == "chats":
+        return work["next_page"] or "first"
+    state = work["state"]
+    return "marker:%s" % state["marker"] if source == "transactions" and state.get("marker") else \
+        "offset:%d" % state["offset"] if source == "chargebacks" else "first"
+
+
+def _page_gap_id(source, fan, ref):
+    return sha256(("page|%s|%s|%s" % (source, fan or "", ref)).encode()).hexdigest()[:40]
+
+
+def _classify_projection(status, detail):
+    if status == "held":
+        return "conflict"
+    if status == "projected":
+        return "dup" if str(detail).endswith("_duplicate") else "new"
+    return "ignored"
+
+
+def _ingest(intake, tenant, account, work, item):
+    """One row through the existing owner. Returns new|dup|conflict|ignored; raises for a row to quarantine."""
+    from fans_api_adapter import payment_evidence as ev
+    from fans_api_adapter.events import IntakeBackpressure
+    source = work["source"]
+    if source == "chats":
+        if type(item) is not dict:
+            raise ValueError("row is not an object")
+        detail = []
+        outcome = intake.ingest_history_item(tenant, account, str(work["fan"]), item, detail=detail)
+        recorded = detail[0] if detail else outcome
+        if recorded == "backpressure":
+            raise IntakeBackpressure("history intake queue is full")
+        return "dup" if recorded == "duplicate" else "new"
+    if source == "transactions":
+        if type(item) is not dict or type(item.get("type")) is not str:
+            raise ValueError("row has no type")
+        ev.transaction_id(item.get("id"))
+        return _classify_projection(*intake.ingest_transaction_row(account, item))
+    if type(item) is not dict:
+        raise ValueError("row is not an object")
+    return _classify_projection(*intake.ingest_chargeback_row(account, item))
+
+
+def _drain(store, tenant, account):
+    """Apply what history ingestion queued, so the shared ingress bound does not stall a long import."""
+    for _ in range(50):
+        try:
+            if store.drain(tenant, account) < 100:
+                return
+        except Refused:
+            return
+
+
+def _meter(s, account, source, now, *, outcome=None, rows=0, balance=None):
+    """Record the outcome of the request the guard just reserved, in that request's (latest) hour row.
+
+    An outcome is only ever attached to an existing request: a refused read made none, so nothing is recorded.
+    A reserved request with no recorded outcome is what the view reports as dispatched-unrecorded.
+    """
+    row = s.scalar(select(OfFansReadMeter).where(OfFansReadMeter.account_id == account, OfFansReadMeter.source == source)
+                   .order_by(OfFansReadMeter.hour.desc()).limit(1).with_for_update())
+    if row is None:
+        return
+    if outcome and row.ok + row.rate_limited + row.failed < row.requests:
+        setattr(row, outcome, getattr(row, outcome) + 1)
+        row.rows_read += rows
+        if balance is not None:
+            row.balance_first = balance if row.balance_first is None else row.balance_first
+            row.balance_last = balance
+    row.updated_at = now
+
+
+def _upsert_page_gap(s, account, work, *, reason, status, attempts, exhausted, now):
+    ref = _ref(work)
+    fan = work.get("fan")
+    insert = pg_insert(OfFansImportGap).values(account_id=account, gap_id=_page_gap_id(work["source"], fan, ref),
+        source=work["source"], fan_id=fan, kind="page", cursor_ref=ref, reason_code=reason, http_status=status,
+        attempts=attempts, exhausted=exhausted, created_at=now, updated_at=now)
+    s.execute(insert.on_conflict_do_update(index_elements=["account_id", "gap_id"], set_={"reason_code": reason,
+        "http_status": status, "attempts": attempts, "exhausted": exhausted, "updated_at": now, "resolved_at": None,
+        "resolved_by": None, "resolution": None}))
+
+
+def _lock(s, account, work):
+    source = s.get(OfFansImportSource, (account, work["source"]), with_for_update=True)
+    cursor = s.get(OfFansHistoryCursor, (account, work["fan"]), with_for_update=True) if work["source"] == "chats" else None
+    return source, cursor
+
+
+def _fail(store, guard, client, account, work, *, failure, cause, status, retry_after, now):
+    """Persist one failed page: the cursor is untouched and the page is retained as a gap with its due time."""
+    from fans_api_adapter.vault_sync import MAX_RETRY_ATTEMPTS, retry_delay
+    with Session(store.engine) as s, s.begin():
+        try:
+            guard.ensure_current(s)
+        except Refused:
+            return {"outcome": "authority_changed", "stop": True}
+        source, cursor = _lock(s, account, work)
+        holder = cursor or source
+        prior = s.get(OfFansImportGap, (account, _page_gap_id(work["source"], work.get("fan"), _ref(work))))
+        attempts = (prior.attempts if prior is not None and prior.resolved_at is None else 0) + 1
+        exhausted = failure in ("schema", "refused") or (failure == "transient" and attempts >= MAX_RETRY_ATTEMPTS)
+        _upsert_page_gap(s, account, work, reason=cause, status=status, attempts=attempts, exhausted=exhausted, now=now)
+        source.pages_failed += 1
+        source.updated_at = now
+        due = None
+        if failure == "transient" and not exhausted:
+            due = now + _delta(retry_delay(attempts, retry_after))
+        holder.retry_attempts = attempts
+        if cursor is not None:
+            cursor.last_error, cursor.updated_at = cause, now
+            cursor.retry_not_before = due
+            if exhausted:
+                cursor.status = "gapped"
+        else:
+            source.last_error = cause
+            source.next_read_at = due if failure == "transient" else source.next_read_at
+        if failure != "refused":
+            _meter(s, account, work["source"], now, outcome="rate_limited" if cause == "provider_rate_limited" else "failed",
+                   balance=client.credits_balance)
+    return {"outcome": "failed", "failure": failure, "cause": cause, "stop": failure == "auth", "exhausted": exhausted}
+
+
+def _delta(seconds):
+    from datetime import timedelta
+    return timedelta(seconds=seconds)
+
+
+def _commit(store, tenant, account, guard, client, work, result, now):
+    """Ingest one observed page through the existing owners, then advance the cursor and counters in one commit."""
+    from fans_api_adapter.events import FansEventIntake, IntakeBackpressure
+    source_name = work["source"]
+    with Session(store.engine) as s, s.begin():
+        try:
+            guard.ensure_current(s)
+        except Refused:
+            return {"outcome": "authority_changed", "stop": True}
+        boundary = s.get(OfFansImportSource, (account, source_name)).boundary_at
+    if source_name == "chargebacks":
+        body = result.data
+        items = body.get("data", {}).get("list") if type(body) is dict and type(body.get("data")) is dict else None
+        if type(items) is not list or len(items) > PAGE_SIZE:
+            return _fail(store, guard, client, account, work, failure="schema", cause="provider_response_invalid",
+                         status=result.http_status, retry_after=None, now=now)
+    else:
+        items = list(result.data)
+    _drain(store, tenant, account)
+    intake = FansEventIntake(store)
+    counts = {"new": 0, "dup": 0, "conflict": 0, "ignored": 0, "quarantined": 0}
+    late, quarantined, newest, oldest = 0, [], None, None
+    for item in items:
+        stamp = _row_time(item)
+        if stamp is not None and stamp >= boundary:
+            late += 1
+        try:
+            outcome = _ingest(intake, tenant, account, work, item)
+        except IntakeBackpressure:
+            return _backpressure(store, guard, account, work, now)
+        except (Refused, ValueError, TypeError, KeyError, AttributeError, ArithmeticError) as exc:
+            reason = "row_refused" if isinstance(exc, Refused) else "row_malformed"
+            detail = _clean(exc) if isinstance(exc, Refused) else type(exc).__name__.lower()
+            quarantined.append({"gap": sha256(("row|%s|%s|%s" % (source_name, work.get("fan") or "", _digest(item))).encode()).hexdigest()[:40],
+                                "reason": reason, "detail": detail, "raw": _digest(item)})
+            outcome = "quarantined"
+        counts[outcome] += 1
+        if source_name == "chats" and type(item) is dict:
+            ident = item.get("id")
+            if type(ident) is int and (newest is None or ident > newest):
+                newest = ident
+            if stamp is not None and (oldest is None or stamp < oldest):
+                oldest = stamp
+    _drain(store, tenant, account)
+    done = utcnow()
+    with Session(store.engine) as s, s.begin():
+        try:
+            guard.ensure_current(s)
+        except Refused:
+            return {"outcome": "authority_changed", "stop": True}
+        source, cursor = _lock(s, account, work)
+        ref = _ref(work)
+        for q in quarantined:
+            inserted = s.execute(pg_insert(OfFansImportGap).values(account_id=account, gap_id=q["gap"], source=source_name,
+                fan_id=work.get("fan"), kind="row", cursor_ref=ref, reason_code=q["reason"], detail=q["detail"],
+                raw_sha256=q["raw"], attempts=0, exhausted=False, created_at=done, updated_at=done)
+                .on_conflict_do_nothing(index_elements=["account_id", "gap_id"])).rowcount
+            if not inserted:                               # already retained from an earlier read of this row
+                counts["quarantined"] -= 1
+                counts["dup"] += 1
+        source.rows_seen += len(items)
+        source.rows_new += counts["new"]
+        source.rows_duplicate += counts["dup"]
+        source.rows_conflict += counts["conflict"]
+        source.rows_ignored += counts["ignored"]
+        source.rows_quarantined += counts["quarantined"]
+        source.rows_late += late
+        source.pages_ok += 1
+        source.last_read_at, source.updated_at = done, done
+        source.retry_attempts, source.last_error = 0, None
+        interval = source.min_interval_seconds
+        source.next_read_at = done + _delta(interval) if interval else None
+        if source.state == "not_started":
+            source.state = "running"
+        end = False
+        if cursor is not None:
+            cursor.pages += 1
+            cursor.messages_seen += len(items)
+            cursor.first_page_at = cursor.first_page_at or done
+            if newest is not None and (cursor.newest_message_id is None or newest > cursor.newest_message_id):
+                cursor.newest_message_id = newest
+            if oldest is not None and (cursor.oldest_message_at is None or oldest < cursor.oldest_message_at):
+                cursor.oldest_message_at = oldest
+            cursor.retry_attempts, cursor.retry_not_before, cursor.last_error, cursor.updated_at = 0, None, None, done
+            if result.next_page is None:
+                cursor.status, cursor.completed_at, cursor.next_page, end = "complete", done, None, True
+            else:
+                cursor.status, cursor.next_page = "running", result.next_page
+                if cursor.pages >= MAX_PAGES["chats"]:
+                    cursor.status = "gapped"
+                    _upsert_page_gap(s, account, {**work, "next_page": result.next_page}, reason="page_limit", status=None,
+                                     attempts=0, exhausted=True, now=done)
+        else:
+            state = json.loads(source.cursor_json)
+            state["first_page_at"] = state.get("first_page_at") or _iso(done)
+            if source_name == "transactions":
+                state["marker"], state["end_reached"] = result.next_page, result.next_page is None
+            else:
+                state["end_reached"] = len(items) < PAGE_SIZE
+                if not state["end_reached"]:
+                    state["offset"] += PAGE_SIZE
+            end = state["end_reached"]
+            if not end and source.pages_ok >= MAX_PAGES[source_name]:
+                _upsert_page_gap(s, account, {**work, "state": state}, reason="page_limit", status=None, attempts=0, exhausted=True, now=done)
+            if end:
+                source.completed_at = done
+            source.cursor_json = _encoded(state)
+        from sqlalchemy import update
+        s.execute(update(OfFansImportGap).where(OfFansImportGap.account_id == account,
+            OfFansImportGap.gap_id == _page_gap_id(source_name, work.get("fan"), ref), OfFansImportGap.resolved_at.is_(None))
+            .values(resolved_at=done, resolved_by="retry_succeeded", resolution="retry_succeeded", updated_at=done))
+        _meter(s, account, source_name, done, outcome="ok", rows=len(items), balance=client.credits_balance)
+    return {"outcome": "ok", "rows": len(items), "end": end, "quarantined": counts["quarantined"]}
+
+
+def _backpressure(store, guard, account, work, now):
+    with Session(store.engine) as s, s.begin():
+        try:
+            guard.ensure_current(s)
+        except Refused:
+            return {"outcome": "authority_changed", "stop": True}
+        source, cursor = _lock(s, account, work)
+        holder = cursor or source
+        due = now + _delta(30)
+        if cursor is not None:
+            cursor.retry_not_before = due
+        else:
+            source.next_read_at = due
+        holder.last_error = "intake_backpressure"
+        holder.updated_at = now
+        _meter(s, account, work["source"], now, outcome="ok")
+    return {"outcome": "backpressure", "stop": True}
+
+
+def _read(store, tenant, account, client, guard, work, now):
+    from conversation_engine.preparation import AuthorityChanged, BudgetExhausted, SourceBudgetExhausted
+    source = work["source"]
+    try:
+        if source == "chats":
+            result = client.history(str(work["fan"]), limit=PAGE_SIZE, next_page=work["next_page"], lenient_rows=True)
+        elif source == "transactions":
+            state = work["state"]
+            result = client.transactions(limit=PAGE_SIZE, marker=state["marker"], start_date=state["start_date"], lenient_rows=True)
+        else:
+            state = work["state"]
+            result = client.chargebacks(limit=PAGE_SIZE, offset=state["offset"], start_date=state["start_date"])
+    except AuthorityChanged:
+        return {"outcome": "authority_changed", "stop": True}
+    except SourceBudgetExhausted:
+        with Session(store.engine) as s, s.begin():
+            s.get(OfFansImportSource, (account, source), with_for_update=True).last_error = "source_budget_exhausted"
+        return {"outcome": "source_budget_exhausted", "stop": False}
+    except BudgetExhausted:
+        return {"outcome": "budget_exhausted", "failure": "budget", "stop": True}
+    except Refused:
+        return _fail(store, guard, client, account, work, failure="refused", cause="request_refused", status=None, retry_after=None, now=now)
+    except ValueError:
+        return _fail(store, guard, client, account, work, failure="refused", cause="continuation_invalid", status=None, retry_after=None, now=now)
+    if result.state not in ("observed", "unverified_observation"):
+        return _fail(store, guard, client, account, work, failure=result.failure or "transient",
+                     cause=result.cause or "provider_unavailable", status=result.http_status, retry_after=result.retry_after, now=now)
+    return _commit(store, tenant, account, guard, client, work, result, now)
+
+
+def step(store, tenant, account, client, *, pages=1):
+    """Read at most ``pages`` history pages for one account through the preparation guard.
+
+    Called by prepare_one after the vault step, under the same per-account advisory lock. It never sends and
+    has no model path. Returns a small fixed-vocabulary report; the durable state is in the import tables.
+    """
+    from conversation_engine.preparation import PreparationRequestGuard
+    from fans_api_adapter.protocol import FansApiClient
+    guard = getattr(client, "_request_guard", None)
+    if (type(client) is not FansApiClient or not client._identity_verified or type(guard) is not PreparationRequestGuard
+            or guard.store is not store or (guard.tenant, guard.account) != (tenant, account)
+            or type(pages) is not int or not 1 <= pages <= 10):
+        raise Refused("budgeted preparation guard required")
+    report = {"pages": 0, "reads": [], "failure": None, "cause": None, "pending": False}
+    for _ in range(pages):
+        now = utcnow()
+        work = _next_work(store, account, now)
+        if work is None:
+            break
+        outcome = _read(store, tenant, account, client, guard, work, now)
+        report["reads"].append({"source": work["source"], "fan": work.get("fan"), "outcome": outcome["outcome"]})
+        if outcome["outcome"] in ("ok", "failed"):
+            report["pages"] += 1
+        if outcome.get("failure") in ("auth", "budget") or outcome["outcome"] == "authority_changed":
+            report["failure"] = "authority" if outcome["outcome"] == "authority_changed" else outcome["failure"]
+            report["cause"] = outcome.get("cause")
+        if outcome.get("stop"):
+            break
+    with Session(store.engine) as s, s.begin():
+        report["pending"] = eligibility(s, account)["state"] != "idle"
+    return report
+
+
+# ---------------------------------------------------------------- operator commands on retained gaps
+def _gap_command(store, tenant, account, gap_id, *, command_key, actor, reason, kind, action):
+    from conversation_engine import preparation as prep
+    prep._command(command_key, actor, reason)
+    if type(gap_id) is not str or not re.fullmatch(r"[0-9a-f]{40}", gap_id):
+        raise Refused("invalid gap")
+    request_hash = prep.fingerprint([action, tenant, account, gap_id, actor, reason])
+    now = utcnow()
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        prior = s.get(OfLaunchCommand, (account, command_key))
+        if prior is not None:
+            if prior.kind != "history_gap" or prior.request_hash != request_hash:
+                raise Refused("history gap command conflict")
+            return {**json.loads(prior.result_json), "replayed": True}
+        gap = s.get(OfFansImportGap, (account, gap_id), with_for_update=True)
+        if gap is None or gap.kind != kind or gap.resolved_at is not None:
+            raise Refused("no open gap of that kind")
+        before = {"gap": gap_id, "attempts": gap.attempts, "exhausted": gap.exhausted}
+        if action == "retry":
+            gap.attempts, gap.exhausted, gap.updated_at = 0, False, now
+            if gap.source == "chats":
+                cursor = s.get(OfFansHistoryCursor, (account, gap.fan_id), with_for_update=True)
+                if cursor.status == "gapped":
+                    cursor.status = "running" if cursor.pages else "needed"
+                cursor.retry_attempts, cursor.retry_not_before, cursor.last_error, cursor.updated_at = 0, None, None, now
+            else:
+                source = s.get(OfFansImportSource, (account, gap.source), with_for_update=True)
+                source.retry_attempts, source.next_read_at, source.last_error, source.updated_at = 0, None, None, now
+            outcome = "reopened"
+        else:
+            gap.resolved_at, gap.resolved_by, gap.resolution, gap.updated_at = now, actor, "reviewed", now
+            outcome = "reviewed"
+        result = {"gapId": gap_id, "source": gap.source, "kind": gap.kind, "outcome": outcome}
+        s.add(OfLaunchCommand(account_id=account, command_key=command_key, binding_id=runtime.binding_id, kind="history_gap",
+            request_hash=request_hash, actor=actor, reason=reason, before_json=_encoded(before), result_json=_encoded(result),
+            created_at=now))
+        return {**result, "replayed": False}
+
+
+def retry_gap(store, tenant, account, gap_id, *, command_key, actor, reason):
+    """Explicitly re-open a retained failed page after the provider or integration was fixed."""
+    return _gap_command(store, tenant, account, gap_id, command_key=command_key, actor=actor, reason=reason, kind="page", action="retry")
+
+
+def dismiss_row_gap(store, tenant, account, gap_id, *, command_key, actor, reason):
+    """A person reviewed one quarantined row. The row and the review stay on record; a page gap cannot be dismissed."""
+    return _gap_command(store, tenant, account, gap_id, command_key=command_key, actor=actor, reason=reason, kind="row", action="dismiss")
+
+
+def record_vault_outcome(store, account, result):
+    """Meter the outcome of the vault page the preparation pass just attempted (request counts come from the guard)."""
+    error = result.get("error")
+    if error in (None, "page_budget_exhausted") and result.get("pages", 0) > 0:
+        outcome = "ok"
+    elif error in ("vault_read_failed", "vault_retry_exhausted") and result.get("failure") in ("transient", "auth", "schema"):
+        outcome = "rate_limited" if result.get("cause") == "provider_rate_limited" else "failed"
+    else:
+        return
+    with Session(store.engine) as s, s.begin():
+        if s.get(OfFansImportSource, (account, "vault_window")) is not None:
+            _meter(s, account, "vault_window", utcnow(), outcome=outcome, rows=result.get("upserted", 0))

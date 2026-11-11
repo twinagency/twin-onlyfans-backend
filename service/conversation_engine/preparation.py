@@ -361,6 +361,7 @@ def prepare_one(store,tenant,account,*,client_factory):
     """
     from fans_api_adapter.intake import FansWebhookAdapter
     from fans_api_adapter.vault_sync import sync_vault
+    from fans_api_adapter import history_import
     from db.onlyfans_vault_models import OfVaultSyncJob
     # Session-level advisory lock across I/O; no transaction spans HTTP.
     key="preparation:"+tenant+":"+account
@@ -377,14 +378,17 @@ def prepare_one(store,tenant,account,*,client_factory):
                 same=connection is not None and (connection.binding_id,connection.provider_account_id,connection.provider_creator_id)==(runtime.binding_id,config["provider_account"],config["creator_id"])
                 from db.onlyfans_fans_intake_models import OfFansLink
                 link=s.get(OfFansLink,(account,config["creator_id"]))
-                latest=None
+                latest=None;vault_done=False;vault_job=None;history_started=history_import.started(s,account)
                 if same and link is not None and link.provider_account_id==config["provider_account"] and link.state=="connected":
                     latest=s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account,
                         OfVaultSyncJob.binding_id==runtime.binding_id,OfVaultSyncJob.connection_revision==connection.epoch,
                         OfVaultSyncJob.provider_kind=="fansapi",OfVaultSyncJob.provider_account==config["provider_account"])
                         .order_by(OfVaultSyncJob.requested_at.desc(),OfVaultSyncJob.job_id.desc()).limit(1))
                     # A new explicit refresh supersedes the completed shortcut.
-                    if latest is not None and latest.status=="complete":return {"state":"complete"}
+                    if latest is not None and latest.status=="complete":
+                        # Preparation is finished unless a configured history import still has automatic work.
+                        if not history_started:return {"state":"complete"}
+                        vault_done=True;vault_job=latest.job_id
                     # A semantic import failure needs an explicit new sync command;
                     # transient read failures keep the same pending cursor.
                     if latest is not None and latest.status in ("failed","superseded"):
@@ -404,6 +408,11 @@ def prepare_one(store,tenant,account,*,client_factory):
                 if due and max(due)>now:
                     return {"state":"delayed","cause":live["cause"] if live is not None else "provider_unavailable",
                         "retryNotBefore":_iso(max(due))}
+                if vault_done:
+                    # Nothing due means no identity read and no reservation: pacing is persisted, not an in-process timer.
+                    plan=history_import.eligibility(s,account,now)
+                    if plan["state"]=="idle":return {"state":"complete"}
+                    if plan["state"]=="delayed":return {"state":"delayed","cause":"history_read_pacing","retryNotBefore":_iso(plan["at"])}
                 limits=config["limits"]
                 if row.provider_requests_used>=limits["provider_requests"] or row.provider_credits_reserved+limits["provider_credits_per_request"]>limits["provider_credit_budget"]:
                     row.last_attempt_json=encoded(attempt_record("budget_exhausted","provider_budget_exhausted",revision=revision,terminal=True))
@@ -412,17 +421,34 @@ def prepare_one(store,tenant,account,*,client_factory):
                 epochs=s.scalars(select(OfFansConnection.epoch).where(OfFansConnection.account_id==account)).all()
                 epoch=connection.epoch if same else max(epochs,default=0)+1
             guard=PreparationRequestGuard(store,tenant,account,revision)
+            history=None
             try:
                 client=client_factory(config,epoch,guard)
                 FansWebhookAdapter(store).bind_verified(tenant,account,client,guard=guard)
-                result=sync_vault(store,tenant,account,client,max_pages=1)
+                if vault_done:
+                    result={"complete":True,"pages":0,"upserted":0,"skipped":{},"error":None,"jobId":vault_job}
+                else:
+                    result=sync_vault(store,tenant,account,client,max_pages=1)
+                    if history_started:history_import.record_vault_outcome(store,account,result)
+                if history_started:history=history_import.step(store,tenant,account,client)
             except Exception as exc:
                 record=_exception_record(exc,revision=revision,prior=prior)
                 if record is not None:_record_attempt(store,account,revision,record)
                 raise
-            record=_result_record(result,revision=revision)
+            record=None if vault_done else _result_record(result,revision=revision)
+            if history is not None:
+                if history["failure"]=="auth":
+                    record=attempt_record("identity_failed",history["cause"] or "provider_auth_rejected",revision=revision,terminal=True)
+                elif history["failure"]=="budget":
+                    record=attempt_record("budget_exhausted","provider_budget_exhausted",revision=revision,terminal=True)
+                elif vault_done and any(r["outcome"]=="ok" for r in history["reads"]):
+                    record=attempt_record("partial","page_imported",revision=revision) if history["pending"] else attempt_record("complete","import_complete",revision=revision)
             if record is not None:_record_attempt(store,account,revision,record)
-            return {"state":"complete" if result["complete"] else "partial","vault":result}
+            out={"state":"complete" if result["complete"] and (history is None or not history["pending"]) else "partial","vault":result}
+            if history is not None:
+                out["history"]=history
+                if history["failure"] in ("auth","budget"):out["state"]="held"
+            return out
         finally:
             lock.execute(text("SELECT pg_advisory_unlock(hashtextextended(:key,0))"),{"key":key})
 

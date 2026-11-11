@@ -43,6 +43,10 @@ ALLOWED_TRANSPORTS = ENGINE_TRANSPORT_KINDS
 _KEY = re.compile(r'[\x21-\x7e]{1,255}\Z')
 
 
+class IntakeBackpressure(Refused):
+    """The shared ingress queue is full; nothing was ingested for this row and the caller must retry later."""
+
+
 def _parse(raw):
     import decimal
     try:
@@ -809,15 +813,21 @@ class FansEventIntake:
             action()
         return result
 
-    def ingest_history_item(self, tenant, account, chat_id, item, *, source='backfill'):
+    def ingest_history_item(self, tenant, account, chat_id, item, *, source='backfill', detail=None):
         """One history message: canonical text/media context plus separate PPV unlock evidence.
-        Old creator replies are deliberately NOT takeover evidence."""
+        Old creator replies are deliberately NOT takeover evidence.
+
+        ``detail``: an optional list that receives the intake outcome ('accepted' or 'duplicate') of the ingress row,
+        which the return value ('ok') does not distinguish for creator messages."""
         fan_id = ev.numeric(chat_id)
         sender = item.get('fromUser') if type(item.get('fromUser')) is dict else {}
         now = utcnow()
         if sender.get('id') is not None and ev.numeric(sender['id']) == fan_id and item.get('isSentByMe') is not True:
             message = _message({'event': 'messages.received', 'payload': dict(item, fromUser=sender)})
-            return self.store.record(tenant, account, message, source='catchup')
+            recorded = self.store.record(tenant, account, message, source='catchup')
+            if detail is not None:
+                detail.append(recorded)
+            return recorded
         message_id = ev.numeric(item.get('id'))
         after = []
         with Session(self.engine) as s, s.begin():
@@ -846,8 +856,10 @@ class FansEventIntake:
             # Historical creator context does not trigger live work or takeover.
             # Use the existing immutable ingress and its duplicate/conflict fences.
             recorded = self.store._record(s, runtime, event, event.payload(), 'import', now)
+            if detail is not None:
+                detail.append(recorded)
             if recorded == 'backpressure':
-                raise Refused('outgoing history requires intake capacity before completion')
+                raise IntakeBackpressure('outgoing history requires intake capacity before completion')
             digest = ev.digest(item)
             price = item.get('price')
             if item.get('isOpened') is True and price not in (None, 0) and float(price) > 0:

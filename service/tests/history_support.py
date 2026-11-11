@@ -46,13 +46,13 @@ class Provider:
         if found:
             fan = int(found.group(1))
             self.calls.append(("chats", fan, query))
-            return self._next(self.chats.get(fan, []), lambda: chat_page([]))()
+            return self._next(self.chats.get(fan, []), chat_page([]))()
         if path.endswith("/transactions"):
             self.calls.append(("transactions", None, query))
-            return self._next(self.tx, lambda: tx_page([]))()
+            return self._next(self.tx, tx_page([]))()
         if path.endswith("/chargebacks"):
             self.calls.append(("chargebacks", None, query))
-            return self._next(self.cb, lambda: cb_page([]))()
+            return self._next(self.cb, cb_page([]))()
         raise AssertionError("unscripted request " + path)
 
     def kinds(self, *names):
@@ -124,10 +124,16 @@ def spec(webhooks=True, start_date=START, **kw):
             "sources": sources(**kw)}
 
 
-def prepared(database, i=1, *, requests=400, credits=800, begin=True, **kw):
+def prepared(database, i=1, *, requests=400, credits=800, begin=True, keep_seed_fan=False, **kw):
     """A configured disabled preparation account (+ started history import unless begin is False)."""
     from fans_api_adapter import history_import
     store, account, cfg = setup(database, i, requests=requests, credits=credits)
+    if not keep_seed_fan:
+        # seed() creates one local fan (101). History tests list only the fans they name.
+        from sqlalchemy import text
+        with database[1].begin() as c:
+            for table in ("of_conversation_state", "chats", "fans"):
+                c.execute(text(f"DELETE FROM {table} WHERE account_id=:a AND fan_id=101"), {"a": account})
     if begin:
         history_import.configure(store, TENANT, account, spec(**kw), expected_revision=0, command_key=key(1000 + i),
                                  actor=ACTOR, reason="Explicit history import budgets")

@@ -538,6 +538,12 @@ def create_category_drafts(store, tenant, account, *, category, command_key, act
                     'classificationConfirmed': True, 'rightsConfirmed': True,
                     'reviewedState': {**reviewed, 'assets': {mid: reviewed['assets'][mid] for mid in product['mediaIds']}}}),
                 acknowledgement_json=canonical(acknowledgement), created_at=row.created_at))
+            # The agency's category price (single) or approved total (bundle) is the approved term, written once through the
+            # one terms writer in the same transaction. This neither enables the item nor activates the account.
+            from . import catalogue_terms
+            catalogue_terms.insert_revision(session, runtime, row, standard_cents=product['priceCents'], discount_cents=None,
+                actor=actor, command_key=key, request_hash=fingerprint, category_folder_id=folder.id,
+                category_price_revision=folder.price_revision)
             result.append(acknowledgement)
         return {'items': result}
 

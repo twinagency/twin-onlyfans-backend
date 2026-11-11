@@ -187,3 +187,42 @@ async def preparation_write(request:Request,account_id:str):
         return refuse("preparation_conflict",409,"Preparation was refused. Refresh and check the disabled connector, identity and budget.")
     except Exception:return refuse("outcome_unconfirmed",500,"The outcome is unconfirmed. Retry the same preparation request.")
     return response({"ok":True,"accountId":account_id,"commandKey":body["commandKey"],"preparation":data})
+
+
+@router.get("/accounts/{account_id}/commercial")
+async def commercial_read(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from conversation_engine.commercial_scope import view
+    try:data=await asyncio.to_thread(view,store,tenant,account_id)
+    except Refused:return refuse("not_available",404,"That commercial scope is unavailable.")
+    except Exception:return refuse("commercial_unavailable",503,"Commercial scope status could not be read.")
+    return response({"ok":True,"accountId":account_id,"commercial":data})
+
+@router.post("/accounts/{account_id}/commercial")
+async def commercial_write(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from conversation_engine.commercial_scope import promote
+    try:
+        if request.headers.get("content-type","").split(";")[0].strip().lower()!="application/json":raise ValueError()
+        raw=bytearray()
+        async for part in request.stream():
+            if len(raw)+len(part)>16384:return refuse("request_too_large",413,"Commercial scope request is too large.")
+            raw.extend(part)
+        body=json.loads(raw,object_pairs_hook=unique_keys)
+        common={"action","expectedRevision","commandKey","actor","reason"}
+        if type(body) is not dict or body.get("action") not in ("promote",) or set(body)!=(common|({"config"} if body["action"]=="promote" else set())):raise ValueError()
+    except (ValueError,TypeError,UnicodeError,RecursionError):
+        return refuse("invalid_request",400,"Invalid commercial scope request.")
+    try:
+        options={k:body[k] for k in ("actor","reason")}
+        options.update(expected_revision=body["expectedRevision"],command_key=body["commandKey"])
+        data=await asyncio.to_thread(promote,store,tenant,account_id,body["config"],**options)
+    except Refused as exc:
+        if str(exc)=="scope unavailable":return refuse("not_available",404,"That commercial scope is unavailable.")
+        return refuse("commercial_conflict",409,"The commercial scope command was refused. Refresh and check the prepared connection, disabled runtime and limits.")
+    except Exception:return refuse("outcome_unconfirmed",500,"The outcome is unconfirmed. Retry the same commercial scope request.")
+    return response({"ok":True,"accountId":account_id,"commandKey":body["commandKey"],"commercial":data})

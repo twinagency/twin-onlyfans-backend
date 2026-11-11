@@ -486,6 +486,91 @@ def from_curl(curl_text: str, *,
     return session_path
 
 
+def build_connection_capture(curl_text: str, *,
+                             static_param_override: str | None = None) -> dict:
+    """Derive a dashboard connection capture from a single DevTools curl.
+
+    Pure derivation twin of `from_curl` — parses the curl, resolves
+    static_param, fetches 2313.js, derives + verifies the signing rules, and
+    returns exactly the shape the dashboard connection contract expects
+    (`connectionCapture` in twin-dashboard/lib/onlyfans-connections/contract.ts):
+
+        {"capture": {headers, signing.rules, cookies}, "xHash": ..., "ownerId": ...}
+
+    It writes nothing and touches no account registry — the caller (the
+    connection API) only needs the material to run its own save + verify.
+    The hard obfuscation-sensitive step stays in of_signer.derive_rules_from_chunk,
+    the single source shared with from_curl.
+    """
+    parsed = parse_curl(curl_text)
+    h = parsed["headers"]
+    required = ("user-id", "x-bc", "x-of-rev", "sign", "time", "user-agent")
+    missing = [k for k in required if not h.get(k)]
+    if missing:
+        raise CurlParseError(
+            f"curl is missing required signed-request headers: {missing}. "
+            f"Copy a /api2/v2/* request, not a static asset GET."
+        )
+    user_id, x_bc, x_of_rev = h["user-id"], h["x-bc"], h["x-of-rev"]
+    user_agent, sign, time_ms = h["user-agent"], h["sign"], h["time"]
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", user_id):
+        raise CurlParseError("user-id header is not a numeric OnlyFans id")
+    # The Fastt Login extension's curl carries no x-hash; it is a per-user
+    # value OnlyFans serves publicly, so fetch it when the paste lacks one.
+    x_hash = h.get("x-hash")
+    if not x_hash:
+        request = urllib.request.Request(
+            f"https://cdn2.onlyfans.com/hash/?u={user_id}",
+            headers={"User-Agent": user_agent, "Referer": "https://onlyfans.com/",
+                     "Accept": "application/json, text/plain, */*"})
+        with urllib.request.urlopen(request, timeout=20) as r:
+            x_hash = r.read(4096).decode("utf-8", errors="strict").strip()
+        if not re.fullmatch(r"[\x21-\x7e]{8,512}", x_hash):
+            raise RuntimeError("OnlyFans returned no usable X-Hash for this account.")
+    parts = sign.split(":")
+    if len(parts) != 4:
+        raise CurlParseError(f"Sign header malformed (need 4 colon parts): {sign!r}")
+    start, sha1Hex, hexchecksum, end = parts
+    for label, supplied, wire in (("start", h.get("x-relay-sign-start"), start),
+                                  ("end", h.get("x-relay-sign-end"), end)):
+        if supplied and supplied != wire:
+            raise CurlParseError(f"x-relay-sign-{label} disagrees with the Sign header — page state is inconsistent")
+    try:
+        checksum_value = abs(int(hexchecksum, 16))
+    except ValueError as e:
+        raise CurlParseError(f"hex checksum portion is not hex: {hexchecksum!r}") from e
+    sample = {"sha1Hex": sha1Hex, "checksumValue": checksum_value,
+              "url": parsed["url"], "time": time_ms, "user_id": user_id}
+    static_param = static_param_override or h.get("x-relay-static-param") or _lookup_static_param_for_rev(x_of_rev)
+    if not static_param:
+        raise CurlParseError(
+            f"No static_param available for x-of-rev {x_of_rev!r}. Use the Fastt "
+            f"Login extension (it injects x-relay-static-param), or paste a "
+            f"static_param override."
+        )
+    chunk_url = CHUNK_URL_TPL.format(rev=x_of_rev)
+    with urllib.request.urlopen(chunk_url, timeout=20) as r:
+        chunk_code = r.read().decode("utf-8", errors="replace")
+    derived = derive_rules_from_chunk(chunk_code, [sample])
+    if not derived:
+        raise RuntimeError("Could not derive checksum rules from chunk; update of_signer regexes.")
+    rules = {
+        "static_param": static_param, "start": start, "end": end,
+        "checksum_indexes": derived["checksum_indexes"],
+        "checksum_constant": derived["checksum_constant"],
+    }
+    ok, _ = verify_rules(rules, [sample])
+    if not ok:
+        raise RuntimeError("Derived rules failed to reproduce the captured Sign (static_param likely wrong for this revision).")
+    capture = {
+        "headers": {"user_id": user_id, "x_bc": x_bc,
+                    "x_of_rev": x_of_rev, "user_agent": user_agent},
+        "signing": {"rules": rules},
+        "cookies": parsed["cookies"],
+    }
+    return {"capture": capture, "xHash": x_hash, "ownerId": int(user_id)}
+
+
 # ─── helpers ─────────────────────────────────────────────────────────────
 
 def _lookup_static_param_for_rev(x_of_rev: str) -> str | None:

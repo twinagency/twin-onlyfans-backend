@@ -40,6 +40,8 @@ from .operator import FANSAPI_EVIDENCE_PREFIX, evidence_allowed
 PLAN_C_TRANSPORT = 'fansapi'
 MESSAGES_SHOWN = 10
 STALE_PENDING = timedelta(minutes=15)
+# Visibility threshold only; model runtime/config remain the retry authority.
+LONG_MODEL_RETRY_WAIT = timedelta(hours=1)
 CONTROL = {'stop': ('paused', 'pause_automation'),
            'takeover': ('human_controlled', 'request_takeover'),
            'handback': ('automated', 'release_takeover')}
@@ -534,7 +536,12 @@ def request_recovery(s, runtime, request, *, now=None):
     if due is not None:
         result['nextRetryAt'] = _iso(due)
         if due > now:
-            return hold('scheduled_retry', 'wait_until_retry_due')
+            waiting = hold('scheduled_retry', 'wait_until_retry_due')
+            if any(c.retry_not_before - c.updated_at > LONG_MODEL_RETRY_WAIT for c in retries):
+                # Retain visibility even after a crash between release and handover. A long wait
+                # merits attention, but establishes no human-only state or send permission.
+                waiting.update(operatorAlert=True, recoveryReason='long_retry_wait')
+            return waiting
     overdue = now - (due or request.updated_at) >= timedelta(minutes=5)
     return hold('overdue_eligible' if overdue else 'retry_due' if retries else 'awaiting_planning',
                 'review_stranded_request' if overdue else 'await_scheduler')

@@ -1,0 +1,48 @@
+TWIN COMMERCIAL BUILD - MILESTONE 1 (R0-R3 REPAIRS) - 11 NOV 2026   [DRAFT, Plan C results pending]
+
+STATUS: all four repairs built and tested. Nothing deployed. Nothing pushed to main.
+
+HIGH LEVEL
+- R0 (messages stuck forever after the AI said "too busy"): FIXED in code.
+  - It now retries once after the wait, then hands to a human. 400/401/403 go to a human at once.
+  - Unknown-cost calls are still never retried. Newer fan message still cancels the old one.
+  - The 3 stuck live requests would simply close as "superseded", no AI call, no message.
+- R1 (importer ignored "wait 120s"): FIXED. It now waits, counts attempts, gives up visibly after 5.
+- R2 (failed login hidden in the dashboard): FIXED. Dashboard shows the cause, next retry and what to do.
+- R3 (old confident category kept after weaker analysis): FIXED. Operator folders and prices untouched.
+- Live trial: NOT changed. The R0 fix for the trial is ready as its own small change (schema 0129b only).
+  Deploying it needs Ronan's yes.
+- Not proven: real provider 429 behaviour (cannot be forced), concurrent real load, production dashboard build.
+- All work is on GitHub as branches only. No main exists on the backend; dashboard main is live and untouched.
+
+LOW LEVEL
+Commits (backend):
+- R0 trial line: 5eee7e5 on claude/plan-c-r0-retry-20261111 (base 659ea29), image twin-plan-c-r0:5eee7e584924
+- Commercial line: claude/commercial-r0-r3-20261111 = R1/R2 05a08e9, R3 9b4737b, R0 be7108d, pin fix d10e065
+  image twin-commercial-r0r3:be7108d335a2 (sha256:fdd77951...), schema 0133_preparation_retry_state
+- Dashboard: 95ca2d9 on claude/commercial-dashboard-r2-20261111 (base b77ec6d)
+- Migrations: 0129b_model_retry_due (additive, trial-compatible), 0133_preparation_retry_state; 0130 re-parented onto 0129b.
+
+Closure table (defect -> failing test first -> result):
+- R0: test_plan_c_model_retry_due_pg.py (22 tests; fails on 659ea29, passes on fix) via real SupervisedPilot.tick
+- R1: reviewer test_retry_after_blocks_early_second_page_read (failed 3/3 before, passes unchanged) + 17 new tests
+- R2: reviewer test_identity_failure_is_visible_in_persisted_status (same) + dashboard UI test 5/5, typecheck exit 0
+- R3: reviewer test_later_uncertain_analysis_cannot_keep_proposed_classification + 13 new tests
+
+Tests actually run (frozen images, no overlay, own Postgres):
+- Commercial image: counterexamples+new 54 pass; shard a 69; shard b 133; engine+vault 126; Plan C: PENDING
+- Trial image: R0+engine 119 pass; Plan C: PENDING
+- Earlier on the unfrozen R0 tree: Plan C 786 pass/1 skip, engine 129+5 pass, foundation+holds 65 pass.
+- Changed existing assertions (each disclosed in commits): schema-head pins (0129->0129b / 0133), the 4xx no-fallback
+  test (now expects human handover), one resume test (R1: immediate retry now returns delayed), one scope-upgrade
+  test (new nullable column), 2 Plan C pins left stale by the R0 port (fixed d10e065).
+- Not run: 3 stuck-request replay on a copy of the live DB (covered by synthetic equivalents), real provider,
+  browser journey, production dashboard build.
+
+Known open points:
+- R3: an item that drops to uncertain keeps any older auto-category folder as well as Miscellaneous; unsellable regardless.
+- 7aa81dc (reviewer baseline) already failed 2 Plan C pin tests outside the builder's shards.
+
+Backups: GitHub branches; ~/twin/work-server-backup-20261111 (restore-tested bundles); ThinkCentre ~/backups/.
+Next: step 2 scope transition (building), step 3 catalogue/terms and step 1 history plans written in
+/srv/projects/claude-commercial-plans-20261111/ (backed up).

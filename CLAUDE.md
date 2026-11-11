@@ -1,3 +1,5 @@
+> **ENGINE WORK (OnlyFans conversation and sales engine, `service/conversation_engine`, `model_transport`, commercial build): read `docs/handover/HANDOVER-20261111.md` first.** The rest of this file describes the older FASTT tool.
+
 # CLAUDE.md — orientation for an AI agent working in this repo
 
 You're in **Fastt** (repo name `inflowwkiller`): a self-hosted creator dashboard

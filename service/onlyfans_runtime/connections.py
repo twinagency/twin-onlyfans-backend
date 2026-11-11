@@ -442,10 +442,11 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
         raise Refused('invalid worker account cursor or tenant')
     if stop is not None and stop.is_set():return [],after_account,0
     from .native_worker import WorkerAccount
+    from .provider_read_budget import native_family_clause,require_native_family
     result=[]
     with Session(store.engine) as s:
         query=select(OfProviderConnection.account_id).join(OfCreatorBinding,OfCreatorBinding.id==OfProviderConnection.binding_id).where(
-            OfCreatorBinding.tenant_id==tenant,OfCreatorBinding.channel=='onlyfans',OfCreatorBinding.revoked_at.is_(None),OfProviderConnection.status!='paused')
+            OfCreatorBinding.tenant_id==tenant,OfCreatorBinding.channel=='onlyfans',OfCreatorBinding.revoked_at.is_(None),OfProviderConnection.status!='paused',native_family_clause(OfProviderConnection.account_id))
         def candidate_ids(cursor):
             selection=query.where(OfProviderConnection.account_id>cursor) if cursor is not None else query
             return s.scalars(selection.order_by(OfProviderConnection.account_id).limit(limit+1)).all()
@@ -459,7 +460,7 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
         generation=None;renewable=False;snapshot=None
         try:
             with Session(store.engine) as s,s.begin():
-                runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
+                runtime=store._runtime(s,tenant,account);require_native_family(s,account);row=s.get(OfProviderConnection,account)
                 if row is None or row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
                 now=utcnow()
                 renewable=(row.status in {'verified','expired'} and row.verified_at is not None
@@ -493,7 +494,7 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                         budget=acquire(store,tenant,account,connection_revision=generation,kind='connection_check')
                     transport.verify_identity()
                     with Session(store.engine) as s,s.begin():
-                        runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
+                        runtime=store._runtime(s,tenant,account);require_native_family(s,account);row=s.get(OfProviderConnection,account)
                         if (row is None or row.binding_id!=runtime.binding_id or row.revision!=generation
                             or row.sealed_config!=snapshot or row.status!=status
                             or status=='pending' and row.expires_at<=utcnow()):continue
@@ -525,7 +526,7 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
             # Verified connections can load inbox history without an AI key or
             # outgoing activation. Sending keeps its existing policy gate.
             with Session(store.engine) as s,s.begin():
-                runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
+                runtime=store._runtime(s,tenant,account);require_native_family(s,account);row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
                 if (row is None or row.revision!=generation or row.binding_id!=runtime.binding_id
                     or row.status!='verified' or row.verified_at is None or row.expires_at<=utcnow()):continue
                 outgoing=bool(runtime.enabled and policy is not None and policy.enabled

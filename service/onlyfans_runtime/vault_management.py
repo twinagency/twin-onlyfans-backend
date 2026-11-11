@@ -147,6 +147,8 @@ def parse_vault_page(raw, *, owner_id, page_size=PAGE_SIZE, allow_identical_dupl
 
 
 def _connection(session, runtime):
+    from .provider_read_budget import require_native_family
+    require_native_family(session,runtime.account_id)
     row = session.get(OfProviderConnection, runtime.account_id)
     if (row is None or row.binding_id != runtime.binding_id or row.status != "verified"
         or row.verified_at is None or row.expires_at <= utcnow()):
@@ -221,23 +223,27 @@ def request_sync(store, tenant, account, *, expected_connection_revision, comman
         connection = _connection(s, runtime)
         if connection.revision != expected_connection_revision:
             raise Refused("vault connection revision conflict")
-        if s.scalar(select(OfVaultSyncJob.job_id).where(OfVaultSyncJob.account_id == account,
-            OfVaultSyncJob.status.in_(("pending", "running"))).limit(1)):
-            raise Refused("vault sync already active")
-        now = utcnow()
+        active=s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account,
+            OfVaultSyncJob.status.in_(("pending","running"))).with_for_update())
+        now=utcnow()
+        if active is not None:
+            if (active.provider_kind=="native" and active.binding_id==runtime.binding_id
+                    and active.connection_revision==connection.revision and active.owner_id==connection.owner_id):
+                raise Refused("vault sync already active")
+            _terminal(active,"superseded","connection_changed");s.flush()
         # An interrupted initial scan continues from its committed cursor instead of
         # restarting a multi-hour import from zero. A short overlap re-reads the last
         # page so items that shifted while the job was down are not skipped.
         offset = pages = 0
         window = None
         previous = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
-            OfVaultSyncJob.binding_id == runtime.binding_id).order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
+            OfVaultSyncJob.binding_id == runtime.binding_id,OfVaultSyncJob.provider_kind=="native").order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
         if window_policy.enabled():
             # Full selected windows run initially and daily. Ordinary refreshes
             # scan newest-first only until a page of already known IDs overlaps.
             full = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
                 OfVaultSyncJob.binding_id == runtime.binding_id, OfVaultSyncJob.status == "complete",
-                OfVaultSyncJob.window_json.like('%"mode":"window"%'))
+                OfVaultSyncJob.provider_kind=="native",OfVaultSyncJob.window_json.like('%"mode":"window"%'))
                 .order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
             mode = "head" if full is not None and full.completed_at is not None and now - full.completed_at < timedelta(seconds=window_policy.RECONCILE_SECONDS) else "window"
             window = window_policy.start(now, mode)
@@ -590,8 +596,10 @@ def _terminal(row, status, error=None):
     row.lease_token = row.lease_until = None
 
 
-def _current(runtime, connection, job):
-    return (connection is not None and connection.binding_id == runtime.binding_id == job.binding_id
+def _current(session,runtime,connection,job):
+    from .provider_read_budget import native_family_clause
+    return (session.scalar(select(native_family_clause(runtime.account_id)))
+        and getattr(job,"provider_kind","native")=="native" and connection is not None and connection.binding_id == runtime.binding_id == job.binding_id
         and connection.revision == job.connection_revision and connection.owner_id == job.owner_id
         and connection.status == "verified" and connection.expires_at > utcnow())
 
@@ -632,6 +640,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
         raise Refused("invalid vault work bound")
     if stop is not None and stop.is_set():
         return 0
+    from .provider_read_budget import native_family_clause
     processed = 0
     for _ in range(limit):
         if stop is not None and stop.is_set():
@@ -641,7 +650,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             candidate = s.execute(select(OfVaultSyncJob.account_id, OfVaultSyncJob.job_id).join(
                 OfCreatorBinding, OfCreatorBinding.id == OfVaultSyncJob.binding_id).where(
                 OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
-                OfCreatorBinding.channel == "onlyfans", OfVaultSyncJob.provider_kind == "native", or_(OfVaultSyncJob.status == "pending",
+                OfCreatorBinding.channel == "onlyfans", OfVaultSyncJob.provider_kind == "native", native_family_clause(OfVaultSyncJob.account_id), or_(OfVaultSyncJob.status == "pending",
                     and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)))
                 .order_by(_priority_order(), OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
         if candidate is None:
@@ -657,7 +666,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             if job.status not in {"pending", "running"} or job.status == "running" and job.lease_until > utcnow():
                 continue
             connection = s.get(OfProviderConnection, account)
-            if not _current(runtime, connection, job):
+            if not _current(s,runtime,connection,job):
                 _terminal(job, "superseded", "connection_changed")
                 continue
             if window_policy.enabled() and job.window_json is None:
@@ -726,7 +735,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 job = s.get(OfVaultSyncJob, (account, identity))
                 if job.status != "running" or job.lease_token != token:
                     continue
-                if not _current(runtime, s.get(OfProviderConnection, account), job):
+                if not _current(s,runtime,s.get(OfProviderConnection,account),job):
                     _terminal(job, "superseded", "connection_changed")
                     continue
                 if budget is not None:
@@ -852,7 +861,7 @@ def _removal_candidate(session, tenant):
         if latest is None or latest.status in {"pending", "running"}:
             continue
         done = session.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
-            OfVaultSyncJob.status == "complete",
+            OfVaultSyncJob.status == "complete",OfVaultSyncJob.provider_kind=="native",
             or_(OfVaultSyncJob.window_json.is_(None), OfVaultSyncJob.window_json.like('%"mode":"window"%')))
             .order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
         if done is None: continue
@@ -883,8 +892,10 @@ def confirm_removals(store, tenant, *, stop=None):
     if found is None:
         return 0
     account, media_id, done_id = found
+    from .provider_read_budget import native_family_clause
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
+        if not s.scalar(select(native_family_clause(account))):return 0
         connection = s.get(OfProviderConnection, account)
         done = s.get(OfVaultSyncJob, (account, done_id))
         if (connection is None or connection.binding_id != runtime.binding_id or done.binding_id != runtime.binding_id
@@ -922,6 +933,7 @@ def confirm_removals(store, tenant, *, stop=None):
             return 0
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, tenant, account)
+            if not s.scalar(select(native_family_clause(account))):return 0
             connection = s.get(OfProviderConnection, account)
             if (connection is None or connection.binding_id != runtime.binding_id or connection.owner_id != owner
                     or connection.status != "verified"):

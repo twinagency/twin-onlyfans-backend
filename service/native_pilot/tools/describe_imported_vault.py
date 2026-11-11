@@ -139,7 +139,9 @@ async def run(args):
                     item = await session.get(VaultItem, (args.account, media_id), with_for_update=True)
                     observation = await session.get(OfVaultObservation, (args.account, media_id))
                     job = await session.get(OfVaultSyncJob, (args.account, observation.job_id)) if observation else None
-                    if (runtime is None or binding is None or connection is None or item is None
+                    from onlyfans_runtime.provider_read_budget import native_family_clause
+                    selected_native=await session.scalar(select(native_family_clause(args.account)))
+                    if (not selected_native or runtime is None or binding is None or connection is None or item is None
                         or runtime.binding_id != args.binding or binding.tenant_id != args.tenant
                         or binding.revoked_at is not None or binding.account_id != args.account
                         or binding.channel != "onlyfans" or connection.revision != args.revision
@@ -184,6 +186,10 @@ async def run(args):
                     # to this one serial, metadata-only child and purpose.
                     if account_key is not None and kwargs.get('model') != caption_vault.DEFAULT_MODEL:
                         raise Refused('caption fallback provider unavailable')
+                    from onlyfans_runtime.provider_read_budget import native_family_clause
+                    async with get_session() as session:
+                        if not await session.scalar(select(native_family_clause(args.account))):
+                            raise Refused("native provider family is not selected")
                     token=llm_client._vault_caption_account.set(args.account)
                     try:
                         return await legacy_chat(**kwargs)

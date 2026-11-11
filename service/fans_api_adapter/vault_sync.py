@@ -72,10 +72,15 @@ def request_sync(store,tenant,account,*,expected_connection_revision,command_key
         OfFansConnection.binding_id==runtime.binding_id,OfFansConnection.status=="active"))
     if connection is None or connection.epoch!=expected_connection_revision:
         raise Refused("vault connection revision conflict")
-    if session.scalar(select(OfVaultSyncJob.job_id).where(OfVaultSyncJob.account_id==account,
-            OfVaultSyncJob.status.in_(("pending","running"))).limit(1)):
-        raise Refused("vault sync already active")
+    active=session.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account,
+        OfVaultSyncJob.status.in_(("pending","running"))).with_for_update())
     now=utcnow()
+    if active is not None:
+        if (active.provider_kind=="fansapi" and active.binding_id==runtime.binding_id
+                and active.connection_revision==connection.epoch and active.provider_account==connection.provider_account_id):
+            raise Refused("vault sync already active")
+        active.status="superseded";active.last_error="connection_changed";active.completed_at=now
+        active.lease_token=active.lease_until=None;active.updated_at=now;session.flush()
     job=OfVaultSyncJob(account_id=account,job_id=str(uuid.uuid4()),binding_id=runtime.binding_id,
         provider_kind="fansapi",provider_account=connection.provider_account_id,connection_revision=connection.epoch,
         owner_id=int(connection.provider_creator_id),command_key=command_key,request_hash=fingerprint,
@@ -145,8 +150,7 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
                 job=s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account,
                     OfVaultSyncJob.status.in_(("pending","running"))))
                 if job is not None:
-                    if job.provider_kind!="fansapi":raise Refused("another vault provider job is active")
-                    if (job.binding_id!=runtime.binding_id or job.connection_revision!=client.epoch
+                    if (job.provider_kind!="fansapi" or job.binding_id!=runtime.binding_id or job.connection_revision!=client.epoch
                             or job.provider_account!=client.account):
                         job.status="superseded";job.last_error="connection_changed";job.completed_at=now
                         job.lease_token=job.lease_until=None;job.updated_at=now

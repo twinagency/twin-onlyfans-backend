@@ -60,6 +60,7 @@ def pending(now):
 def accounts(store, tenant, after=None):
     """Only this tenant's current verified, canonically observed accounts."""
     now = utcnow()
+    from .provider_read_budget import native_family_clause
     query = (select(OfRuntime.account_id, OfRuntime.binding_id, OfProviderConnection.revision)
         .join(OfCreatorBinding, OfCreatorBinding.id == OfRuntime.binding_id)
         .join(OfProviderConnection, OfProviderConnection.account_id == OfRuntime.account_id)
@@ -69,7 +70,8 @@ def accounts(store, tenant, after=None):
         .join(OfVaultSyncJob, and_(OfVaultSyncJob.account_id == OfVaultObservation.account_id,
                                   OfVaultSyncJob.job_id == OfVaultObservation.job_id))
         .where(OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
-            OfCreatorBinding.channel == "onlyfans",
+            OfCreatorBinding.channel == "onlyfans",native_family_clause(OfRuntime.account_id),
+            OfVaultSyncJob.provider_kind=="native",
             OfProviderConnection.binding_id == OfRuntime.binding_id,
             OfProviderConnection.status == "verified", OfProviderConnection.verified_at.is_not(None),
             OfProviderConnection.last_error.is_(None), OfProviderConnection.expires_at > now,

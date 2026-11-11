@@ -63,8 +63,24 @@ class ReadClaim:
     parallel: bool = False
 
 
+def native_family_clause(account):
+    """An explicit FansAPI selection cannot use retained native credentials.
+
+    Missing legacy policy retains the pre-existing native preparation contract.
+    """
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    return ~select(OfDeliveryPolicy.account_id).where(
+        OfDeliveryPolicy.account_id==account,OfDeliveryPolicy.transport_kind=="fansapi").exists()
+
+
+def require_native_family(session,account):
+    if not session.scalar(select(native_family_clause(account))):
+        raise Refused("native provider family is not selected")
+
+
 def _valid(store, s, tenant, account, revision, now, kind):
     runtime = store._runtime(s, tenant, account)
+    require_native_family(s,account)
     connection = s.get(OfProviderConnection, account)
     if (connection is None or connection.binding_id != runtime.binding_id
             or connection.revision != revision):

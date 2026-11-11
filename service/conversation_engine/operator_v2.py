@@ -440,6 +440,72 @@ def _acknowledged(s, account, binding):
     return out
 
 
+def request_recovery(s, runtime, request, *, now=None):
+    """Read-only, request-scoped progress on the existing operator surface. No retry loop or new authority.
+
+    The request ID is the deduplication key. Deadlines and call evidence are durable; process restart cannot hide
+    an alert or turn a scheduled wait into a retry permission. Intentional holds are never labelled overdue work.
+    """
+    from .model_client import released_failure, MAX_AUTOMATIC_RETRY_SECONDS
+    now = now or utcnow()
+    calls = list(s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == request.account_id,
+        OfEngineModelCall.request_id == request.request_id, OfEngineModelCall.binding_id == runtime.binding_id)
+        .order_by(OfEngineModelCall.generation, OfEngineModelCall.seq)))
+    state = s.get(OfConversationState, (request.account_id, request.fan_id))
+    result = {'attemptsRecorded': len(calls), 'recoveryState': 'awaiting_planning', 'nextRetryAt': None}
+    if calls:
+        result['lastModelOutcome'] = calls[-1].outcome or calls[-1].status
+    def hold(kind, step):
+        return {**result, 'recoveryState': kind, 'recoveryNextStep': step,
+                'operatorAlert': kind in {'overdue_eligible', 'terminal_model_failure', 'deferred_operator',
+                                          'unknown_model_outcome', 'unknown_delivery', 'identity_hold'}}
+    if any(c.outcome in (*IDENTITY_UNSETTLED, 'identity_unverified') for c in calls):
+        return hold('identity_hold', 'review_model_identity')
+    if any(c.status == 'unknown' for c in calls):
+        return hold('unknown_model_outcome', 'review_model_outcome_and_cost')
+    if any(c.status == 'released' and released_failure(c.status, c.outcome, c.wire_started_at) == 'held' for c in calls):
+        return hold('unknown_model_outcome', 'review_model_outcome_and_cost')
+    intents = list(s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == request.account_id,
+        OfTextIntent.binding_id == runtime.binding_id, OfTextIntent.fan_id == request.fan_id,
+        OfTextIntent.status.in_(('dispatching', 'unknown')))))
+    if intents:
+        return hold('unknown_delivery', 'reconcile_with_provider_history')
+    if any(c.status in ('reserved', 'calling') for c in calls):
+        return hold('model_in_flight', 'await_model_lease_or_outcome')
+    if state is not None and (state.mode != 'automated' or state.takeover_state != 'none'):
+        return hold('intentional_control_hold', 'await_authorized_control_change')
+    from .pilot_scope import current, planning_block
+    scope, config = current(s, runtime)
+    if scope is not None and scope.status != 'active':
+        return hold('scope_held', 'review_pilot_scope')
+    if request.status in ('handover_pending', 'handover_accepted'):
+        from db.onlyfans_case_models import OfOperatorCase
+        case = s.scalar(select(OfOperatorCase).where(OfOperatorCase.account_id == request.account_id,
+            OfOperatorCase.fan_id == request.fan_id, OfOperatorCase.category == 'model_handover',
+            OfOperatorCase.source_message_id == request.source_message_id).order_by(OfOperatorCase.created_at.desc()).limit(1))
+        result['recoveryReason'] = case.reason if case is not None else 'handover'
+        return hold('deferred_operator' if result['recoveryReason'] == 'model_retry_deferred' else 'terminal_model_failure',
+                    'accept_handover' if request.status == 'handover_pending' else 'complete_or_decline_with_evidence')
+    if scope is not None and planning_block(s, runtime, request.fan_id) is not None:
+        return hold('review_hold', 'review_current_conversation_hold')
+    if any(released_failure(c.status, c.outcome, c.wire_started_at) == 'permanent' for c in calls):
+        return hold('terminal_model_failure', 'review_provider_configuration')
+    retries = [c for c in calls if released_failure(c.status, c.outcome, c.wire_started_at) == 'retryable']
+    due = max((c.retry_not_before or c.updated_at + timedelta(seconds=30) for c in retries), default=None)
+    # Legacy rows have no provider deadline; their existing 30-second default remains the minimum. Runtime also
+    # rechecks its configured cooldown before spending; this display cannot authorize work.
+    if due is not None:
+        result['nextRetryAt'] = _iso(due)
+        if any(c.retry_not_before and c.retry_not_before - c.updated_at > timedelta(seconds=MAX_AUTOMATIC_RETRY_SECONDS)
+               for c in retries):
+            return hold('deferred_operator', 'review_provider_retry_delay')
+        if due > now:
+            return hold('scheduled_retry', 'wait_until_retry_due')
+    overdue = now - (due or request.updated_at) >= timedelta(minutes=5)
+    return hold('overdue_eligible' if overdue else 'retry_due' if retries else 'awaiting_planning',
+                'review_stranded_request' if overdue else 'await_scheduler')
+
+
 def unresolved(store, tenant, account, actor=None):
     """Every item has an owner and a next step. Owners are roles (the dashboard limits owner to 64 characters)."""
     require_pilot_reader(store, tenant, account, actor)
@@ -679,10 +745,11 @@ def unresolved(store, tenant, account, actor=None):
             if request.request_id in shown_drafts:
                 continue
             cid, revision = conv(request.fan_id)
+            recovery = request_recovery(s, runtime, request)
             items.append(_item('open_request', request.request_id, (request.owner or 'operator')[:64],
-                               (request.next_step or 'review_request')[:128],
-                               f'Request for fan {request.fan_id} is {request.status}.', cid, revision,
-                               request.created_at, requestId=request.request_id, requestRevision=request.revision))
+                               recovery['recoveryNextStep'],
+                               f'Request for fan {request.fan_id}: {recovery["recoveryState"]}.', cid, revision,
+                               request.created_at, requestId=request.request_id, requestRevision=request.revision, **recovery))
         # 4. Conversations a human holds, waiting for an explicit hand back.
         for state, owner in s.execute(select(OfConversationState, OfEngineOwner).join(OfEngineOwner, and_(
                 OfEngineOwner.account_id == OfConversationState.account_id, OfEngineOwner.fan_id == OfConversationState.fan_id))
@@ -705,10 +772,11 @@ def unresolved(store, tenant, account, actor=None):
             if allowed is not None and request.fan_id not in allowed:
                 continue
             cid, revision = conv(request.fan_id)
+            recovery = request_recovery(s, runtime, request)
             items.append(_item('handover_request', request.request_id, 'human',
                                'accept_handover' if request.status == 'handover_pending' else 'complete_or_decline_with_evidence',
                                f'Request for fan {request.fan_id} is {request.status}.', cid, revision, request.updated_at,
-                               requestId=request.request_id, requestRevision=request.revision))
+                               requestId=request.request_id, requestRevision=request.revision, **recovery))
     return items[:500]
 
 

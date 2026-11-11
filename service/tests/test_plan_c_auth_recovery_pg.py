@@ -546,7 +546,9 @@ def test_reconnect_receipt_survives_restart_and_serializes_concurrent_recovery(s
         with pytest.raises(RuntimeError,match="Preserve reconnect receipts"):
             with c.begin_nested(): command.downgrade(_config(c),"0128_model_billing_evidence")
     # Construct a fresh store/client as a restarted worker would; receipt comes only from DB.
-    restarted=Store(str(w.database[1].url))
+    # SQLAlchemy str(URL) deliberately masks a password. Recreate the real URL, preserving password auth in the
+    # restarted store. This is test setup only; no product authentication or concurrency assertion is changed.
+    restarted=Store(w.database[1].url.render_as_string(hide_password=False))
     entered,release=threading.Event(),threading.Event()
     calls=[]
     def wire(req):

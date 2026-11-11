@@ -20,7 +20,7 @@ workers produce one invocation. An expired `reserved` lease (never reached the w
 `calling` lease (may have reached the wire) becomes `unknown`, still counted against the cap.
 """
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from hashlib import sha256
 import json
 import re
@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from db.onlyfans_engine_models import OfEngineModelCall, OfEngineOwner, OfEngineRequest
 from onlyfans_runtime.store import Refused, utcnow
 
-from .model_client import ModelBudgetExhausted, ModelBusy
+from .model_client import ModelBudgetExhausted, ModelBusy, released_failure
 
 log = logging.getLogger('conversation_engine.model')
 _BUDGET_LOCK = 7811071
@@ -69,11 +69,12 @@ class CallRow:
     reserved_microusd: int
     actual_microusd: int | None
     retry_not_before: object = None
+    wire_started_at: object = None
 
 
 def _row(r):
     return CallRow(r.call_id, r.seq, r.chain_pos, r.chain_step, r.model, r.status, r.outcome, r.snapshot_sha256,
-                   r.response_text, r.updated_at, r.reserved_microusd, r.actual_microusd, r.retry_not_before)
+                   r.response_text, r.updated_at, r.reserved_microusd, r.actual_microusd, r.retry_not_before, r.wire_started_at)
 
 
 def _counted():
@@ -172,6 +173,10 @@ class ModelLedger:
             self._expire(s, existing, now)
             if any(r.status in ('reserved', 'calling') for r in existing):
                 raise ModelBusy('a model call is already in flight for this request')
+            # Recheck persisted deadlines under the SAME claim/sequence lock, including callers outside the scheduler.
+            if any(released_failure(r.status, r.outcome, r.wire_started_at) == 'retryable'
+                   and r.model == model and r.retry_not_before is not None and r.retry_not_before > now for r in existing):
+                raise ModelBusy('model retry is not due')
             # A peer may finish between propose()'s cache read and this lock.
             # Re-enter the existing cache/judge path; do not bill identical work twice.
             if any(r.response_text is not None and r.snapshot_sha256 == snapshot_sha256
@@ -294,7 +299,7 @@ class ModelLedger:
     def release(self, account, call_id, worker_id, *, outcome, error_class, retry_delay_seconds=None, failure_detail=None):
         """A proven zero-cost end. A retryable availability refusal also records when the SAME request may be asked
         again (`retry_not_before`, durable across restarts); the bounded sanitized `failure_detail` is evidence only."""
-        if retry_delay_seconds is not None and (type(retry_delay_seconds) is not int or not 0 <= retry_delay_seconds <= 3600):
+        if retry_delay_seconds is not None and (type(retry_delay_seconds) is not int or retry_delay_seconds < 0):
             raise Refused('invalid model retry delay')
         detail = None
         if failure_detail is not None:
@@ -309,7 +314,10 @@ class ModelLedger:
             now = self.clock()
             row.status, row.outcome, row.error_class, row.updated_at = 'released', outcome, error_class, now
             if retry_delay_seconds is not None:
-                row.retry_not_before = now + timedelta(seconds=retry_delay_seconds)
+                try:
+                    row.retry_not_before = now + timedelta(seconds=retry_delay_seconds)
+                except OverflowError:
+                    row.retry_not_before = datetime.max  # beyond the supported window: always operator work
             if detail is not None:
                 row.failure_detail_json = detail
 

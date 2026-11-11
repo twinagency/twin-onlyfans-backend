@@ -17,6 +17,7 @@ from conversation_engine import approval
 from conversation_engine.journey import journey_config
 from conversation_engine.model_config import ModelConfig
 from conversation_engine.model_ledger import IDENTITY_UNSETTLED
+from conversation_engine.model_client import RETRYABLE_RELEASE_OUTCOMES, PERMANENT_RELEASE_OUTCOMES
 from conversation_engine.pilot_scope import require, require_model, require_profile, policy_matches, _product_current
 from conversation_engine.real_worker import RealConversationWorker
 from conversation_engine.writer_context import JsonFileCreatorProfiles
@@ -348,12 +349,14 @@ class SupervisedPilot:
             # refusal to a human. Unknown, in-flight and identity-unsettled calls stay held exactly as before.
             ledger = getattr(getattr(getattr(self.worker, 'engine', None), 'model', None), 'ledger', None)
             due_now = ledger.clock() if ledger is not None else utcnow()
-            proven_refusal = or_(OfEngineModelCall.outcome == 'not_sent',
-                                 OfEngineModelCall.outcome.op('~')('^http_[0-9]{3}$'))
+            # One policy vocabulary with the runtime: retryable releases are scheduled; permanent releases enter
+            # the same plan/propose path solely to hand over, never to make another model call.
+            proven_refusal = OfEngineModelCall.outcome.in_(RETRYABLE_RELEASE_OUTCOMES + PERMANENT_RELEASE_OUTCOMES)
             uncertain = select(OfEngineModelCall.call_id).where(
                 OfEngineModelCall.account_id == request.account_id,
                 OfEngineModelCall.request_id == request.request_id,
                 or_(OfEngineModelCall.status.in_(('reserved','calling','unknown')),
+                    and_(OfEngineModelCall.status != 'released', proven_refusal),
                     and_(OfEngineModelCall.status == 'released', ~func.coalesce(proven_refusal, False),
                          or_(OfEngineModelCall.outcome.is_(None), OfEngineModelCall.outcome != 'lease_expired',
                              OfEngineModelCall.wire_started_at.is_not(None))),

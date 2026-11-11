@@ -2934,7 +2934,8 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
     prev = load_json(item.ai_fields_json, {}) or {}
     # Automatic visual flags describe the prior content version. Keep workflow
     # markers across versions, but carry visual flags only when content matches.
-    retained_keys = ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1", "_commercial_classification_v1")
+    retained_keys = ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1", "_commercial_classification_v1",
+                     "_auto_categories_filed_v1")
     previous_stamp = prev.get("_content_stamp")
     current_stamp = vds.stamp_of(item)
     known_stale = isinstance(previous_stamp, str) and bool(previous_stamp) and previous_stamp != current_stamp

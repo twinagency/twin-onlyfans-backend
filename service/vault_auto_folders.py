@@ -1,7 +1,11 @@
 """File described media in existing internal folders, without model/provider calls.
 
-Classification is versioned once per item. Unsorted membership is temporary. A durable marker preserves subsequent
+Folder filing is versioned once per item. Unsorted membership is temporary. A durable marker preserves subsequent
 manual membership changes, folder renames and archives across analysis reruns.
+
+Commercial classification is different: it is a statement about CURRENT evidence and is re-evaluated on every call
+(confidence, bound content stamp, metadata presence, evidenced category). The one-time markers only decide which
+folders may be filed automatically, never whether an old "proposed" classification survives weaker evidence.
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ from vault_ai_effective import effective_value
 MARKER = "_auto_folders_v1"
 CURRENT_MARKER = "_auto_folders_v2"
 PENDING_MARKER = "_auto_folder_pending_v1"
+FILED = "_auto_categories_filed_v1"   # commercial: categories already filed once; never re-added after operator removal
 LEGACY_KEYS = {"selfies", "swimwear", "lingerie", "casual", "fitness", "uncategorised"}
 FOLDERS = {
     "selfies": ("Selfies", {"selfie", "selfies", "mirror selfie", "handheld selfie", "sfw selfie"}),
@@ -98,16 +103,19 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
         return {"status": "invalid_metadata"}
     if not isinstance(fields, dict):
         return {"status": "invalid_metadata"}
-    commercial=commercial or isinstance(fields.get("_commercial_classification_v1"),dict)
-    if fields.get(CURRENT_MARKER) is True:
+    previous = fields.get("_commercial_classification_v1")
+    commercial = commercial or isinstance(previous, dict)
+    if fields.get(CURRENT_MARKER) is True and not commercial:
         return {"status": "already_categorised"}
     has_metadata = bool(effective_value(item, "description") or effective_value(item, "video_description")
         or _tags(effective_value(item, "tags", default=[]))
         or effective_value(item, "primary_folder") or effective_value(item, "setting"))
     pending = not has_metadata
-    if pending and fields.get(PENDING_MARKER) is True:
+    if pending and fields.get(PENDING_MARKER) is True and not (commercial and fields.get(CURRENT_MARKER) is True):
         return {"status": "awaiting_metadata"}
     wanted = ["pending"] if pending else categories(item)
+    evidenced = list(wanted)
+    filed = None
     if commercial:
         from vault_describe_state import stamp_of
         confidence=effective_value(item,"confidence")
@@ -117,15 +125,34 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
                 "low_confidence" if confidence<70 else "analysis_version_unbound" if not bound else
                 "no_evidenced_category" if wanted==["uncategorised"] else "metadata_evidence")
         uncertain=reason!="metadata_evidence"
-        fields["_commercial_classification_v1"]={
+        classification={
             "status":"uncertain" if uncertain else "proposed","reason":reason,
             "content_stamp":stamp_of(item),"categories":["miscellaneous"] if uncertain else wanted,
             "sale_approved":False}
+        if fields.get(CURRENT_MARKER) is True and previous == classification:
+            return {"status": "already_categorised"}   # unchanged evidence: no write, no membership churn
+        fields["_commercial_classification_v1"]=classification
+        saved = fields.get(FILED)
+        if isinstance(saved, list):
+            filed = {k for k in saved if isinstance(k, str)}
+        elif fields.get(CURRENT_MARKER) is not True:
+            filed = set()
+        elif isinstance(previous, dict) and previous.get("status") == "proposed" and isinstance(previous.get("categories"), list):
+            filed = {k for k in previous["categories"] if isinstance(k, str)}
+        elif isinstance(previous, dict):
+            filed = set()           # filed as uncertain only; nothing automatic to preserve
+        else:
+            filed = set(evidenced)  # categorised before commercial mode: respect the current memberships
         if uncertain:wanted=["miscellaneous"]
     # V1 already classified these categories. A migration must not re-add a
     # membership an operator removed, or recreate their archived folders.
-    if not pending and fields.get(MARKER) is True:
+    # (Only a genuine V1 item: this module sets both markers itself on every v2 pass.)
+    if not pending and fields.get(MARKER) is True and fields.get(CURRENT_MARKER) is not True:
         wanted = [key for key in wanted if key not in LEGACY_KEYS]
+        if filed is not None:
+            filed |= LEGACY_KEYS
+    if filed is not None and not pending and wanted != ["miscellaneous"]:
+        wanted = [key for key in wanted if key not in filed]
     for key in wanted:
         actor = OWNER_PREFIX + key
         folder = session.scalar(select(VaultFolder).where(
@@ -156,6 +183,15 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
                 VaultFolder.created_by.in_([OWNER_PREFIX+"pending",OWNER_PREFIX+"miscellaneous"] if commercial and "miscellaneous" not in wanted else [OWNER_PREFIX+"pending"]))
             session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
                 VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_(pending_folders)))
+        if commercial:
+            proposed = fields["_commercial_classification_v1"]["status"] == "proposed"
+            if proposed:
+                # Only the internally owned Miscellaneous filing is withdrawn; operator folders are never touched.
+                misc = select(VaultFolder.id).where(VaultFolder.account_id == account_id,
+                    VaultFolder.created_by == OWNER_PREFIX + "miscellaneous")
+                session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
+                    VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_(misc)))
+            fields[FILED] = sorted(filed | (set(wanted) if proposed else set()))
         fields.update({MARKER: True, CURRENT_MARKER: True})
     item.ai_fields_json = json.dumps(fields, ensure_ascii=False)
     return {"status": "awaiting_metadata" if pending else "categorised", "categories": wanted}

@@ -205,7 +205,7 @@ async def commercial_write(request:Request,account_id:str):
     context=authenticate(request,account_id)
     if isinstance(context,JSONResponse):return context
     store,tenant=context
-    from conversation_engine.commercial_scope import promote
+    from conversation_engine.commercial_scope import promote,stop
     try:
         if request.headers.get("content-type","").split(";")[0].strip().lower()!="application/json":raise ValueError()
         raw=bytearray()
@@ -214,13 +214,13 @@ async def commercial_write(request:Request,account_id:str):
             raw.extend(part)
         body=json.loads(raw,object_pairs_hook=unique_keys)
         common={"action","expectedRevision","commandKey","actor","reason"}
-        if type(body) is not dict or body.get("action") not in ("promote",) or set(body)!=(common|({"config"} if body["action"]=="promote" else set())):raise ValueError()
+        if type(body) is not dict or body.get("action") not in ("promote","stop") or set(body)!=(common|({"config"} if body["action"]=="promote" else set())):raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):
         return refuse("invalid_request",400,"Invalid commercial scope request.")
     try:
         options={k:body[k] for k in ("actor","reason")}
         options.update(expected_revision=body["expectedRevision"],command_key=body["commandKey"])
-        data=await asyncio.to_thread(promote,store,tenant,account_id,body["config"],**options)
+        data=await asyncio.to_thread(promote,store,tenant,account_id,body["config"],**options) if body["action"]=="promote" else await asyncio.to_thread(stop,store,tenant,account_id,**options)
     except Refused as exc:
         if str(exc)=="scope unavailable":return refuse("not_available",404,"That commercial scope is unavailable.")
         return refuse("commercial_conflict",409,"The commercial scope command was refused. Refresh and check the prepared connection, disabled runtime and limits.")

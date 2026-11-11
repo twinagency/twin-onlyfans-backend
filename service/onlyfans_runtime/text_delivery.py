@@ -257,8 +257,11 @@ class TextAuthority:
 
     def _configure_in_session(self, s, runtime, *, expected_revision, enabled, limit_units,
                               throttle_seconds, actor, reason, media_enabled=None,
-                              transport_kind=None, daily_limit_units=None):
-        """Shared policy owner; caller holds the runtime lock and transaction."""
+                              transport_kind=None, daily_limit_units=None, scope_stop=False):
+        """Shared policy owner; caller holds the runtime lock and transaction.
+
+        scope_stop is only for commercial_scope.stop_scope_in_session: closing the policy as part of a scope stop
+        (agency stop, emergency stop) is a safety reduction like the provider safety stop, never an operator edit."""
         account_id = runtime.account_id
         if (daily_limit_units is not None and (type(daily_limit_units) is not int or not 1 <= daily_limit_units <= 20000)):
             raise Refused("invalid delivery policy")
@@ -276,7 +279,7 @@ class TextAuthority:
         from conversation_engine.pilot_scope import current as current_pilot, authorize
         pilot, config = current_pilot(s, runtime)
         if pilot is not None:
-            safe_disable = actor == 'fans-webhook' and not enabled
+            safe_disable = (actor == 'fans-webhook' or scope_stop is True) and not enabled
             if not safe_disable:
                 authorize(config, actor, 'activate' if enabled else 'stop')
             if (limit_units > config['limits']['send_units'] or throttle_seconds < config['limits']['throttle_seconds']

@@ -62,7 +62,7 @@ def _connected(s, runtime, config):
             and link.provider_account_id == config['provider_account'] else None)
 
 
-def _check_catalogue(runtime, config):
+def check_catalogue(runtime, config):
     catalogue = config.get('catalogue')
     if catalogue is None:
         return
@@ -101,7 +101,7 @@ def promote(store, tenant, account, body, *, expected_revision, command_key, act
         if (config['limits']['provider_requests'] < row.provider_requests_used
                 or config['limits']['provider_credit_budget'] < row.provider_credits_reserved):
             raise Refused('commercial limits cannot erase existing reservations')
-        _check_catalogue(runtime, config)
+        check_catalogue(runtime, config)
         now = utcnow()
         before = {'contract': preparation.VERSION, 'scopeId': row.scope_id, 'revision': row.revision, 'status': row.status,
                   'fingerprint': row.fingerprint, 'providerRequestsUsed': row.provider_requests_used,
@@ -142,3 +142,96 @@ def view(store, tenant, account):
         return {'accountId': account, 'state': 'preparation', 'eligible': eligible, 'revision': row.revision,
                 'status': row.status, 'fingerprint': row.fingerprint,
                 'providerRequestsUsed': row.provider_requests_used, 'providerCreditsReserved': row.provider_credits_reserved}
+
+
+# ---------------------------------------------------------------- launch prerequisites (decision D4)
+def catalogue_ready(s, runtime, config):
+    """Hook for the catalogue contract of a later step. No product contract exists yet, so a full-delivery
+    commercial scope can be configured but never launched: nothing may sell through a half-built contract."""
+    raise Refused(contracts.PRODUCT_UNAVAILABLE)
+
+
+def assert_launchable(s, runtime, row, config):
+    """The commercial half of the launch decision, on top of the text-only checks pilot_scope already runs.
+
+    Text-only scopes send and sell nothing, so they may launch before any catalogue contract exists."""
+    if config['delivery_mode'] != 'text_only':
+        catalogue_ready(s, runtime, config)
+    if not config['fans']:
+        raise Refused('commercial audience is empty')
+    if _connected(s, runtime, config) is None:
+        raise Refused('verified commercial connection unavailable')
+    from db.onlyfans_vault_models import OfVaultSyncJob
+    connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == runtime.account_id,
+        OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active'))
+    latest = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == runtime.account_id,
+        OfVaultSyncJob.binding_id == runtime.binding_id, OfVaultSyncJob.connection_revision == connection.epoch,
+        OfVaultSyncJob.provider_kind == 'fansapi', OfVaultSyncJob.provider_account == config['provider_account'])
+        .order_by(OfVaultSyncJob.requested_at.desc(), OfVaultSyncJob.job_id.desc()).limit(1))
+    if latest is None or latest.status != 'complete':
+        raise Refused('commercial import is not complete')
+
+
+# ---------------------------------------------------------------- stop (agency, operator via pilot_scope, emergency)
+def stop_scope_in_session(s, store, runtime, row, *, actor, reason, now):
+    """Caller holds the runtime lock and has already stopped the runtime and its queued work.
+
+    Closes the delivery policy and moves the scope to stopped in the same transaction, so runtime, policy and scope
+    can never disagree after any stop path. Returns the scope's new revision."""
+    from onlyfans_runtime.text_delivery import TextAuthority
+    policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == runtime.account_id).with_for_update())
+    if policy is not None and policy.enabled:
+        TextAuthority(store)._configure_in_session(s, runtime, expected_revision=policy.revision, enabled=False,
+            limit_units=policy.limit_units, throttle_seconds=policy.throttle_seconds, media_enabled=None,
+            actor=actor, reason=reason, scope_stop=True)
+    if row.status != 'stopped':
+        row.revision += 1
+        row.status, row.active_since, row.updated_at = 'stopped', None, now
+    return row.revision
+
+
+def stop_active_scope(s, store, runtime, *, actor, reason, now):
+    """Emergency-stop hook: stops this account's commercial scope only if it is active. None otherwise."""
+    row = contracts.row_for(s, runtime, lock=True)
+    if row is None or row.scope_id == 1 or contracts.claim(row) != contracts.COMMERCIAL or row.status != 'active':
+        return None
+    return stop_scope_in_session(s, store, runtime, row, actor=actor, reason=reason, now=now)
+
+
+def assert_resume_allowed(s, runtime):
+    """Resume re-enables a stopped runtime; it must never launch a commercial scope that is not active."""
+    row = contracts.row_for(s, runtime)
+    if row is None or row.scope_id == 1:
+        return
+    if contracts.claim(row) == contracts.COMMERCIAL and row.status == 'active':
+        return
+    raise Refused('resume requires an active commercial scope')
+
+
+def stop(store, tenant, account, *, expected_revision, command_key, actor, reason):
+    """The managing agency's stop of one account: runtime, queued work, policy and scope in one transaction."""
+    from onlyfans_runtime.launch_operations import stop_runtime_in_session
+    preparation._command(command_key, actor, reason)
+    preparation._integer(expected_revision, 1, 2**31 - 1)
+    request_hash = preparation.fingerprint(['stop', tenant, account, expected_revision, actor, reason])
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        prior = _prior(s, account, command_key, request_hash)
+        if prior is not None:
+            return {**prior, 'replayed': True}
+        row = contracts.row_for(s, runtime, lock=True)
+        if row is None or row.scope_id == 1 or contracts.claim(row) != contracts.COMMERCIAL:
+            raise Refused('only a commercial scope can be stopped here')
+        config = contracts.validated(row, runtime, contracts.COMMERCIAL)
+        if row.revision != expected_revision:
+            raise Refused('commercial revision conflict')
+        now = utcnow()
+        before = {'revision': row.revision, 'status': row.status, 'fingerprint': row.fingerprint,
+                  'runtimeEnabled': runtime.enabled}
+        stop_runtime_in_session(s, runtime, command_key=command_key, actor=actor, request_hash=request_hash, now=now)
+        stop_scope_in_session(s, store, runtime, row, actor=actor, reason=reason, now=now)
+        result = _view(row, config)
+        s.add(OfLaunchCommand(account_id=account, command_key=command_key, binding_id=runtime.binding_id, kind=KIND,
+            request_hash=request_hash, actor=actor, reason=reason, before_json=contracts.encoded(before),
+            result_json=contracts.encoded(result), created_at=now))
+        return {**result, 'replayed': False}

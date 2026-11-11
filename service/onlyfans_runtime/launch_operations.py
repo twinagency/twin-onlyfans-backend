@@ -127,7 +127,11 @@ def control_account(store, tenant, account, *, action, command_key, actor, reaso
         if before["fingerprint"] != expected_fingerprint:
             raise Refused("account control state changed")
         now = utcnow()
+        scope_revision = None
         if action == "resume":
+            # A commercial scope is launched by its operator, never resumed: resume cannot bypass that decision.
+            from conversation_engine.commercial_scope import assert_resume_allowed
+            assert_resume_allowed(s, runtime)
             # Resuming permits only new, freshly validated work. Cancelled old
             # work stays cancelled; no contact/takeover settings are modified.
             connection = s.get(OfProviderConnection, account)
@@ -143,9 +147,14 @@ def control_account(store, tenant, account, *, action, command_key, actor, reaso
         else:
             stop_runtime_in_session(s, runtime, command_key=command_key, actor=actor,
                                     request_hash=request_hash, now=now)
+            # An active commercial scope stops with its runtime, in this transaction, so they cannot disagree.
+            from conversation_engine.commercial_scope import stop_active_scope
+            scope_revision = stop_active_scope(s, store, runtime, actor=actor, reason=reason, now=now)
         result = {"recorded": True, "action": action, "enabled": runtime.enabled,
             "revision": before["revision"] + 1, "unresolvedOutgoing": before["unresolvedOutgoing"],
             "oldWorkResumed": False, "commandKey": command_key}
+        if scope_revision is not None:
+            result["scopeRevision"] = scope_revision
         return _record(s, runtime, command_key, "account_control", request_hash, actor, reason, before, result, now)
 
 

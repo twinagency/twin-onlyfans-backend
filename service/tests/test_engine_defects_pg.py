@@ -69,12 +69,12 @@ def test_r1_paused_plain_replies_cannot_pitch_price_or_claim_purchase(database):
         assert len(s.scalars(select(OfEngineDecision)).all()) == 1  # no decision for a refused proposal
     # The duration guard now requires evidence for media duration even in an ordinary reply. Keep that
     # protection as a negative assertion; use a genuinely non-commercial, claim-free positive control.
-    incoming(store, 6, 'q6')
+    incoming(store, 7, 'q6')
     with pytest.raises(Refused, match='unsupported media duration claim'):
-        engine.plan(TENANT, ACCOUNT, FAN, 6)
+        engine.plan(TENANT, ACCOUNT, FAN, 7)
     assert len(provider.calls) == 1
-    unthrottle(database[1]); incoming(store, 7, 'q7')
-    assert run(store, authority, engine, 7, wire=wire)[2] == 'accepted'
+    unthrottle(database[1]); incoming(store, 8, 'q7')
+    assert run(store, authority, engine, 8, wire=wire)[2] == 'accepted'
     assert provider.calls[-1]['body']['text'] == 'Happy to chat about something else.'
     store.close()
 

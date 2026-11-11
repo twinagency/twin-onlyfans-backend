@@ -15,6 +15,21 @@ from db.models import CatalogItem, VaultItem
 from onlyfans_runtime.store import Refused, utcnow
 
 SELLABLE_KINDS = {'photo', 'video'}
+# Provider retry timing. Attempts and the due time are persisted on the job that owns the kept cursor.
+MAX_RETRY_ATTEMPTS = 5
+BACKOFF_FIRST_SECONDS = 30
+BACKOFF_CAP_SECONDS = 900
+
+
+def retry_delay(attempts, retry_after=None):
+    """Seconds to wait after the Nth consecutive transient failure: the larger of the provider's
+    Retry-After and a bounded exponential backoff starting at 30 seconds."""
+    backoff = min(BACKOFF_CAP_SECONDS, BACKOFF_FIRST_SECONDS * 2 ** (max(1, attempts) - 1))
+    return max(retry_after or 0, backoff)
+
+
+def iso_utc(moment):
+    return None if moment is None else moment.replace(microsecond=0).isoformat() + 'Z'
 
 
 def _url(files, name):
@@ -137,7 +152,7 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
     for _ in range(max_pages):
         with Session(store.engine) as s,s.begin():
             runtime=store._runtime(s,tenant,account)
-            from conversation_engine.preparation import current as preparation_current,PreparationRequestGuard
+            from conversation_engine.preparation import current as preparation_current,PreparationRequestGuard,BudgetExhausted
             prep,_=preparation_current(s,runtime)
             if prep is not None:
                 guard=client._request_guard
@@ -192,15 +207,22 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
             token=str(uuid.uuid4());offset=job.page_offset
             job.status="running";job.lease_token=token;job.lease_until=now+timedelta(seconds=60)
         # No transaction spans provider I/O. The existing client applies read budgets.
-        failure=None
+        failure=fail_class=fail_cause=retry_after=None;observed=False
         try:
             result=client.vault(limit=page_size,offset=offset)
-            if result.state!="observed":raise ValueError("vault_read_failed")
+            if result.state!="observed":
+                fail_class=result.failure or "transient";fail_cause=result.cause;retry_after=result.retry_after
+                raise ValueError("vault_read_failed")
+            observed=True
             raw=json.dumps({"list":result.data,"hasMore":result.next_page is not None},
                 default=lambda value:float(value) if isinstance(value,Decimal) else str(value)).encode()
             rows,more=parse_vault_page(raw,owner_id=int(client.creator_id),page_size=page_size,allow_identical_duplicates=True)
+        except Refused as refusal:
+            # A local guard refusal (budget, authority) is not a provider failure and sets no retry timer.
+            failure="vault_read_failed";fail_class="budget" if isinstance(refusal,BudgetExhausted) else "refused"
         except Exception:
             failure="vault_read_failed"
+            fail_class=fail_class or ("schema" if observed else "transient")
         with Session(store.engine) as s,s.begin():
             runtime=store._runtime(s,tenant,account)
             _bound_connection(s,runtime,client)
@@ -219,8 +241,19 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
                 # Keep the same durable cursor for a bounded retry or restart.
                 job.status="pending";job.lease_token=job.lease_until=None
                 job.last_error=failure;job.updated_at=now
+                error,retry_at=failure,None
+                if fail_class=="transient":
+                    job.retry_attempts+=1
+                    if job.retry_attempts>=MAX_RETRY_ATTEMPTS:
+                        # Terminal, exactly like any failed import: only a new explicit sync command resumes it.
+                        job.status="failed";job.last_error=error="vault_retry_exhausted"
+                        job.completed_at=now;job.retry_not_before=None
+                    else:
+                        retry_at=now+timedelta(seconds=retry_delay(job.retry_attempts,retry_after))
+                        job.retry_not_before=retry_at
                 return {"complete":False,"pages":pages,"upserted":upserted,"skipped":skipped,
-                        "error":failure,"jobId":job_id}
+                        "error":error,"jobId":job_id,"failure":fail_class,"cause":fail_cause,
+                        "attempts":job.retry_attempts,"retryNotBefore":iso_utc(retry_at)}
             page_hash=digest(rows)
             dates=[_stamp(r["createdAt"]).replace(tzinfo=None) for r in rows]
             previous=datetime.fromisoformat(window["lastTimestamp"]) if window["lastTimestamp"] else None
@@ -271,6 +304,7 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
             job.pages_read+=1;job.items_seen+=len(rows);job.page_offset=job.items_seen
             job.status="complete" if finished else "pending"
             job.lease_token=job.lease_until=None;job.updated_at=now;job.last_error=None
+            job.retry_attempts=0;job.retry_not_before=None
             if finished:job.completed_at=now
             pages+=1
             if finished:

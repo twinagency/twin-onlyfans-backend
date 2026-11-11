@@ -3,12 +3,14 @@
 No sender, planner, media download or model runtime is imported here. Preparation
 is always disabled for delivery; fixture authority can only use a mocked wire.
 """
+from datetime import datetime,timedelta
 from hashlib import sha256
 import json
 import os
 import re
 from urllib.parse import urlsplit,parse_qsl
 from sqlalchemy import select,text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from db.onlyfans_engine_models import OfEnginePilotScope,OfFansConnection
 from db.onlyfans_delivery_models import OfDeliveryPolicy
@@ -16,6 +18,93 @@ from onlyfans_runtime.launch_operations_models import OfLaunchCommand
 from onlyfans_runtime.store import Refused,utcnow
 
 VERSION="preparation.v1"
+
+class BudgetExhausted(Refused):
+    """The explicit per-account read ceiling is spent; never an automatic increase."""
+class AuthorityChanged(Refused):
+    """Stop/reconfigure happened under an in-flight pass; the newer command owns the status."""
+class PreparationHold(Refused):
+    """A classified permanent hold raised before any provider read."""
+    def __init__(self,message,*,outcome,cause):
+        super().__init__(message);self.outcome,self.cause=outcome,cause
+
+# Account-scoped last attempt. Fixed vocabulary only: no provider body, header, token or exception text.
+OUTCOMES=("complete","partial","transient","identity_failed","credential_missing","budget_exhausted","schema","held")
+ACTIONS={"complete":"None needed.","partial":"None needed; the import continues automatically.",
+    "transient":"None needed; the worker retries when the provider allows.",
+    "exhausted":"Retries are exhausted. Check provider status, then resume preparation or request a new vault sync.",
+    "identity_failed":"Check the account credential and connection in FansAPI, then resume preparation.",
+    "credential_missing":"Install the approved account credential on the worker, then resume preparation.",
+    "budget_exhausted":"The read ceiling is spent. Save a higher approved ceiling to continue, or leave stopped.",
+    "schema":"The provider response was not understood. Resume preparation after the integration is reviewed.",
+    "held":"Request a new vault sync, or resume preparation after reviewing the cause."}
+_CODE=re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+def _iso(moment):return None if moment is None else moment.replace(microsecond=0).isoformat()+"Z"
+def _parse(value):
+    try:return datetime.fromisoformat(value[:-1] if value.endswith("Z") else value).replace(tzinfo=None)
+    except (ValueError,AttributeError):return None
+def attempt_record(outcome,cause,*,revision,attempts=0,retry_not_before=None,terminal=False,exhausted=False,gates=False):
+    # terminal: hold until a new operator command. gates: retryNotBefore is the authoritative due time
+    # (identity phase, no job yet); otherwise the vault job owns the due time and this copy is display only.
+    return {"at":_iso(utcnow()),"outcome":outcome,"cause":cause,"retryNotBefore":retry_not_before,"attempts":attempts,
+        "revision":revision,"terminal":terminal,"exhausted":exhausted,"gates":gates,
+        "operatorAction":ACTIONS["exhausted" if exhausted else outcome]}
+def read_attempt(row):
+    """Validated copy of the stored record, or None. A damaged record never blocks or crashes a pass."""
+    try:data=json.loads(row.last_attempt_json) if row.last_attempt_json else None
+    except ValueError:return None
+    if type(data) is not dict or data.get("outcome") not in OUTCOMES:return None
+    cause,at,due=data.get("cause"),data.get("at"),data.get("retryNotBefore")
+    attempts,revision=data.get("attempts"),data.get("revision")
+    if (type(cause) is not str or not _CODE.match(cause) or type(attempts) is not int or not 0<=attempts<=1000
+            or type(revision) is not int or type(data.get("terminal")) is not bool or type(data.get("exhausted")) is not bool
+            or type(data.get("gates",False)) is not bool
+            or (at is not None and _parse(at) is None) or (due is not None and _parse(due) is None)):return None
+    return {"at":at,"outcome":data["outcome"],"cause":cause,"retryNotBefore":due,"attempts":attempts,"revision":revision,
+        "terminal":data["terminal"],"exhausted":data["exhausted"],"gates":data.get("gates",False),
+        "operatorAction":ACTIONS["exhausted" if data["exhausted"] else data["outcome"]]}
+def _record_attempt(store,account,revision,record):
+    """Compare-and-set under the scope row lock: a stop or reconfiguration that raced ahead wins."""
+    try:
+        with Session(store.engine) as s,s.begin():
+            row=s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id==account,
+                OfEnginePilotScope.scope_id>1).with_for_update())
+            if row is not None and row.revision==revision and row.status=="configured":
+                row.last_attempt_json=encoded(record)
+    except SQLAlchemyError:pass
+def _provider_failure(failure,cause,retry_after,*,revision,prior):
+    from fans_api_adapter.vault_sync import MAX_RETRY_ATTEMPTS,retry_delay
+    cause=cause if type(cause) is str and _CODE.match(cause) else "provider_unavailable"
+    if failure=="transient":
+        attempts=prior+1
+        if attempts>=MAX_RETRY_ATTEMPTS:
+            return attempt_record("transient","vault_retry_exhausted",revision=revision,attempts=attempts,terminal=True,exhausted=True)
+        due=utcnow()+timedelta(seconds=retry_delay(attempts,retry_after))
+        return attempt_record("transient",cause,revision=revision,attempts=attempts,retry_not_before=_iso(due),gates=True)
+    if failure=="schema":return attempt_record("schema",cause,revision=revision,attempts=prior+1,terminal=True)
+    return attempt_record("identity_failed",cause,revision=revision,attempts=prior+1,terminal=True)
+def _exception_record(exc,*,revision,prior):
+    from fans_api_adapter.real_transport import ProviderIdentityRefused
+    if isinstance(exc,AuthorityChanged):return None
+    if isinstance(exc,PreparationHold):return attempt_record(exc.outcome,exc.cause,revision=revision,terminal=True)
+    if isinstance(exc,ProviderIdentityRefused):return _provider_failure(exc.failure,exc.cause,exc.retry_after,revision=revision,prior=prior)
+    if isinstance(exc,BudgetExhausted):return attempt_record("budget_exhausted","provider_budget_exhausted",revision=revision,terminal=True)
+    return attempt_record("held","local_refusal" if isinstance(exc,Refused) else "unclassified_error",revision=revision)
+def _result_record(result,*,revision):
+    error=result.get("error")
+    if result["complete"]:return attempt_record("complete","import_complete",revision=revision)
+    if error in (None,"page_budget_exhausted"):return attempt_record("partial","page_imported",revision=revision)
+    if error in ("preparation_authorization_changed","vault_job_busy"):return None
+    kind=result.get("failure")
+    if error=="vault_retry_exhausted":
+        return attempt_record("transient","vault_retry_exhausted",revision=revision,attempts=result.get("attempts",0),exhausted=True)
+    if kind=="transient":
+        return attempt_record("transient",result.get("cause") or "provider_unavailable",revision=revision,
+            attempts=result.get("attempts",1),retry_not_before=result.get("retryNotBefore"))
+    if kind=="schema":return attempt_record("schema",result.get("cause") or "provider_response_invalid",revision=revision,attempts=result.get("attempts",0)+1,terminal=True)
+    if kind=="auth":return attempt_record("identity_failed",result.get("cause") or "provider_auth_rejected",revision=revision,attempts=result.get("attempts",0)+1,terminal=True)
+    if kind=="budget":return attempt_record("budget_exhausted","provider_budget_exhausted",revision=revision,terminal=True)
+    return attempt_record("held",error if _CODE.match(error) else "vault_job_held",revision=revision)
 def encoded(value):return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False)
 def fingerprint(value):return sha256(encoded(value).encode()).hexdigest()
 def _integer(value,low,high):
@@ -118,6 +207,11 @@ def configure(store,tenant,account,config,*,expected_revision,command_key,actor,
         elif row.config_json!=encoded(config) or row.status!="configured":
             row.revision+=1;row.status="configured";row.active_since=None
             row.config_json=encoded(config);row.fingerprint=fingerprint(config);row.updated_at=now
+            row.last_attempt_json=None
+        else:
+            # Same authority, new explicit command: the operator's answer to a permanent hold.
+            held=read_attempt(row)
+            if held is not None and held["terminal"]:row.last_attempt_json=None;row.updated_at=now
         result=_view(row,config)
         s.add(OfLaunchCommand(account_id=account,command_key=command_key,binding_id=runtime.binding_id,
             kind="preparation",request_hash=request_hash,actor=actor,reason=reason,
@@ -165,7 +259,15 @@ def view(store,tenant,account):
             OfVaultSyncJob.connection_revision==connection.epoch).order_by(OfVaultSyncJob.requested_at.desc()).limit(1)) if connection else None
         result["vault"]=None if job is None else {"jobId":job.job_id,"status":job.status,
             "pagesRead":job.pages_read,"itemsSeen":job.items_seen,"error":job.last_error,
-            "selected":len(json.loads(job.window_json).get("selected",[]))}
+            "selected":len(json.loads(job.window_json).get("selected",[])),
+            "retryAttempts":job.retry_attempts,"retryNotBefore":_iso(job.retry_not_before)}
+        attempt=read_attempt(row)
+        result["lastAttempt"]=None if attempt is None else {k:attempt[k] for k in
+            ("at","outcome","cause","retryNotBefore","attempts","exhausted","operatorAction")}
+        # Honest field for a failed latest attempt; absent when the last attempt made progress.
+        result["failure"]=None if attempt is None or attempt["outcome"] in ("complete","partial") else {
+            "outcome":attempt["outcome"],"cause":attempt["cause"],"retryNotBefore":attempt["retryNotBefore"],
+            "exhausted":attempt["exhausted"],"operatorAction":attempt["operatorAction"]}
         return result
 
 class PreparationRequestGuard:
@@ -176,7 +278,7 @@ class PreparationRequestGuard:
         runtime=self.store._runtime(s,self.tenant,self.account)
         row,config=current(s,runtime,lock=True)
         if row is None or row.status!="configured" or row.revision!=self.revision:
-            raise Refused("preparation authorization changed")
+            raise AuthorityChanged("preparation authorization changed")
         _disabled(s,runtime)
         return runtime,row,config
     def __call__(self,method,url,mock_wire=False):
@@ -201,11 +303,15 @@ class PreparationRequestGuard:
             else:raise Refused("preparation provider endpoint refused")
             limits=config["limits"]
             if row.provider_requests_used>=limits["provider_requests"] or row.provider_credits_reserved+limits["provider_credits_per_request"]>limits["provider_credit_budget"]:
-                raise Refused("preparation provider budget exhausted")
+                raise BudgetExhausted("preparation provider budget exhausted")
             row.provider_requests_used+=1;row.provider_credits_reserved+=limits["provider_credits_per_request"];row.updated_at=utcnow()
 
 def prepare_one(store,tenant,account,*,client_factory):
-    """One identity proof and at most one shared-import page; no send code path."""
+    """One identity proof and at most one shared-import page; no send code path.
+
+    Every provider I/O (client, identity, page, reservation) is preceded by the durable checks
+    below: permanent holds need a new operator command, transient failures wait for their due time.
+    """
     from fans_api_adapter.intake import FansWebhookAdapter
     from fans_api_adapter.vault_sync import sync_vault
     from db.onlyfans_vault_models import OfVaultSyncJob
@@ -219,28 +325,56 @@ def prepare_one(store,tenant,account,*,client_factory):
                 runtime=store._runtime(s,tenant,account);row,config=current(s,runtime,lock=True)
                 if row is None or row.status!="configured":return {"state":"stopped"}
                 _disabled(s,runtime)
+                now=utcnow();revision=row.revision
                 connection=s.scalar(select(OfFansConnection).where(OfFansConnection.account_id==account,OfFansConnection.status=="active"))
                 same=connection is not None and (connection.binding_id,connection.provider_account_id,connection.provider_creator_id)==(runtime.binding_id,config["provider_account"],config["creator_id"])
                 from db.onlyfans_fans_intake_models import OfFansLink
                 link=s.get(OfFansLink,(account,config["creator_id"]))
+                latest=None
                 if same and link is not None and link.provider_account_id==config["provider_account"] and link.state=="connected":
                     latest=s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account,
                         OfVaultSyncJob.binding_id==runtime.binding_id,OfVaultSyncJob.connection_revision==connection.epoch,
                         OfVaultSyncJob.provider_kind=="fansapi",OfVaultSyncJob.provider_account==config["provider_account"])
                         .order_by(OfVaultSyncJob.requested_at.desc(),OfVaultSyncJob.job_id.desc()).limit(1))
                     # A new explicit refresh supersedes the completed shortcut.
+                    if latest is not None and latest.status=="complete":return {"state":"complete"}
                     # A semantic import failure needs an explicit new sync command;
                     # transient read failures keep the same pending cursor.
-                    if latest is not None and latest.status=="complete":return {"state":"complete"}
                     if latest is not None and latest.status in ("failed","superseded"):
+                        exhausted=latest.last_error=="vault_retry_exhausted"
+                        known=read_attempt(row)
+                        if known is None or known["revision"]!=revision or known["cause"]!=(latest.last_error or "vault_job_held"):
+                            cause=latest.last_error if latest.last_error and _CODE.match(latest.last_error) else "vault_job_held"
+                            row.last_attempt_json=encoded(attempt_record("transient" if exhausted else "held",cause,revision=revision,
+                                attempts=latest.retry_attempts,exhausted=exhausted))
                         return {"state":"held","error":latest.last_error}
+                known=read_attempt(row)
+                live=known if known is not None and known["revision"]==revision else None
+                if live is not None and live["terminal"]:
+                    return {"state":"held","outcome":live["outcome"],"cause":live["cause"]}
+                due=[x for x in (_parse(live["retryNotBefore"]) if live is not None and live["gates"] and live["retryNotBefore"] else None,
+                    latest.retry_not_before if latest is not None and latest.status=="pending" else None) if x is not None]
+                if due and max(due)>now:
+                    return {"state":"delayed","cause":live["cause"] if live is not None else "provider_unavailable",
+                        "retryNotBefore":_iso(max(due))}
+                limits=config["limits"]
+                if row.provider_requests_used>=limits["provider_requests"] or row.provider_credits_reserved+limits["provider_credits_per_request"]>limits["provider_credit_budget"]:
+                    row.last_attempt_json=encoded(attempt_record("budget_exhausted","provider_budget_exhausted",revision=revision,terminal=True))
+                    return {"state":"held","outcome":"budget_exhausted","cause":"provider_budget_exhausted"}
+                prior=live["attempts"] if live is not None and live["outcome"]=="transient" and not live["exhausted"] else 0
                 epochs=s.scalars(select(OfFansConnection.epoch).where(OfFansConnection.account_id==account)).all()
                 epoch=connection.epoch if same else max(epochs,default=0)+1
-                revision=row.revision
             guard=PreparationRequestGuard(store,tenant,account,revision)
-            client=client_factory(config,epoch,guard)
-            FansWebhookAdapter(store).bind_verified(tenant,account,client,guard=guard)
-            result=sync_vault(store,tenant,account,client,max_pages=1)
+            try:
+                client=client_factory(config,epoch,guard)
+                FansWebhookAdapter(store).bind_verified(tenant,account,client,guard=guard)
+                result=sync_vault(store,tenant,account,client,max_pages=1)
+            except Exception as exc:
+                record=_exception_record(exc,revision=revision,prior=prior)
+                if record is not None:_record_attempt(store,account,revision,record)
+                raise
+            record=_result_record(result,revision=revision)
+            if record is not None:_record_attempt(store,account,revision,record)
             return {"state":"complete" if result["complete"] else "partial","vault":result}
         finally:
             lock.execute(text("SELECT pg_advisory_unlock(hashtextextended(:key,0))"),{"key":key})
@@ -283,15 +417,25 @@ def production_factory(entry):
     def make(config,epoch,guard):
         from fans_api_adapter.real_transport import load_real_config,build_client,ENV_FILE
         if config["qualification"]["mode"]!="production" or (config["provider_account"],config["creator_id"])!=(entry["provider_account"],entry["creator_id"]):
-            raise Refused("preparation identity lacks deployment approval")
+            raise PreparationHold("preparation identity lacks deployment approval",outcome="held",cause="deployment_approval_missing")
         limits=config["limits"];ceiling=entry["limits"]
         if (limits["provider_requests"]>ceiling["provider_requests"] or limits["provider_credit_budget"]>ceiling["provider_credit_budget"]
                 or limits["provider_credits_per_request"]!=ceiling["provider_credits_per_request"]):
-            raise Refused("preparation limits exceed approved deployment ceilings")
-        secret=load_real_config({ENV_FILE:entry["env_file"]},require_flag=False)
-        if secret.provider_account!=config["provider_account"]:raise Refused("preparation credential account mismatch")
+            raise PreparationHold("preparation limits exceed approved deployment ceilings",outcome="held",cause="limits_exceed_ceiling")
+        try:secret=load_real_config({ENV_FILE:entry["env_file"]},require_flag=False)
+        except Exception:raise PreparationHold("preparation credential unavailable",outcome="credential_missing",cause="credential_unavailable") from None
+        if secret.provider_account!=config["provider_account"]:
+            raise PreparationHold("preparation credential account mismatch",outcome="identity_failed",cause="credential_account_mismatch")
         return build_client(secret,creator_id=config["creator_id"],epoch=epoch,request_guard=guard)
     return make
+
+def _recorded_cause(store,account):
+    try:
+        with Session(store.engine) as s:
+            row=s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id==account,OfEnginePilotScope.scope_id>1))
+            attempt=read_attempt(row) if row is not None else None
+            return attempt["cause"] if attempt is not None else "unclassified_error"
+    except SQLAlchemyError:return "unclassified_error"
 
 def run_preparation_once(store,tenant,*,env=None,stop_event=None):
     """Bounded existing-worker mode, only explicitly installed read-only accounts."""
@@ -301,6 +445,8 @@ def run_preparation_once(store,tenant,*,env=None,stop_event=None):
         if stop_event is not None and stop_event.is_set():break
         if approved_tenant!=tenant:continue
         try:result=prepare_one(store,tenant,account,client_factory=production_factory(entry))
-        except Exception:result={"state":"held"}
+        except Exception:
+            # The cause was classified and persisted by prepare_one; report only its fixed code.
+            result={"state":"held","cause":_recorded_cause(store,account)}
         results.append({"accountId":account,**result})
     return results

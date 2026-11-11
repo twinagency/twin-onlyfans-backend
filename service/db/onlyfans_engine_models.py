@@ -493,3 +493,5 @@ class OfEnginePilotScope(Base):
     provider_credits_reserved = Column(BigInteger, nullable=False)
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
+    # Sanitized account-scoped last preparation attempt; preparation scopes only (0133).
+    last_attempt_json = Column(Text, info={'onlyfans_since': '0133_preparation_retry_state'})

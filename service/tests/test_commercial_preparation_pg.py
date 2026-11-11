@@ -153,6 +153,12 @@ def test_resume_same_job_and_budget_after_restart_and_failed_page(database):
     job_id=prep.view(store,TENANT,account)["vault"]["jobId"]
     store.close();store=Store(database[0])
     assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["vault"]["error"]=="vault_read_failed"
+    # R1: the failed page persisted a due time; an immediate pass must not read again. Move the clock past it.
+    assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["state"]=="delayed" and offsets==[0,24]
+    from datetime import timedelta
+    from onlyfans_runtime.store import utcnow
+    with Session(database[1]) as s,s.begin():
+        s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account)).retry_not_before=utcnow()-timedelta(seconds=1)
     assert prep.prepare_one(store,TENANT,account,client_factory=factory(wire))["state"]=="complete"
     state=prep.view(store,TENANT,account)
     assert offsets==[0,24,24] and state["vault"]["jobId"]==job_id and state["vault"]["selected"]==25

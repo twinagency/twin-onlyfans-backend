@@ -15,6 +15,7 @@ class OfVaultSyncJob(Base):
         CheckConstraint("status IN ('pending','running','complete','failed','superseded')", name="status"),
         CheckConstraint("connection_revision > 0 AND owner_id > 0 AND pages_read >= 0 AND max_pages = 200 AND items_seen >= 0 AND items_seen <= pages_read * 24 AND page_offset = items_seen", name="bounds"),
         CheckConstraint("(status = 'running') = (lease_token IS NOT NULL AND lease_until IS NOT NULL)", name="lease"),
+        CheckConstraint("retry_attempts >= 0", name="retry_attempts", info={"onlyfans_since": "0133_preparation_retry_state"}),
         Index("uq_of_vault_sync_active", "account_id", unique=True,
               postgresql_where=text("status IN ('pending','running')")),
         {"info": INFO},
@@ -43,6 +44,9 @@ class OfVaultSyncJob(Base):
     requested_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
     completed_at = Column(DateTime)
+    # Durable provider retry timing for this job's kept cursor (0133).
+    retry_not_before = Column(DateTime, info={'onlyfans_since': '0133_preparation_retry_state'})
+    retry_attempts = Column(Integer, nullable=False, default=0, server_default=text('0'), info={'onlyfans_since': '0133_preparation_retry_state'})
 
 
 class OfVaultObservation(Base):

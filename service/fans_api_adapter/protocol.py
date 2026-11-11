@@ -11,7 +11,8 @@ https://docs.onlyfansapi.com/introduction/essentials/idempotency
 https://docs.onlyfansapi.com/webhooks/available-events
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from decimal import Decimal
 import json
 import re
@@ -45,6 +46,35 @@ class Result:
     http_status: int | None = None
     original_trace_id: str | None = None
     replayed: bool = False
+    # Bounded, sanitized failure metadata; never a body, header dump or token.
+    failure: str | None = None       # transient | auth | schema
+    cause: str | None = None         # fixed code, e.g. provider_rate_limited
+    retry_after: int | None = None   # seconds, clamped 0..RETRY_AFTER_MAX
+
+
+RETRY_AFTER_MAX = 3600
+
+
+def parse_retry_after(value, now=None):
+    """Seconds or HTTP-date to whole seconds clamped to 0..3600; None when absent or malformed."""
+    if type(value) is not str:
+        return None
+    text = value.strip()
+    if not text or len(text) > 64:
+        return None
+    if text.isascii() and (text.isdecimal() or (text[0] == '-' and text[1:].isdecimal())):
+        return max(0, min(RETRY_AFTER_MAX, int(text)))
+    try:
+        moment = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    delta = (moment - now).total_seconds()
+    return max(0, min(RETRY_AFTER_MAX, int(delta) + (1 if delta % 1 else 0)))
 
 
 def _id(value):
@@ -105,6 +135,8 @@ class FansApiClient:
         self.base = base
         self.last_replayed = False
         self.credits_balance = None
+        self.last_retry_after = None
+        self.last_failure = None
 
     def _request(self, method, url, body=None, key=None):
         # The durable reservation happens before any provider I/O. A refusal
@@ -115,6 +147,7 @@ class FansApiClient:
         headers = {'Authorization': 'Bearer ' + self._token, 'Accept': 'application/json'}
         if body is not None: headers['Content-Type'] = 'application/json'
         if key is not None: headers['Idempotency-Key'] = key
+        self.last_retry_after = None
         try:
             response = self._http(method=method, url=url, headers=headers, body=body,
                                   timeout=self._timeout, follow_redirects=False)
@@ -125,6 +158,7 @@ class FansApiClient:
         headers = response.headers if type(response.headers) is dict else {}
         lowered = {k.lower(): v for k, v in headers.items() if type(k) is str}
         self.last_replayed = str(lowered.get('idempotent-replayed', '')).strip().lower() == 'true'
+        self.last_retry_after = parse_retry_after(lowered.get('retry-after'))
         balance = lowered.get('x-ofapi-credits-balance')
         self.credits_balance = int(balance) if type(balance) is str and balance.isdecimal() else self.credits_balance
         try:
@@ -133,20 +167,45 @@ class FansApiClient:
             parsed = None
         return response.status, parsed, _trace(response.headers), _trace(response.headers, 'x-ofapi-idempotency-original-trace-id')
 
+    def _fail(self, state, status, trace, original_trace, *, failure=None, cause=None):
+        """Classify one failed read. Transient: no response, 408/425/429/5xx. Auth: 401/403 and
+        identity or account mismatch. Schema: 200 with an invalid shape or any other status."""
+        if failure is None:
+            if status is None:
+                failure, cause = 'transient', 'provider_unreachable'
+            elif status == 429:
+                failure, cause = 'transient', 'provider_rate_limited'
+            elif status in (408, 425) or 500 <= status <= 599:
+                failure, cause = 'transient', 'provider_unavailable'
+            elif status == 401:
+                failure, cause = 'auth', 'provider_auth_rejected'
+            elif status == 403:
+                failure, cause = 'auth', 'provider_forbidden'
+            else:
+                failure, cause = 'schema', 'provider_response_invalid'
+        retry = self.last_retry_after if failure == 'transient' else None
+        result = Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace,
+                        failure=failure, cause=cause, retry_after=retry)
+        self.last_failure = result
+        return result
+
     def identity(self):
         self._identity_verified = False
+        self.last_failure = None
         status, body, trace, original_trace = self._request('GET', self.base + '/api/accounts')
         if status != 200 or type(body) is not list or len(body) > 1000:
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace)
         matches = [row for row in body if type(row) is dict and row.get('id') == self.account]
         if len(matches) != 1:
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace, failure='auth', cause='account_not_found')
         try:
             valid = _id(matches[0].get('onlyfans_id')) == self.creator_id
         except ValueError:
             valid = False
-        if not valid or matches[0].get('is_authenticated') is not True:
-            return Result('identity_mismatch', trace_id=trace, http_status=status, original_trace_id=original_trace)
+        if not valid:
+            return self._fail('identity_mismatch', status, trace, original_trace, failure='auth', cause='identity_mismatch')
+        if matches[0].get('is_authenticated') is not True:
+            return self._fail('identity_mismatch', status, trace, original_trace, failure='auth', cause='account_not_authenticated')
         self._identity_verified = True
         return Result('verified', {'account':self.account, 'creator_id':self.creator_id, 'epoch':self.epoch}, trace_id=trace, http_status=status, original_trace_id=original_trace)
 
@@ -241,7 +300,7 @@ class FansApiClient:
         if (status != 200 or type(data) is not dict or type(data.get('list')) is not list
                 or type(data.get('hasMore')) is not bool or len(data['list']) > limit
                 or any(type(row) is not dict for row in data['list'])):
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace)
         return Result('observed', tuple(data['list']), 'more' if data['hasMore'] else None, trace, status, original_trace)
 
     def vault_lists(self):
@@ -249,7 +308,7 @@ class FansApiClient:
         status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/media/vault/lists')
         data = body.get('data') if type(body) is dict else None
         if status != 200 or type(data) is not dict or type(data.get('list')) is not list or any(type(row) is not dict for row in data['list']):
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace)
         return Result('observed', tuple(data['list']), None, trace, status, original_trace)
 
     def transactions(self, *, limit=10, marker=None, start_date=None):

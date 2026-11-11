@@ -101,12 +101,21 @@ def real_transport_enabled(env=None):
     return (os.environ if env is None else env).get(FLAG) == '1'
 
 
+class ProviderIdentityRefused(Refused):
+    """Same refusal as before, plus the bounded failure class so callers need not guess."""
+    def __init__(self, message, *, failure, cause, retry_after=None):
+        super().__init__(message)
+        self.failure, self.cause, self.retry_after = failure, cause, retry_after
+
+
 def build_client(config, *, creator_id, epoch, transport=None, request_guard=None):
     wire = FansHttpsTransport(enabled=True, transport=transport)
     client = FansApiClient(account=config.provider_account, creator_id=creator_id, epoch=epoch,
                            token=config.token, http=wire, timeout=config.timeout, enabled=True, base=config.base, request_guard=request_guard)
-    if client.identity().state != 'verified':
-        raise Refused('provider identity could not be verified')
+    proof = client.identity()
+    if proof.state != 'verified':
+        raise ProviderIdentityRefused('provider identity could not be verified', failure=proof.failure or 'transient',
+                                      cause=proof.cause or 'provider_unreachable', retry_after=proof.retry_after)
     return client
 
 

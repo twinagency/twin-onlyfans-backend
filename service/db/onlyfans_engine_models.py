@@ -483,6 +483,9 @@ class OfEnginePilotScope(Base):
         CheckConstraint("(status = 'active') = (active_since IS NOT NULL)", name='active_since'),
         CheckConstraint('revision > 0 AND provider_requests_used >= 0 AND provider_credits_reserved >= 0', name='numbers'),
         UniqueConstraint('account_id', name='uq_engine_pilot_scope_account'),
+        # The audited promotion command must exist (append-only) before a scope row can name it.
+        ForeignKeyConstraint(['account_id', 'transition_command_key'], ['of_launch_command.account_id', 'of_launch_command.command_key'],
+                             ondelete='RESTRICT', name='fk_of_engine_pilot_scope_account_id_of_launch_command'),
         {'info': PILOT_SCOPE_INFO},
     )
     scope_id = Column(Integer, primary_key=True)
@@ -499,3 +502,6 @@ class OfEnginePilotScope(Base):
     updated_at = Column(DateTime, nullable=False)
     # Sanitized account-scoped last preparation attempt; preparation scopes only (0133).
     last_attempt_json = Column(Text, info={'onlyfans_since': '0133_preparation_retry_state'})
+    # Set once, by the audited preparation -> commercial promotion (0134); NULL for legacy and preparation rows.
+    transition_command_key = Column(String(64), info={'onlyfans_since': '0134_commercial_scope_contract'})
+    commercial_since = Column(DateTime, info={'onlyfans_since': '0134_commercial_scope_contract'})

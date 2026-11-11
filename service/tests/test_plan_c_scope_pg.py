@@ -73,7 +73,7 @@ def test_scope_schema_is_current_and_requires_complete_configuration(configured_
     world, env, _, seen = configured_draft
     with world.database[1].begin() as conn:
         check_schema(conn)
-        assert HEAD == '0133_preparation_retry_state'
+        assert HEAD == '0134_commercial_scope_contract'
     cfg = config_for(world, env)
     for patch in ({'fans':[]}, {'operator':{'actor':OTHER, 'name':'', 'permissions':[]}},
                   {'product':{**cfg['product'], 'price_cents':1}}, {'limits':{**cfg['limits'], 'provider_requests':0}}):
@@ -165,8 +165,9 @@ def test_0131_populated_pilot_upgrade_retains_legacy_authority_and_reservations(
         before=dict(c.execute(text("SELECT * FROM of_engine_pilot_scope WHERE scope_id=1")).mappings().one())
         upgrade(c)
         after=dict(c.execute(text("SELECT * FROM of_engine_pilot_scope WHERE scope_id=1")).mappings().one())
-        # 0133 adds one nullable column; the legacy row's values are otherwise byte-identical.
+        # 0133 adds one nullable column and 0134 two more (promotion lineage); the legacy row's values are otherwise byte-identical.
         assert after.pop("last_attempt_json") is None
+        assert after.pop("transition_command_key") is None and after.pop("commercial_since") is None
         assert before==after
         check_schema(c)
     assert pilot_scope.describe(world.store,TENANT,ACCOUNT)["status"]=="configured"

@@ -85,7 +85,8 @@ COMMERCIAL_VAULT = "0130_commercial_vault_provenance"
 CATEGORY_PRICES = "0131_manual_category_prices"
 ACCOUNT_PREPARATION = "0132_account_preparation"
 PREPARATION_RETRY_STATE = "0133_preparation_retry_state"
-HEAD = PREPARATION_RETRY_STATE
+COMMERCIAL_SCOPE = "0134_commercial_scope_contract"
+HEAD = COMMERCIAL_SCOPE
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -126,6 +127,7 @@ REVISION_RANK[COMMERCIAL_VAULT] = 130
 REVISION_RANK[CATEGORY_PRICES] = 131
 REVISION_RANK[ACCOUNT_PREPARATION] = 132
 REVISION_RANK[PREPARATION_RETRY_STATE] = 133
+REVISION_RANK[COMMERCIAL_SCOPE] = 134
 
 
 class SchemaMismatch(RuntimeError):
@@ -455,7 +457,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             {"table": table, "trigger": trigger}).all()
         if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 31
                 or guard[0][2] != trigger or guard[0][4] != "plpgsql"
-                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("9acda81657e604774e5e2e6741f1d0454700ad7c233f6517fa04dc76419e33a3" if expected_rank >= 132 else "6fe99337ec51184c7d92beee2ba5abf2de83f81576aead67b3adacd39d04ace6")):
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("c6714af2892bd034687c7555babbf73c77eb55d52be605076977efe5d3e57774" if COMMERCIAL_SCOPE in ancestors else "9acda81657e604774e5e2e6741f1d0454700ad7c233f6517fa04dc76419e33a3" if expected_rank >= 132 else "6fe99337ec51184c7d92beee2ba5abf2de83f81576aead67b3adacd39d04ace6")):
             failures.append("missing pilot scope protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing pilot scope row security")

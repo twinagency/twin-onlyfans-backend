@@ -52,7 +52,8 @@ def test_r1_paused_plain_replies_cannot_pitch_price_or_claim_purchase(database):
         'q3': SyntheticProposal('It is a short video.', price_claims=(100,)),
         'q4': SyntheticProposal('It is a short video.', purchase_claim=True),
         'q5': SyntheticProposal('You can unlock it any time you like.'),
-        'q6': SyntheticProposal('The video is about two minutes long.')})
+        'q6': SyntheticProposal('The video is about two minutes long.'),
+        'q7': SyntheticProposal('Happy to chat about something else.')})
     provider = SyntheticFansProvider(('accepted', 'accepted'), message_id=(9001, 9002))
     wire = wire_for(store, provider)
     incoming(store, 1, 'no thanks')
@@ -66,9 +67,15 @@ def test_r1_paused_plain_replies_cannot_pitch_price_or_claim_purchase(database):
     assert len(provider.calls) == 1  # nothing commercial reached the wire
     with Session(database[1]) as s:
         assert len(s.scalars(select(OfEngineDecision)).all()) == 1  # no decision for a refused proposal
-    unthrottle(database[1]); incoming(store, 7, 'q6')
+    # The duration guard now requires evidence for media duration even in an ordinary reply. Keep that
+    # protection as a negative assertion; use a genuinely non-commercial, claim-free positive control.
+    incoming(store, 6, 'q6')
+    with pytest.raises(Refused, match='unsupported media duration claim'):
+        engine.plan(TENANT, ACCOUNT, FAN, 6)
+    assert len(provider.calls) == 1
+    unthrottle(database[1]); incoming(store, 7, 'q7')
     assert run(store, authority, engine, 7, wire=wire)[2] == 'accepted'
-    assert provider.calls[-1]['body']['text'] == 'The video is about two minutes long.'
+    assert provider.calls[-1]['body']['text'] == 'Happy to chat about something else.'
     store.close()
 
 

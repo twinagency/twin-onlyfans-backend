@@ -51,11 +51,16 @@ def _clean(value, limit, *, redact=False):
 
 def _retry_after(value, *, now=None):
     """Retry-After in whole seconds, rounded UP; never shorten a valid provider delay."""
-    if type(value) is not str or not value.strip() or len(value) > 64:
+    if type(value) is not str or not value.strip():
         return None
     value = value.strip()
     if re.fullmatch(r'[0-9]+', value):
-        return int(value)
+        digits = value.lstrip('0') or '0'
+        # Do not turn a valid oversized delay into the fallback cooldown. Values beyond the timestamp range
+        # use a bounded overflow marker; the runtime defers them to an operator and never retries automatically.
+        return 10**64 if len(digits) > 64 else int(digits)
+    if len(value) > 64:
+        return None
     from email.utils import parsedate_to_datetime
     from datetime import datetime, timezone
     try:
@@ -89,6 +94,9 @@ def _failure_detail(response, *, secret='', messages=()):
     retry = _retry_after(headers.get('retry-after'))
     if retry is not None:
         detail['retryAfterSeconds'] = str(retry)
+        raw_retry = headers.get('retry-after', '').strip()
+        if re.fullmatch(r'[0-9]+', raw_retry) and len(raw_retry.lstrip('0')) > 64:
+            detail['retryAfterBeyondRange'] = True
     for name, key in (('x-ratelimit-limit', 'rateLimitLimit'), ('x-ratelimit-remaining', 'rateLimitRemaining'),
                       ('x-ratelimit-reset', 'rateLimitReset')):
         value = headers.get(name)

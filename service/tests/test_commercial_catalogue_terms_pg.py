@@ -558,3 +558,34 @@ def test_e_a_sent_card_is_never_replaced_and_its_rows_stay_byte_identical(databa
         with pytest.raises(DBAPIError):
             s.execute(text("UPDATE of_catalogue_terms SET standard_price_cents=1300 WHERE item_id=:i"), {'i': blue})
     store.close()
+
+
+# ===================================================== consumers: content editor and sent-card references ============
+
+def test_c_the_content_editor_cannot_reprice_an_item_with_approved_terms(database):
+    from onlyfans_runtime.content_management import InvalidContent, get_content_v2, update_content
+    store, authority, engine, model, red, blue = engine_setup(database)
+    approve(store, blue, standard=1200)
+    current = get_content_v2(store, TENANT, ACCOUNT, blue)
+    for version in (1, 2):
+        with pytest.raises(InvalidContent, match='approved terms'):
+            update_content(store, TENANT, ACCOUNT, blue, patch={'priceCents': 1300}, expected_revision=current['revision'],
+                           expected_fingerprint=current['fingerprint'], command_key=f'{version}a' * 32, actor=AGENCY, version=version)
+    with Session(database[1]) as s:
+        assert s.get(CatalogItem, blue).price_cents == 1200
+    store.close()
+
+
+def test_c_sent_card_references_carry_the_frozen_kind_and_variant_not_the_live_terms(database):
+    from conversation_engine.offers import match
+    from onlyfans_runtime.catalogue_terms import set_discount
+    store, authority, engine, model, red, blue = engine_setup(database)
+    approve(store, blue, standard=1200)
+    send_offer(store, authority, engine, model, blue, (21, 22), 'show blue', 1, 9803)
+    set_discount(store, TENANT, ACCOUNT, blue, discount_cents=900, command_key='f6' * 32, actor=AGENCY)
+    with Session(database[1]) as s, s.begin():
+        view = match(s, runtime(store, s), FAN, 'show me blue', include_cards=True)
+    card = view['cards'][0]
+    assert card['priceCents'] == 1200 and card['kind'] == 'single_video' and card['variant'] == 'standard'
+    assert card['counts'] == {'media': 2, 'pictures': 1, 'videos': 1, 'previews': 1}
+    store.close()

@@ -64,6 +64,10 @@ def _cards(s, runtime, fan_id, *, exclude_intent_id=None):
             'label': label, 'priceCents': intent.price_cents, 'currency': 'USD',
             'sendState': intent.status, 'accessState': 'unconfirmed', 'financialState': 'not_established',
             'financialReview': review, 'messageId': None}
+        frozen = terms.get('commercial')
+        if isinstance(frozen, dict):
+            # Product facts of the card exactly as frozen at preparation; a later terms revision cannot change them.
+            card.update(kind=frozen['kind'], variant=frozen['variant'], counts=frozen['counts'])
         if intent.status == 'accepted':
             offer = s.get(ContentOffer, intent.offer_id) if intent.offer_id is not None else None
             message = s.get(Message, (runtime.account_id, fan_id, intent.provider_message_id)) if intent.provider_message_id else None
@@ -120,8 +124,10 @@ def _match(s, runtime, fan_id, text):
             refs = [normalize(label), *aliases_for(s, runtime, offer.item_id, terms)]
         except (ValueError, TypeError, KeyError):
             return {'state':'incomplete', 'offers':[]}
+        frozen = terms.get('commercial')
         candidates.append({'offerId':str(offer.id), 'itemId':str(offer.item_id), 'intentId':intent.intent_id,
-            'label':label, 'priceCents':offer.price_cents, 'currency':'USD', 'references':refs})
+            'label':label, 'priceCents':offer.price_cents, 'currency':'USD', 'references':refs,
+            **({'kind': frozen['kind'], 'variant': frozen['variant'], 'counts': frozen['counts']} if isinstance(frozen, dict) else {})})
     normalized = normalize(text)
     named = [candidate for candidate in candidates if any(ref and (' ' + ref + ' ') in (' ' + normalized + ' ')
                                                            for ref in candidate['references'])]

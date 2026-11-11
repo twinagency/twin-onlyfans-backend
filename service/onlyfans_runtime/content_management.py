@@ -142,7 +142,16 @@ def get_content_v2(store, tenant_id, account_id, item_id):
         return editable_v2(session, row, _revision(session, account_id, item_id))
 
 
+def _approved_terms_price_guard(session, row, patch):
+    """An item with a live approved-terms revision is priced only by those terms (a new revision), never by a content edit."""
+    if "priceCents" in patch and patch["priceCents"] != row.price_cents:
+        from .catalogue_terms import live_terms
+        if live_terms(session, row.account_id, row.id) is not None:
+            raise InvalidContent("This item's price is set by its approved terms; approve a new revision instead.")
+
+
 def _v1_guard(session, row, patch):
+    _approved_terms_price_guard(session, row, patch)
     if row.pricing_mode == "fixed" and (("priceCents" in patch and patch["priceCents"] != row.price_cents)
                                         or patch.get("enabled") is True):
         raise VersionRequired("This imported item's price and enabling need the current content editor.")
@@ -150,6 +159,7 @@ def _v1_guard(session, row, patch):
 
 def _v2_guard(acknowledge_override):
     def guard(session, row, patch):
+        _approved_terms_price_guard(session, row, patch)
         if row.pricing_mode != "fixed":
             return
         from .offer_import import provenance

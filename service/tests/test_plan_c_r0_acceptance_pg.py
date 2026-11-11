@@ -378,7 +378,8 @@ def test_mixed_versions_fail_closed_and_rollback_never_drops_retry_evidence(make
     before = [(c.call_id, c.status, c.outcome, c.retry_not_before, c.failure_detail_json) for c in w.calls()]
     baseline = Path('/opt/r0-baseline/service')
     assert baseline.exists(), 'This check runs only on the exact immutable candidate image with its baseline reader'
-    env = {**os.environ, 'PYTHONPATH': str(baseline), 'R0_TEST_DB': w.w.database[0]}
+    env = {**os.environ, 'PYTHONPATH': str(baseline), 'R0_TEST_DB': w.w.database[0],
+           'DATABASE_URL': w.w.database[0], 'ONLYFANS_PROCESS_ROLE': 'worker', 'TWIN_FASTT_CONFIG_ISOLATED': '1'}
     result = subprocess.run([sys.executable, '-c',
         'import os; from sqlalchemy import create_engine; from db.schema import check_schema; '
         'e=create_engine(os.environ["R0_TEST_DB"]); c=e.connect(); check_schema(c)'],

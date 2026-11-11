@@ -505,6 +505,8 @@ def request_recovery(s, runtime, request, *, now=None):
     scope, config = current(s, runtime)
     if scope is not None and scope.status != 'active':
         return hold('scope_held', 'review_pilot_scope')
+    if request.status in ('waiting_fan', 'waiting_provider'):
+        return hold(request.status, request.next_step or 'review_request')
     if request.status in ('handover_pending', 'handover_accepted'):
         from db.onlyfans_case_models import OfOperatorCase
         case = s.scalar(select(OfOperatorCase).where(OfOperatorCase.account_id == request.account_id,

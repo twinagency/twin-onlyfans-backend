@@ -264,12 +264,14 @@ def test_newer_correction_keeps_unanswered_context_and_sends_only_current_reply(
 
 
 def test_same_fan_under_other_creator_cannot_be_retried_or_exposed(make_world, monkeypatch):
-    from test_onlyfans_foundation_pg import seed
+    from test_onlyfans_foundation_pg import seed, event
     w = make_world([429])
     post(w, 92015)
     w.ticks(1)
     original = w.calls()[0]
     other_store = seed(*w.w.database, account='acc-r0-other', tenant='tenant-r0-other', fan=FAN)
+    other_store.record('tenant-r0-other', 'acc-r0-other', event(mid=92015, fan=FAN, body='other creator private input'))
+    other_store.drain('tenant-r0-other', 'acc-r0-other')
     other_rid = str(uuid.uuid4())
     with Session(w.w.database[1]) as s, s.begin():
         owner = s.get(OfEngineOwner, (ACCOUNT, FAN))
@@ -393,6 +395,8 @@ def test_exhausted_real_ledger_budget_prevents_retry_and_retains_unrelated_unkno
     w.ticks(1)
     original = w.calls()[0]
     rid = str(uuid.uuid4())
+    post(w, 999991, fan=FAN2)
+    w.w.store.drain(TENANT, ACCOUNT)
     with Session(w.w.database[1]) as s, s.begin():
         if s.get(OfEngineOwner, (ACCOUNT, FAN2)) is None:
             owner = s.get(OfEngineOwner, (ACCOUNT, FAN))

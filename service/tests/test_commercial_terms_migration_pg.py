@@ -48,10 +48,10 @@ def world(database):
 
 def test_head_is_the_new_revision_and_the_schema_check_pins_its_guards(world):
     store, engine, item, binding = world
-    assert HEAD == NEW
+    assert HEAD == '0136_history_coverage'  # integration head (step 1); NEW is its ancestor and its objects are still checked
     with engine.begin() as c:
         check_schema(c)
-        assert c.scalar(text('SELECT version_num FROM alembic_version')) == NEW
+        assert c.scalar(text('SELECT version_num FROM alembic_version')) == HEAD
         for table in ('of_catalogue_terms', 'of_catalogue_terms_member'):
             assert c.scalar(text('SELECT to_regclass(:t) IS NOT NULL'), {'t': table})
         with c.begin_nested():

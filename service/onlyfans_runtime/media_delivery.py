@@ -40,14 +40,26 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     from .vault_editing import assert_category_review
     assert_category_review(session, session.get(OfRuntime, account_id), item)
     from automations._price_limits import OF_PRICE_FLOOR_CENTS, OF_PRICE_MAX_CENTS
+    from .catalogue_terms import block, latest_terms, members_of
+    approved = latest_terms(session, account_id, item_id, lock=lock)
+    if approved is not None and approved.status != "approved":
+        raise Refused("approved catalogue terms withdrawn")
     price = item.price_cents if price_cents is None else price_cents
-    if (type(price) is not int or type(item.price_cents) is not int
-            or not OF_PRICE_FLOOR_CENTS <= item.price_cents <= price <= OF_PRICE_MAX_CENTS):
-        raise Refused("invalid catalogue price")
-    fixed = item.pricing_mode == "fixed"
-    if item.pricing_mode not in {"dynamic", "fixed"} or (fixed and price != item.price_cents):
-        # A fixed item's saved amount is the offer; no override may change it.
-        raise Refused("fixed catalogue price differs")
+    if approved is not None:
+        # Commercial item: the offer is exactly one of the approved amounts of the live revision, never an override.
+        if item.pricing_mode != "fixed" or item.price_cents != approved.standard_price_cents:
+            raise Refused("catalogue price differs from approved terms")
+        if type(price) is not int or price not in {approved.standard_price_cents, approved.discount_price_cents}:
+            raise Refused("price is not an approved term")
+        fixed = True
+    else:
+        if (type(price) is not int or type(item.price_cents) is not int
+                or not OF_PRICE_FLOOR_CENTS <= item.price_cents <= price <= OF_PRICE_MAX_CENTS):
+            raise Refused("invalid catalogue price")
+        fixed = item.pricing_mode == "fixed"
+        if item.pricing_mode not in {"dynamic", "fixed"} or (fixed and price != item.price_cents):
+            # A fixed item's saved amount is the offer; no override may change it.
+            raise Refused("fixed catalogue price differs")
     # An unresolved source change or verified unusable media holds new sales of
     # this item only; the snapshot itself is untouched, so queued intents of
     # other items and every dynamic snapshot stay byte-identical.
@@ -63,6 +75,8 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     if (type(previews) is not list or any(type(v) is not int or v not in ids for v in previews)
             or len(set(previews)) != len(previews) or set(previews) == set(ids)):
         raise Refused("invalid preview identities")
+    if approved is not None and members_of(session, approved) != {(m, "preview" if m in previews else "paid") for m in ids}:
+        raise Refused("catalogue differs from approved terms")
     media_query = select(VaultItem).where(VaultItem.account_id == account_id,
         VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)
     rows = session.scalars(media_query.with_for_update(read=True) if lock else media_query).all()
@@ -83,6 +97,8 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
             raise Refused("approved catalogue terms unavailable")
         snapshot["item"]["pricing_mode"] = "fixed"
         snapshot["source"] = None if source is None else {"decision": source["decision"], "fingerprint": source["fingerprint"]}
+    if approved is not None:
+        snapshot["commercial"] = block(approved, price)
     return json.loads(canonical(snapshot))
 
 
@@ -136,6 +152,9 @@ def project(session, intent, message_id, stamp):
             or snapshot["item"]["account_id"] != intent.account_id
             or snapshot["item"]["id"] != intent.catalog_item_id):
         raise Refused("media evidence conflict")
+    terms = snapshot.get("commercial")
+    if terms is not None and snapshot["price_cents"] != (terms["discountCents"] if terms["variant"] == "discount" else terms["standardCents"]):
+        raise Refused("media evidence conflict")   # the frozen price must be one of the frozen approved amounts
     offer = ContentOffer(account_id=intent.account_id, fan_id=intent.fan_id,
         item_id=intent.catalog_item_id, mode="ppv", price_cents=intent.price_cents,
         tip_unlock_cents=0, offer_message_id=message_id, status="open",

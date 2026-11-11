@@ -210,7 +210,7 @@ def clone_call(s, original, **overrides):
 
 
 @pytest.mark.parametrize('status', ['reserved', 'calling', 'unknown', 'settled'])
-def test_http_outcome_without_confirmed_release_is_not_retry_permission(make_world, status):
+def test_http_outcome_without_confirmed_release_is_not_retry_permission(make_world, monkeypatch, status):
     w = make_world([429])
     post(w, 92010)
     w.ticks(1)
@@ -222,6 +222,8 @@ def test_http_outcome_without_confirmed_release_is_not_retry_permission(make_wor
     w.ticks(3)
     assert w.provider.calls == [429] and w.w.fans.posts == []
     assert len(w.calls()) == 2 and w.calls()[1].status == status
+    shown = request_item(w, 92010, monkeypatch)
+    assert shown['recoveryState'] == ('model_in_flight' if status in ('reserved', 'calling') else 'unknown_model_outcome')
 
 
 @pytest.mark.parametrize('label,fan', [('6122ac90', FAN), ('b968a156', FAN2), ('0165083a', FAN)])

@@ -446,7 +446,7 @@ def request_recovery(s, runtime, request, *, now=None):
     The request ID is the deduplication key. Deadlines and call evidence are durable; process restart cannot hide
     an alert or turn a scheduled wait into a retry permission. Intentional holds are never labelled overdue work.
     """
-    from .model_client import released_failure, MAX_AUTOMATIC_RETRY_SECONDS
+    from .model_client import released_failure, retryable_release, http_refusal, MAX_AUTOMATIC_RETRY_SECONDS
     now = now or utcnow()
     calls = list(s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == request.account_id,
         OfEngineModelCall.request_id == request.request_id, OfEngineModelCall.binding_id == runtime.binding_id)
@@ -463,6 +463,8 @@ def request_recovery(s, runtime, request, *, now=None):
         return hold('identity_hold', 'review_model_identity')
     if any(c.status == 'unknown' for c in calls):
         return hold('unknown_model_outcome', 'review_model_outcome_and_cost')
+    if any(c.status == 'settled' and (retryable_release(c.outcome) or http_refusal(c.outcome)) for c in calls):
+        return hold('unknown_model_outcome', 'review_inconsistent_model_evidence')
     if any(c.status == 'released' and released_failure(c.status, c.outcome, c.wire_started_at) == 'held' for c in calls):
         return hold('unknown_model_outcome', 'review_model_outcome_and_cost')
     intents = list(s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == request.account_id,

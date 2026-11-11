@@ -168,14 +168,9 @@ def _build(s, runtime, parts, request, owner, state):
     except Refused:
         return None, None, 'pilot_scope_unavailable'
     if pilot is not None:
-        expected = pilot_config['product']
-        for part in canon_parts:
-            if part['action'] == 'offer':
-                terms = part['terms']
-                if (part['catalog_item_id'] != expected['id'] or terms['price_cents'] != expected['price_cents']
-                        or tuple(map(str, terms['media_ids'])) != tuple(map(str, expected['media_ids']))
-                        or tuple(map(str, terms['preview_ids'])) != tuple(map(str, expected['preview_ids']))):
-                    return None, None, 'pilot_product_scope_changed'
+        reason = offer_pin_reason(pilot_config, canon_parts)
+        if reason:
+            return None, None, reason
     from .writer_context import CreatorProfile, active_profile
     profile = active_profile(account, session=s)
     if profile is not None and type(profile) is not CreatorProfile:
@@ -191,6 +186,23 @@ def _build(s, runtime, parts, request, owner, state):
     if pilot is not None:
         canon['pilot_scope'] = {'revision': pilot.revision, 'fingerprint': pilot.fingerprint, 'status': pilot.status}
     return _hash(canon), shown, None
+
+
+def offer_pin_reason(pilot_config, canon_parts):
+    """Why a draft's offers are outside the scope's pinned product, or None. A commercial scope pins no product yet."""
+    offers = [part for part in canon_parts if part['action'] == 'offer']
+    if not offers:
+        return None
+    if 'product' not in pilot_config:
+        return 'commercial_product_contract_unavailable'
+    expected = pilot_config['product']
+    for part in offers:
+        terms = part['terms']
+        if (part['catalog_item_id'] != expected['id'] or terms['price_cents'] != expected['price_cents']
+                or tuple(map(str, terms['media_ids'])) != tuple(map(str, expected['media_ids']))
+                or tuple(map(str, terms['preview_ids'])) != tuple(map(str, expected['preview_ids']))):
+            return 'pilot_product_scope_changed'
+    return None
 
 
 def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True, controls=False, lock=False):
@@ -213,7 +225,7 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
         if (fan_id not in pilot_config['fans'] or pilot.status == 'stopped'
                 or phase == 'send' and pilot.status != 'active'
                 or not policy_matches(policy, pilot_config, enabled=pilot.status == 'active')
-                or decision.action == 'offer' and not _product_current(s, account, pilot_config['product'])):
+                or decision.action == 'offer' and ('product' not in pilot_config or not _product_current(s, account, pilot_config['product']))):
             return 'pilot_scope_unavailable', None, None, None
     from fans_api_adapter.real_transport import real_transport_enabled
     if phase == 'send':   # a draft may be prepared while sending is stopped; nothing can go out until these hold

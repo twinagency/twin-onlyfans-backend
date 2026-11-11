@@ -18,6 +18,7 @@ from conversation_engine.journey import journey_config
 from conversation_engine.model_config import ModelConfig
 from conversation_engine.model_ledger import IDENTITY_UNSETTLED
 from conversation_engine.pilot_scope import require, require_model, require_profile, policy_matches, _product_current
+from conversation_engine.scope_contract import profile_items
 from conversation_engine.real_worker import RealConversationWorker
 from conversation_engine.writer_context import JsonFileCreatorProfiles
 from db.onlyfans_delivery_models import OfDeliveryPolicy
@@ -173,7 +174,7 @@ class SupervisedPilot:
                     or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill
                     or profile is None or profile.missing_inputs()
                     or (config.get('delivery_mode', 'full') != 'text_only' and not profile.offers_permitted)
-                    or profile.approved_item_ids != (str(config['product']['id']),)):
+                    or profile.approved_item_ids != profile_items(config)):
                 raise Refused('supervised pilot configuration changed')
             require_model(config, self.account, self.model_config)
             require_profile(config, profile)
@@ -548,7 +549,7 @@ def build_supervised_pilot(store, environ=None, *, model_transport=None, fans_tr
     journey = journey_config()
     if (profile is None or profile.missing_inputs()
             or (config.get('delivery_mode', 'full') != 'text_only' and not profile.offers_permitted)
-            or profile.approved_item_ids != (str(config['product']['id']),)
+            or profile.approved_item_ids != profile_items(config)
             or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill):
         raise Refused('supervised creator or journey configuration is incomplete')
     require_profile(config, profile)

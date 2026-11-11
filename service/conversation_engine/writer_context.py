@@ -168,11 +168,13 @@ def active_profile(account_id, *, session=None):
     if session is not None:
         from db.onlyfans_engine_models import OfEnginePilotScope
         from sqlalchemy import select
+        from . import scope_contract as contracts
         row = session.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id == account_id))
-        if row is not None:
-            from .pilot_scope import validate, _fingerprint, _encoded
-            config = validate(json.loads(row.config_json))
-            if _fingerprint(config) != row.fingerprint or _encoded(config) != row.config_json:
+        # Only this account's legacy pilot or commercial scope binds a profile; a preparation row binds nothing.
+        kind = contracts.claim(row) if row is not None else None
+        if kind in (contracts.LEGACY, contracts.COMMERCIAL):
+            config = contracts.validate(kind, json.loads(row.config_json))
+            if contracts.fingerprint(config) != row.fingerprint or contracts.encoded(config) != row.config_json:
                 raise Refused('pilot creator profile binding changed')
             return CreatorProfile.from_dict(config['creator_profile'])
     if _ACTIVE_PROFILES is not None:

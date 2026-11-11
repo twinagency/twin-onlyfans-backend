@@ -81,7 +81,9 @@ def journey_config():
 def scoped_config(s, account, config=None):
     if s is not None:
         from db.onlyfans_engine_models import OfEnginePilotScope
-        if s.scalar(select(OfEnginePilotScope.scope_id).where(OfEnginePilotScope.account_id == account)) is not None:
+        from . import scope_contract as contracts
+        own = s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id == account))
+        if own is not None and contracts.claim(own) in (contracts.LEGACY, contracts.COMMERCIAL):
             profile = active_profile(account, session=s)
             return JourneyConfig(identity_line=profile.role_statement or None, limit_terms=profile.limit_terms)
     return config or _CONFIG
@@ -226,7 +228,8 @@ def pilot_purchase_scope(s, runtime, fan_id, message):
     from .catalogue import normalize
     from db.models import CatalogItem
     pilot, config = current(s, runtime)
-    if (pilot is None or pilot.status != 'active' or config['authorization_mode'] != 'autonomous'
+    # A commercial scope has no pinned product until the catalogue contract exists: no purchase request matches.
+    if (pilot is None or pilot.status != 'active' or 'product' not in config or config['authorization_mode'] != 'autonomous'
             or fan_id not in config['fans'] or message is None or message.fan_id != fan_id):
         return ()
     value = _norm(message.body).rstrip(' .!?')
@@ -287,9 +290,12 @@ def backfill_complete(s, account, fan_id):
     from db.onlyfans_models import OfRuntime
     from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection
     from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+    from . import scope_contract as contracts
     runtime = s.get(OfRuntime, account)
-    pilot = s.get(OfEnginePilotScope, 1)
-    scoped = pilot is not None and pilot.account_id == account
+    # Strict provider-history coverage applies to THIS account's own legacy or commercial scope; any other account keeps
+    # the lenient whole-run coverage. Another account's scope never makes this account strict or lenient.
+    pilot = s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id == account))
+    scoped = pilot is not None and contracts.claim(pilot) in (contracts.LEGACY, contracts.COMMERCIAL)
     for run in s.scalars(select(OfFansBackfill).where(OfFansBackfill.account_id == account,
                                                       OfFansBackfill.status == 'complete')):
         try:
@@ -320,7 +326,7 @@ def backfill_complete(s, account, fan_id):
             config = json.loads(pilot.config_json)
             if (evidence['binding'] != runtime.binding_id or evidence['epoch'] != conn.epoch
                     or evidence['provider_account'] != conn.provider_account_id
-                    or evidence['creator'] != conn.provider_creator_id or evidence['product'] != config['product']
+                    or evidence['creator'] != conn.provider_creator_id or evidence['product'] != contracts.product_pin(config)
                     or evidence['start'] != run.start_date.isoformat()
                     or fan_id not in evidence['fans'] or fan_id not in config['fans']):
                 continue

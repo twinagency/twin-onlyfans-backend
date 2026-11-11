@@ -589,3 +589,22 @@ def test_c_sent_card_references_carry_the_frozen_kind_and_variant_not_the_live_t
     assert card['priceCents'] == 1200 and card['kind'] == 'single_video' and card['variant'] == 'standard'
     assert card['counts'] == {'media': 2, 'pictures': 1, 'videos': 1, 'previews': 1}
     store.close()
+
+
+def test_d_the_final_wire_check_uses_the_same_ownership_gate(database):
+    """Ownership evidence that appears after queueing (unmapped paid message / an owned preview) stops the commercial card at dispatch."""
+    store, authority, engine, blue, grant, intent = queued_blue(database)
+    with Session(database[1]) as s, s.begin():
+        s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=7002, direction='out', body='locked', media_ids='[]',
+                      media_count=1, price_cents=900, is_paid=True, created_at=utcnow()))
+    outcome, provider = dispatch(store, authority, intent)
+    assert outcome in {'refused', 'cancelled'} and provider.calls == []
+    store.close()
+
+
+def test_d_an_owned_preview_stops_a_queued_commercial_card_at_dispatch(database):
+    store, authority, engine, blue, grant, intent = queued_blue(database)
+    buy(database[1], 21)                       # blue's free preview photo: legacy hero-only rule would allow it, the engine rule does not
+    outcome, provider = dispatch(store, authority, intent)
+    assert outcome in {'refused', 'cancelled'} and provider.calls == []
+    store.close()

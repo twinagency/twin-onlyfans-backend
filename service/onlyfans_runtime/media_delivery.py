@@ -128,6 +128,11 @@ def assert_unowned(session, account_id, fan_id, snapshot, *, manual=False):
     hero = set(snapshot["media_ids"]) - set(snapshot["preview_ids"])
     if hero & owned:
         raise Refused("catalogue media already owned")
+    if not manual and snapshot.get("commercial") is not None:
+        # Commercial products use the one ownership gate at preparation, selection AND the final wire check: unknown ownership
+        # (e.g. an unmapped paid message) never sends, and any owned member (preview included) excludes the whole product.
+        from conversation_engine.ownership_gate import ownership_gate
+        ownership_gate(session, account_id, fan_id, snapshot)
 
 
 def project(session, intent, message_id, stamp):

@@ -99,6 +99,20 @@ def _int(value, low=0, high=2 ** 31 - 2):
     return value
 
 
+def _fenced(s, account):
+    """True when the operator surface must not serve this account.
+
+    An account is served through its OWN legacy or commercial scope. An account without one is served only while no
+    legacy trial pilot exists anywhere (an unconfigured installation), exactly as before; preparation rows do not count."""
+    from types import SimpleNamespace
+    from db.onlyfans_engine_models import OfEnginePilotScope
+    from . import scope_contract as contracts
+    own = contracts.row_for(s, SimpleNamespace(account_id=account))
+    if own is not None and contracts.claim(own) in (contracts.LEGACY, contracts.COMMERCIAL):
+        return False
+    return s.get(OfEnginePilotScope, 1) is not None
+
+
 def _scope(store, tenant, account):
     """(binding id, gated) for the account; NotFound when the account is not in this tenant's scope."""
     with Session(store.engine) as s, s.begin():
@@ -106,9 +120,7 @@ def _scope(store, tenant, account):
             runtime = store._runtime(s, tenant, account, lock=False)
         except Refused:
             raise NotFound('scope unavailable') from None
-        from db.onlyfans_engine_models import OfEnginePilotScope
-        selected = s.get(OfEnginePilotScope, 1)
-        if selected is not None and selected.account_id != account:
+        if _fenced(s, account):
             raise NotFound('scope unavailable')
         policy = s.get(OfDeliveryPolicy, account)
         return runtime.binding_id, policy is not None and policy.transport_kind == PLAN_C_TRANSPORT
@@ -193,16 +205,14 @@ def _fan_evidence(s, binding, account, fan_id):
 
 
 def require_pilot_reader(store, tenant, account, actor):
-    """A configured singleton pilot is readable only by its named administrator."""
-    from db.onlyfans_engine_models import OfEnginePilotScope
+    """A configured scope (legacy pilot or commercial) is readable only by its named operator."""
     from .pilot_scope import current as current_pilot, authorize
     with Session(store.engine) as s, s.begin():
         try:
             runtime = store._runtime(s, tenant, account, lock=False)
         except Refused:
             raise NotFound('scope unavailable') from None
-        selected = s.get(OfEnginePilotScope, 1)
-        if selected is not None and selected.account_id != account:
+        if _fenced(s, account):
             raise NotFound('scope unavailable')
         pilot, config = current_pilot(s, runtime)
         if pilot is not None:

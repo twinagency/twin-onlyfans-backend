@@ -19,6 +19,7 @@ from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection
 from onlyfans_runtime.launch_operations_models import OfLaunchCommand
 from onlyfans_runtime.store import Refused, utcnow
+from .scope_contract import product_pin
 
 _ACTIONS = frozenset({'configure', 'activate', 'approve', 'reject', 'edit', 'stop', 'takeover', 'handback', 'reconcile', 'correct', 'read'})
 _ACTOR = re.compile(r'op-session:[0-9a-f]{64}\Z')
@@ -786,10 +787,13 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
                 raise Refused('pilot delivery policy unavailable')
             stop_runtime_in_session(s, runtime, command_key=command_key, actor=actor,
                                     request_hash=request_hash, now=utcnow())
-            TextAuthority(store)._configure_in_session(s, runtime,
-                expected_revision=policy.revision, enabled=False, limit_units=policy.limit_units,
-                throttle_seconds=policy.throttle_seconds, media_enabled=False,
-                actor=actor, reason=reason)
+            # A commercial scope that was never launched has no enabled policy to close (and its prepared policy values
+            # need not satisfy the scope's limits); the legacy pilot keeps its unconditional policy write.
+            if not commercial or policy.enabled:
+                TextAuthority(store)._configure_in_session(s, runtime,
+                    expected_revision=policy.revision, enabled=False, limit_units=policy.limit_units,
+                    throttle_seconds=policy.throttle_seconds, media_enabled=False,
+                    actor=actor, reason=reason)
         before = {'revision':row.revision, 'status':row.status, 'fingerprint':row.fingerprint}
         if activation_evidence is not None:
             before['textActivation'] = activation_evidence
@@ -892,7 +896,7 @@ def authorize_stopped_backfill(store, tenant, account, *, expected_revision, act
                 'provider_account':connection.provider_account_id, 'creator':connection.provider_creator_id,
                 'epoch':connection.epoch, 'base':base, 'start':start_date.isoformat(),
                 'request_limit':request_limit, 'requests_before':row.provider_requests_used,
-                'scope_commands':count, 'policy_revision':policy.revision, 'product':config['product']}
+                'scope_commands':count, 'policy_revision':policy.revision, 'product':product_pin(config)}
             s.add(OfLaunchCommand(account_id=account, command_key=command_key, binding_id=runtime.binding_id,
                 kind='plan_c_backfill', request_hash=request_hash, actor=actor, reason=reason,
                 before_json=_encoded({'status':row.status, 'revision':row.revision,
@@ -997,7 +1001,8 @@ def trial_takeover_exception(s, account, binding, fan):
         return False
     pilot, config = current(s, runtime)
     covered = json.loads(row.before_json).get('fans', [])
-    return pilot is not None and fan in config['fans'] and fan in covered
+    # The owner's trial exception names the two legacy trial fans only; it never covers a commercial account.
+    return pilot is not None and pilot.scope_id == 1 and fan in config['fans'] and fan in covered
 
 
 def set_trial_takeover_exception(store, tenant, account, *, enabled, actor, reason):
@@ -1006,6 +1011,8 @@ def set_trial_takeover_exception(store, tenant, account, *, enabled, actor, reas
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account, lock=True)
         row, config = require(s, runtime, lock=True)
+        if row.scope_id != 1:
+            raise Refused('the trial takeover exception is limited to the legacy trial pilot')
         authorize(config, actor, 'handback')
         start, end = _trial_exception_keys(runtime.binding_id)
         key, kind = (start, TRIAL_TAKEOVER_EXCEPTION) if enabled else (end, TRIAL_TAKEOVER_EXCEPTION_END)
@@ -1027,5 +1034,5 @@ def set_trial_takeover_exception(store, tenant, account, *, enabled, actor, reas
 def trial_exception_covers_pilot(s, runtime):
     """True while the recorded owner exception covers EVERY current pilot fan (account-level outside-writer holds)."""
     pilot, config = current(s, runtime)
-    return pilot is not None and bool(config['fans']) and all(
+    return pilot is not None and pilot.scope_id == 1 and bool(config['fans']) and all(
         trial_takeover_exception(s, runtime.account_id, runtime.binding_id, fan) for fan in config['fans'])

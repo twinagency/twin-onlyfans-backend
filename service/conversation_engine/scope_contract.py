@@ -203,6 +203,11 @@ def product_of(config):
     return config['product']
 
 
+def product_pin(config):
+    """The pinned product recorded in backfill evidence: the legacy product, or None for a scope that has none."""
+    return None if is_commercial(config) else config['product']
+
+
 def profile_items(config):
     """Catalogue item ids the creator profile must approve for this scope (legacy: the pilot product only)."""
     return () if is_commercial(config) else (str(config['product']['id']),)

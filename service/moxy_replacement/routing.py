@@ -126,7 +126,7 @@ def durable_pilot_state(account):
         with store.readonly(target) as con:
             if not store.has_table(con, 'of_engine_pilot_scope'):
                 return NOT_SELECTED
-            query = 'SELECT account_id FROM of_engine_pilot_scope WHERE scope_id=1 AND account_id IN (%s)' % ','.join('?' * len(candidates))
+            query = 'SELECT account_id FROM of_engine_pilot_scope WHERE account_id IN (%s)' % ','.join('?' * len(candidates))
             return SELECTED if con.execute(query, tuple(candidates)).fetchone() is not None else NOT_SELECTED
     except Exception:
         return UNKNOWN

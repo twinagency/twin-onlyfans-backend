@@ -219,10 +219,11 @@ def _successor(s, runtime, owner, prior, coverage, policy):
     from .history_scope import has_unscoped_messages
     from .writer_context import active_profile
     pilot, config = require(s, runtime, active=True)
+    from .scope_contract import product_of
     state = s.get(OfConversationState, (runtime.account_id, prior.fan_id))
     profile = active_profile(runtime.account_id, session=s)
     if (config['authorization_mode'] != 'autonomous' or prior.fan_id not in config['fans']
-            or config['product']['id'] != prior.item_id or not runtime.enabled or policy.enabled is not True
+            or product_of(config)['id'] != prior.item_id or not runtime.enabled or policy.enabled is not True
             or state is None or state.mode != 'automated' or state.takeover_state != 'none'
             or profile is None or not profile.may_offer(str(prior.item_id))
             or not backfill_complete(s, runtime.account_id, prior.fan_id)
@@ -400,8 +401,8 @@ def prepare_pilot_offer(store, tenant, account, fan_id, message_id, engine):
         runtime = store._runtime(s, tenant, account)
         message = s.get(Message, (account, fan_id, message_id))
         pilot, config = current(s, runtime)
-        if pilot is None:
-            return None
+        if pilot is None or 'product' not in config:
+            return None     # no pilot, or a commercial scope: no standing pilot offer before the catalogue contract exists
         scope = pilot_purchase_scope(s, runtime, fan_id, message)
         if not live_current_request(s, runtime, fan_id, message):
             return None

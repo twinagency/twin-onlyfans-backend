@@ -150,8 +150,8 @@ def _price_information(s, runtime, source_body=None):
     if source_body is not None and not is_price_question(source_body):
         return []
     pilot, config = current(s, runtime)
-    if pilot is None or pilot.status != 'active':
-        return []
+    if pilot is None or pilot.status != 'active' or 'product' not in config:
+        return []     # a commercial scope has no pinned listing until the catalogue contract exists
     product = config['product']
     profile = active_profile(runtime.account_id, session=s)
     if profile is None or not profile.may_offer(product['id']):

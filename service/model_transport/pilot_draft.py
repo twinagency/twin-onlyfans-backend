@@ -119,6 +119,12 @@ class DraftPilot:
         return result
 
 
+def refuse_commercial(scope_config):
+    """The env-pinned draft pilot (fans, item, price from the environment) belongs to the legacy trial pilot only."""
+    if scope_config is not None and scope_config.get('contract_version') == 'commercial.v1':
+        raise Refused('the draft pilot supports only the legacy trial scope')
+
+
 def build_draft_pilot(store, environ=None, *, model_transport=None):
     """Return None by default; enabled startup is explicit and remains no-send."""
     env = os.environ if environ is None else environ
@@ -162,7 +168,8 @@ def build_draft_pilot(store, environ=None, *, model_transport=None):
     from conversation_engine.pilot_scope import current as current_pilot
     with Session(store.engine) as session, session.begin():
         runtime = store._runtime(session, tenant, account)
-        pilot_scope, _ = current_pilot(session, runtime)
+        pilot_scope, scope_config = current_pilot(session, runtime)
+        refuse_commercial(scope_config)
         if pilot_scope is not None:
             engine.model.ledger.expected_pilot_scope = (pilot_scope.revision, pilot_scope.fingerprint)
     worker = RealConversationWorker(engine, intake, transport)

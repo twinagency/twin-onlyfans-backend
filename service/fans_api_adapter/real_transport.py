@@ -205,6 +205,7 @@ class FansApiRealTransport:
         key = idempotency_key(grant.account_id, grant.intent_id)
         proof = dict(account_id=grant.account_id, fan_id=grant.fan_id, intent_id=grant.intent_id,
                      attempt_id=grant.attempt_id, payload_hash=grant.payload_hash)
+        before = self.sent_calls
         result = self._post(grant.fan_id, key, grant.body, grant.media_ids, grant.preview_ids, grant.price_cents,
                             retry_gate=lambda posts: self._retry_allowed(authority, tenant_id, grant, dispatch, posts))
         stamp = datetime.now(timezone.utc).isoformat()
@@ -213,7 +214,21 @@ class FansApiRealTransport:
                             evidence_ref='fansapi:' + (result.trace_id or key))
         if result.state in ('not_sent', 'rejected'):
             return NotAccepted(**proof, occurred_at=stamp, evidence_ref=f'fansapi-{result.state.replace("_", "-")}:' + grant.attempt_id)
-        return None  # unknown, conflict, key mismatch: stays unresolved and holds only this fan
+        # unknown, conflict, key mismatch: stays unresolved and holds only this fan. What the provider actually said is
+        # kept (bounded and sanitized) on the attempt row before the authority records the hold; without it the hold
+        # reads as a bare "invalid receipt" and nobody can tell a timeout from a conflict from a malformed 200.
+        self._retain_evidence(authority, tenant_id, grant, result, self.sent_calls - before)
+        return None
+
+    @staticmethod
+    def _retain_evidence(authority, tenant_id, grant, result, posts):
+        evidence = dict(result.evidence) if type(result.evidence) is dict else {
+            'outcome': result.state, 'http_status': result.http_status, 'trace_id': result.trace_id}
+        evidence['posts'] = posts
+        try:
+            authority.retain_send_evidence(tenant_id, grant, evidence)
+        except Exception:  # noqa: BLE001 - evidence is auxiliary: it must never change how the outcome is handled
+            pass
 
     def _retry_allowed(self, authority, tenant_id, grant, dispatch, posts):
         """Re-authorize ONE more wire attempt of an already consumed grant (never consumes it twice).

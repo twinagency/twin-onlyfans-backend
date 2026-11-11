@@ -79,6 +79,15 @@ class ProviderThrottled(Exception):
         self.retry_after = retry_after
 
 
+class ProofRefused(Refused):
+    """A receipt that failed validation. ``field``/``detail`` come from a fixed vocabulary (never a value) and are the
+    only part of the failure that is kept as attempt evidence."""
+
+    def __init__(self, message, field, detail):
+        super().__init__(message)
+        self.field, self.detail = field, detail
+
+
 class SyntheticTextTransport:
     """Explicit local failure-injection seam; it has no network implementation."""
 
@@ -131,6 +140,70 @@ def _stamp(raw):
     if value > utcnow() + timedelta(minutes=5):
         raise Refused("receipt timestamp is in the future")
     return value
+
+
+EVIDENCE_VERSION = 1
+EVIDENCE_MAX_BYTES = 4096
+_STAMP_DETAIL = {"invalid receipt timestamp": "invalid", "receipt timestamp requires timezone": "no_timezone",
+                 "receipt timestamp is in the future": "future"}
+
+
+def _iso(value):
+    """Naive UTC database timestamps as an unambiguous ISO string."""
+    return None if value is None else value.isoformat() + ("Z" if value.tzinfo is None else "")
+
+
+def _attach_evidence(s, row, section, payload):
+    """Merge one bounded section into the engine attempt's evidence JSON while the attempt is dispatching/unknown.
+
+    ``of_engine_attempt`` freezes evidence only once the outcome is accepted/not_accepted, so no migration is needed.
+    Returns True when stored. Non-engine intents have no attempt row (nothing to attach to). Never stores more than
+    EVIDENCE_MAX_BYTES: free text goes first, then the offending section is reduced to a marker.
+    """
+    if row.attempt_id is None:
+        return False
+    from db.onlyfans_engine_models import OfEngineAttempt
+    attempt = s.get(OfEngineAttempt, (row.account_id, row.attempt_id), with_for_update=True)
+    if (attempt is None or attempt.intent_id != row.intent_id or attempt.payload_hash != row.payload_hash
+            or attempt.outcome not in ("dispatching", "unknown")):
+        return False
+    current = {}
+    if attempt.evidence_json:
+        try:
+            loaded = json.loads(attempt.evidence_json)
+        except ValueError:
+            loaded = None
+        if type(loaded) is dict and loaded.get("v") == EVIDENCE_VERSION:
+            current = loaded
+    current["v"], current["kind"] = EVIDENCE_VERSION, "unknown_send"
+    current[section] = payload
+    encoded = _json(current)
+    if len(encoded.encode()) > EVIDENCE_MAX_BYTES:
+        for part in current.values():
+            if type(part) is dict:
+                part.pop("message", None)
+        encoded = _json(current)
+        if len(encoded.encode()) > EVIDENCE_MAX_BYTES:
+            current[section] = {"truncated": True}
+            encoded = _json(current)
+    attempt.evidence_json, attempt.updated_at = encoded, utcnow()
+    return True
+
+
+def _hold_extra(evidence):
+    """The caller-supplied part of the ``hold`` section, reduced to known short fields."""
+    out = {}
+    if type(evidence) is not dict:
+        return out
+    proof = evidence.get("proof")
+    if type(proof) is dict and type(proof.get("field")) is str and type(proof.get("detail")) is str:
+        out["proof"] = {"field": proof["field"][:32], "detail": proof["detail"][:48]}
+    for key, limit in (("exception_type", 64), ("detail", 64), ("frames", 300)):
+        if type(evidence.get(key)) is str:
+            out[key] = evidence[key][:limit]
+    if type(evidence.get("http_status")) is int and 100 <= evidence["http_status"] <= 599:
+        out["http_status"] = evidence["http_status"]
+    return out
 
 
 def _fan_isolated(policy):
@@ -1118,22 +1191,42 @@ class TextAuthority:
 
     @staticmethod
     def _validate_proof(row, proof):
-        _id(proof.fan_id)
-        if (proof.account_id, proof.fan_id, proof.intent_id, proof.attempt_id, proof.payload_hash) != (
-                row.account_id, row.fan_id, row.intent_id, row.attempt_id, row.payload_hash):
-            raise Refused("receipt scope or payload mismatch")
+        try:
+            _id(proof.fan_id)
+        except Refused as exc:
+            raise ProofRefused(str(exc), "fan_id", "invalid") from exc
+        for name in ("account_id", "fan_id", "intent_id", "attempt_id", "payload_hash"):
+            if getattr(proof, name) != getattr(row, name):
+                raise ProofRefused("receipt scope or payload mismatch", name, "scope_mismatch")
         if not isinstance(proof.evidence_ref, str) or not 1 <= len(proof.evidence_ref) <= 256:
-            raise Refused("invalid receipt evidence")
-        stamp = _stamp(proof.occurred_at)
+            raise ProofRefused("invalid receipt evidence", "evidence_ref", "invalid")
+        try:
+            stamp = _stamp(proof.occurred_at)
+        except Refused as exc:
+            raise ProofRefused(str(exc), "occurred_at", _STAMP_DETAIL.get(str(exc), "invalid")) from exc
         if row.dispatched_at is None or stamp < row.dispatched_at - timedelta(minutes=5):
-            raise Refused("receipt predates attempt")
+            raise ProofRefused("receipt predates attempt", "occurred_at", "predates_attempt")
         return stamp
 
     @staticmethod
-    def _hold_unknown(s, row, reason, tenant_id=None):
+    def _proof_failure(proof, exc):
+        """Which part of a receipt was unusable, as a fixed-vocabulary {field, detail}; never a value."""
+        if proof is None:
+            return {"field": "proof", "detail": "absent"}
+        if isinstance(exc, ProofRefused):
+            return {"field": exc.field, "detail": exc.detail}
+        name = "".join(c for c in type(proof).__name__ if c.isalnum() or c == "_")[:32]
+        return {"field": "proof", "detail": "type:" + name}
+
+    @staticmethod
+    def _hold_unknown(s, row, reason, tenant_id=None, evidence=None):
         row.status, row.reason, row.updated_at = "unknown", reason, utcnow()
         from conversation_engine.delivery import unknown as engine_unknown
         engine_unknown(s, row)
+        # Why the send is unknown, kept on the engine attempt row beside whatever the transport saw (provider section).
+        _attach_evidence(s, row, "hold", {"reason": reason, "held_at": _iso(utcnow()), "dispatched_at": _iso(row.dispatched_at),
+                                          "wire_started_at": _iso(row.wire_started_at), "deadline": _iso(row.deadline),
+                                          **_hold_extra(evidence)})
         state = s.get(OfConversationState, (row.account_id, row.fan_id))
         policy = s.get(OfDeliveryPolicy, row.account_id)
         from conversation_engine.independence import retain_unknown
@@ -1180,14 +1273,30 @@ class TextAuthority:
         self._release_hold(s, row, tenant_id)
         return True
 
-    def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
+    def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport", evidence=None):
         if reason not in {"ambiguous_transport", "invalid_receipt", "dispatch_expired", "provider_identity_conflict"}:
             raise Refused("invalid uncertainty reason")
         with Session(self.engine) as s, s.begin():
             row = self._attempt(s, tenant_id, account_id, intent_id, dispatch_token)
             if row.status == "dispatching":
-                self._hold_unknown(s, row, reason, tenant_id)
+                self._hold_unknown(s, row, reason, tenant_id, evidence)
             return row.status
+
+    def retain_send_evidence(self, tenant_id, grant, evidence):
+        """Keep what the provider said about a send that is neither accepted nor proven not sent.
+
+        Auxiliary and bounded: it changes no status, releases nothing and is refused (False/Refused) for a stale
+        token or a settled attempt. The transport calls it before the authority records the hold.
+        """
+        if type(grant) is not Dispatch or type(evidence) is not dict:
+            return False
+        from fans_api_adapter.send_evidence import clamp_provider_section
+        clean = clamp_provider_section(evidence)
+        with Session(self.engine) as s, s.begin():
+            row = self._attempt(s, tenant_id, grant.account_id, grant.intent_id, grant.token)
+            if row.status != "dispatching":
+                return False
+            return _attach_evidence(s, row, "provider", clean)
 
     def record_accepted(self, tenant_id, account_id, intent_id, dispatch_token, receipt):
         with Session(self.engine) as s, s.begin():
@@ -1201,13 +1310,17 @@ class TextAuthority:
             try:
                 if type(receipt) is not Accepted:
                     raise Refused("invalid accepted evidence")
-                _id(receipt.message_id)
+                try:
+                    _id(receipt.message_id)
+                except Refused as exc:
+                    raise ProofRefused(str(exc), "message_id", "invalid") from exc
                 self._validate_proof(row, receipt)
                 encoded = _json(asdict(receipt))
-            except (Refused, TypeError, AttributeError):
+            except (Refused, TypeError, AttributeError) as exc:
                 if row.status == "accepted" or retired:
                     raise Refused("accepted receipt conflict")
-                self._hold_unknown(s, row, "invalid_receipt", tenant_id)
+                self._hold_unknown(s, row, "invalid_receipt", tenant_id,
+                                   {"proof": self._proof_failure(receipt, exc)})
                 return "unknown"
             if row.status == "accepted":
                 if row.receipt_json != encoded:
@@ -1295,10 +1408,11 @@ class TextAuthority:
                     raise Refused("invalid rejection evidence")
                 self._validate_proof(row, rejection)
                 encoded = _json(asdict(rejection))
-            except (Refused, TypeError, AttributeError):
+            except (Refused, TypeError, AttributeError) as exc:
                 if row.status == "not_accepted":
                     raise Refused("rejection evidence conflict")
-                self._hold_unknown(s, row, "invalid_receipt", tenant_id)
+                self._hold_unknown(s, row, "invalid_receipt", tenant_id,
+                                   {"proof": self._proof_failure(rejection, exc)})
                 return "unknown"
             if row.status == "not_accepted":
                 if row.receipt_json != encoded:
@@ -1489,7 +1603,10 @@ class TextAuthority:
             http = f" http_status={status}" if type(status) is int and 100 <= status <= 599 else ""
             print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__}{http} at={frames}", file=sys.stderr, flush=True)
             try:
-                return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
+                from fans_api_adapter.send_evidence import error_class
+                return self.mark_unknown(tenant_id, account_id, intent_id, grant.token,
+                                         evidence={"exception_type": error_class(exc), "frames": frames,
+                                                   "http_status": status if type(status) is int else None})
             except Refused as refusal:
                 if str(refusal) != "stale dispatch token":
                     raise
@@ -1548,7 +1665,8 @@ class TextAuthority:
             for row in rows:
                 # Only the engine-scoped form may prove "never wired" (wire marker absent under the lock).
                 if not (synthetic_engine_only and self._cancel_never_wired(s, row, "prewire_crash_never_wired", tenant_id)):
-                    self._hold_unknown(s, row, "dispatch_expired", tenant_id)
+                    self._hold_unknown(s, row, "dispatch_expired", tenant_id,
+                                       {"detail": "no_process_behind_attempt"})
             return len(rows)
 
     def repair(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False, allowed_fans=None):

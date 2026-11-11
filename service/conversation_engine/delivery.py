@@ -215,7 +215,10 @@ def attempt_settled(s, intent, outcome, evidence_json=None):
         return
     if attempt.intent_id != intent.intent_id or attempt.payload_hash != intent.payload_hash:
         raise Refused('engine attempt identity changed')
-    attempt.outcome, attempt.evidence_json, attempt.updated_at = outcome, evidence_json, utcnow()
+    attempt.outcome, attempt.updated_at = outcome, utcnow()
+    if evidence_json is not None or outcome != 'unknown':
+        # Holding a send as unknown keeps what the transport already recorded about it (provider evidence).
+        attempt.evidence_json = evidence_json
 
 
 def not_accepted(s, intent):

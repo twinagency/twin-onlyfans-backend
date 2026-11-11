@@ -200,7 +200,7 @@ def test_malformed_or_oversized_provider_bodies_are_bounded_and_never_raise(data
     assert status(database, intent).reason == 'invalid_receipt'
     value, raw = kept(database)
     seen = value['provider']
-    assert seen['http_status'] == 503 and seen['trace_id'] is None, 'an oversize trace id is not kept'
+    assert seen['http_status'] == 503 and seen.get('trace_id') is None, 'an oversize trace id is not kept'
     for field in ('error_code', 'error_type'):
         assert seen.get(field) is None or len(seen[field]) <= 64
     assert len(raw.encode()) <= MAX_EVIDENCE_BYTES

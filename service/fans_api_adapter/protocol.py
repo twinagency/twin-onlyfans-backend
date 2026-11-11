@@ -20,6 +20,7 @@ from urllib.parse import urlencode, urlsplit, parse_qsl
 from .history import ALLOWED_BASES, parse_history_page, validate_history_next_page
 from .intake import _nonfinite, _unique_object
 from .send_outcome import classify_send_error
+from .send_evidence import body_shape, error_class, provider_evidence
 from .webhooks import verify_signature
 from conversation_engine.recovery import Outcome
 
@@ -50,6 +51,8 @@ class Result:
     failure: str | None = None       # transient | auth | schema
     cause: str | None = None         # fixed code, e.g. provider_rate_limited
     retry_after: int | None = None   # seconds, clamped 0..RETRY_AFTER_MAX
+    # Bounded, sanitized account of a send that was not accepted (see send_evidence); never compared or hashed.
+    evidence: dict | None = field(default=None, compare=False)
 
 
 RETRY_AFTER_MAX = 3600
@@ -134,6 +137,7 @@ class FansApiClient:
         self._identity_verified = False
         self.base = base
         self.last_replayed = False
+        self.last_exchange = None    # what the most recent request looked like on the wire (no body, no credentials)
         self.credits_balance = None
         self.last_retry_after = None
         self.last_failure = None
@@ -148,12 +152,15 @@ class FansApiClient:
         if body is not None: headers['Content-Type'] = 'application/json'
         if key is not None: headers['Idempotency-Key'] = key
         self.last_retry_after = None
+        exchange = self.last_exchange = {'transport_error': None, 'body_kind': 'none', 'body_bytes': 0}
         try:
             response = self._http(method=method, url=url, headers=headers, body=body,
                                   timeout=self._timeout, follow_redirects=False)
-        except Exception:
+        except Exception as exc:
+            exchange['transport_error'] = error_class(exc)    # the class only: messages may name hosts or carry secrets
             return None, None, None, None
         if type(response) is not Response or type(response.status) is not int:
+            exchange['transport_error'] = 'InvalidResponse'
             return None, None, None, None
         headers = response.headers if type(response.headers) is dict else {}
         lowered = {k.lower(): v for k, v in headers.items() if type(k) is str}
@@ -163,8 +170,10 @@ class FansApiClient:
         self.credits_balance = int(balance) if type(balance) is str and balance.isdecimal() else self.credits_balance
         try:
             parsed = _object(response.body)
+            parse_ok = True
         except (ValueError, TypeError, UnicodeError, RecursionError):
-            parsed = None
+            parsed, parse_ok = None, False
+        exchange['body_kind'], exchange['body_bytes'] = body_shape(response.body, parsed, parse_ok)
         return response.status, parsed, _trace(response.headers), _trace(response.headers, 'x-ofapi-idempotency-original-trace-id')
 
     def _fail(self, state, status, trace, original_trace, *, failure=None, cause=None):
@@ -290,10 +299,18 @@ class FansApiClient:
                 and body.get('error') != 'IDEMPOTENCY_KEY_MISMATCH' and body.get('request_outcome') == 'not_sent'):
             # A refusal the provider itself marks as not sent. An HTTP 4xx alone is NOT proof of non-delivery
             # (docs.onlyfans-api idempotency guide): without request_outcome=not_sent it stays unknown.
-            return Result('rejected', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return Result('rejected', trace_id=trace, http_status=status, original_trace_id=original_trace,
+                          evidence=self._send_evidence('rejected', status, body, trace, original_trace, text))
         state = ('not_sent' if outcome is Outcome.NOT_SENT else 'key_mismatch' if outcome is Outcome.KEY_MISMATCH
                  else 'conflict' if outcome is Outcome.CONFLICT else 'unknown')
-        return Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace)
+        return Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace,
+                      evidence=self._send_evidence(state, status, body, trace, original_trace, text))
+
+    def _send_evidence(self, state, status, body, trace, original_trace, text):
+        # Credentials and the outgoing text are passed only so they can be scrubbed out of any provider message.
+        return provider_evidence(outcome=state, status=status, body=body, exchange=self.last_exchange,
+                                 trace_id=trace, original_trace_id=original_trace, replayed=self.last_replayed,
+                                 forbidden=(self._token, text))
 
     def vault(self, *, limit=100, offset=0):
         """One page of GET media/vault. Reading the vault sends nothing."""

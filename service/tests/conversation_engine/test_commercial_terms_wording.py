@@ -95,11 +95,13 @@ def test_prices_follow_the_card_variant_and_invented_amounts_fail():
         {'itemId': '5', 'label': 'beach set', 'priceCents': 1200, 'currency': 'USD'}]))[0] == 'ok'
     assert verdict(reply('it is $10', price_claims=[1000]), ctx('how much is it?', price_information=[
         {'itemId': '5', 'label': 'beach set', 'priceCents': 1200, 'currency': 'USD'}]))[0] == 'invalid'
-    # a standard card never lets the writer say the discount amount; a discount card may name both approved amounts
+    # a card's text never states an amount (the application renders it); replies may state only approved amounts
     assert verdict(offer('it is $9 for you'), ctx('cheaper?', [card('standard')]))[0] == 'invalid'
+    assert verdict(reply('it is $12', price_claims=[1200]), ctx('how much?', [card('standard')]))[0] == 'ok'
+    assert verdict(reply('it is $9', price_claims=[900]), ctx('how much?', [card('standard')]))[0] == 'invalid'
     both = ctx('cheaper?', [card('discount')])
-    assert verdict(offer('normally $12, for you $9'), both)[0] == 'ok'
-    assert verdict(offer('normally $12, for you $8'), both)[0] == 'invalid'
+    assert verdict(reply('normally $12, for you $9', price_claims=[1200, 900]), both)[0] == 'ok'
+    assert verdict(reply('normally $12, for you $8', price_claims=[1200, 800]), both)[0] == 'invalid'
 
 
 # ---- the prompt follows the same facts, legacy rows keep their exact bytes ------------------------------------------

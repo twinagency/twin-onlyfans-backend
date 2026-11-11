@@ -69,6 +69,9 @@ def grounding_from_snapshot(snapshot, proposal=None):
     prices = frozenset(g['priceCents'] for g in [*(snapshot.get('offer_grants') or []), *(snapshot.get('price_information') or [])]
                        if isinstance(g, dict) and type(g.get('priceCents')) is int
                        and g['priceCents'] > 0 and g.get('currency') == 'USD')
+    # An approved discount card may also name the standard amount it is lower than; a standard card names only its own amount.
+    prices |= frozenset(g['standardCents'] for g in grants if isinstance(g, dict) and g.get('discountApproved') is True
+                        and type(g.get('standardCents')) is int and g['standardCents'] > 0 and g.get('currency') == 'USD')
     access_labels = tuple(card['label'] for card in (snapshot.get('offer_reference') or {}).get('cards') or []
                           if isinstance(card, dict) and isinstance(card.get('label'), str)
                           and card.get('sendState') == 'accepted' and card.get('accessState') == 'confirmed'

@@ -37,6 +37,20 @@ RULES = (
     "the chats.\n"
     "- Payment/ownership claims require VERIFIED PURCHASES. Access/unlock claims require exact accepted CARD facts with confirmed access and no review; historical or uncertain evidence never establishes present access.")
 
+_LEGACY_PRODUCT_RULE = (
+    "- The only product is the APPROVED OFFER, at its one fixed price that the application adds. No discounts, cheaper options, "
+    "bundles or payment plans. Offer only when it fits what he is saying and he hasn't left an earlier pitch unanswered. Say how many "
+    "pictures or videos a card has only using CONTENTS; otherwise give no number.\n")
+_COMMERCIAL_PRODUCT_RULE = (
+    "- The only product is the APPROVED OFFER, at the exact price the application adds. A lower price exists only when the offer line "
+    "says DISCOUNT APPROVED; never invent a discount, percentage, bundle or cheaper option, and never a payment plan. A bundle exists "
+    "only when the offer line says it is one: it is one product that holds several pictures or videos. Offer only when it fits what he "
+    "is saying and he hasn't left an earlier pitch unanswered. Say how many pictures or videos a card has only using CONTENTS; "
+    "otherwise give no number.\n")
+# Approved-terms (commercial) accounts only; RULES and RULES_TEXT_ONLY above keep their exact bytes for every legacy row.
+RULES_COMMERCIAL = RULES.replace(_LEGACY_PRODUCT_RULE, _COMMERCIAL_PRODUCT_RULE)
+assert RULES_COMMERCIAL != RULES
+
 CONTRACT = (
     'Reply with strict JSON only, one object:\n'
     '{"body": "<first text>", "parts": ["<optional more texts>"], "action": "reply" or "offer", '
@@ -122,6 +136,8 @@ class SpecPromptProvider:
                         f'"My public Telegram is {contact}." No other handle, off-platform payment, meetup, or invitation to move this chat is authorized.')
         sexual = SEXUAL[getattr(p, 'explicit_chat', 'explicit')]
         rules, contract = (RULES, CONTRACT) if ctx.commercial else (RULES_TEXT_ONLY, CONTRACT_TEXT_ONLY)
+        if ctx.commercial and ctx.terms_mode == 'commercial.v1':
+            rules = RULES_COMMERCIAL
         if not ctx.commercial:
             sexual = sexual.replace("don't promise anything that isn't the APPROVED OFFER", "don't promise anything")
         return ('\n\n'.join([head, creator, rules, sexual, contract]),
@@ -147,6 +163,15 @@ class SpecPromptProvider:
             o = ctx.offer
             turn.append(f"APPROVED OFFER: id {o['grantId']}, {str(o.get('label', ''))[:120]}: {str(o.get('description', ''))[:400]}. "
                         f"Only if it fits; tease from that description, no price. To use it: action offer, offer_grant_id \"{o['grantId']}\".")
+            if ctx.terms_mode == 'commercial.v1' and 'variant' in o:
+                if o.get('discountApproved') is True and type(o.get('standardCents')) is int and type(o.get('priceCents')) is int:
+                    turn.append(f"DISCOUNT APPROVED: he asked for a cheaper option and the application will charge USD {o['priceCents'] / 100:.2f} "
+                                f"instead of USD {o['standardCents'] / 100:.2f}. You may say it is a lower price he asked for; state no other amount, "
+                                "percentage or reason.")
+                else:
+                    turn.append("PRICE: the standard price, added by the application. No discount, cheaper option or bundle price exists for this card.")
+                if o.get('isBundle') is True:
+                    turn.append("THIS CARD IS ONE BUNDLE PRODUCT holding several items; call it one bundle and never several products.")
             media = o.get('media') or {}
             if type(media.get('total')) is int:
                 turn.append(f"CONTENTS (the only numbers you may state about this card): {media['total']} items, "

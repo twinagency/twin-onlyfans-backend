@@ -149,6 +149,44 @@ _INVOLVEMENT = re.compile(
 _DISCOUNT = re.compile(
     r"\b(discounts?|cheaper|half[- ]price|special price|price drop|lower (the )?price|knock (some|a bit) off|\d+ ?% ?off|"
     r"for less|sale price|deal for you|bundles?|payment plans?|pay (me )?later)\b", re.I)
+# Approved-terms (commercial) accounts: the blanket ban above is split. Always banned: any invented price change. Gated: wording that is
+# true only when this turn's approved offer says so (a discount for a DISCOUNT APPROVED card, 'bundle' for an approved bundle card).
+_DISCOUNT_ALWAYS = re.compile(
+    r"\b(half[- ]price|special price|price drop|knock (?:some|a bit|a few|a little)(?: \w+){0,2} off|\d+(?:\.\d+)? ?% ?off|\d+ ?percent(?:age)?\b|"
+    r"percent(?:age)? off|for less|sale price|payment plans?|pay (?:me )?later|installments?|layaway|buy one get)\b", re.I)
+_DISCOUNT_GATED = re.compile(
+    r"\b(discounts?|discounted|cheaper|cheapest|lower (?:the )?price|reduced price|better price|deal for you|special deal|price cut)\b", re.I)
+_BUNDLE_WORD = re.compile(r"\bbundles?\b", re.I)
+_PRODUCT_COUNT = re.compile(r"(?<![$\u00a3\u20ac])(?<!\d\.)\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+"
+                            r"(?:(?:\w+)\s+)?(?:products?|bundles?|packs?|offers?|options?|cards?)\b", re.I)
+
+
+def _commercial_terms_problems(joined, texts, snapshot, offer, *, legacy_message):
+    """The ONE discount/bundle/product-count gate, shared by the model check and the human-edit check.
+
+    Legacy turns (no terms_mode) keep the old blanket ban with its old message. Approved-terms turns follow the approved offer facts.
+    """
+    if snapshot.get('terms_mode') != 'commercial.v1':
+        return [legacy_message] if _affirmative_match(_DISCOUNT, joined) else []
+    problems = []
+    facts = offer or {}
+    if _affirmative_match(_DISCOUNT_ALWAYS, joined):
+        problems.append('invents a percentage, half price, payment plan or other price change; only an approved discount amount can exist')
+    if _affirmative_match(_DISCOUNT_GATED, joined) and facts.get('discountApproved') is not True:
+        problems.append('mentions a discount or cheaper option, but none is approved for this offer')
+    if _affirmative_match(_BUNDLE_WORD, joined) and facts.get('isBundle') is not True:
+        problems.append('mentions a bundle, but this offer is not an approved bundle')
+    if facts.get('productCount') is not None:
+        for text in texts:
+            for match in _PRODUCT_COUNT.finditer(text):
+                raw = match.group(1).lower()
+                count = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
+                if count != facts['productCount']:
+                    problems.append(f'states {count} products or bundles; a card is {facts["productCount"]} product (state item counts only from CONTENTS)')
+                    break
+    return problems
+
+
 _LATER = re.compile(
     r"\b(i'?ll|i will|ill|i'?m going to|im gonna|let me) (text|message|msg|dm|write|ping|check in|get back|come back|reach out|hit you up)"
     r"( to)?( with)?( you)?( on you)? ?(later|tomorrow|tonight|again|soon|in the morning|in \d+|when|after)\b", re.I)
@@ -297,11 +335,11 @@ def _writing_problems(proposal, ctx, texts):
     snapshot = ctx.snapshot
     if _WITHHOLD.search(joined):
         problems.append('makes an answer or item conditional on him answering, tell her something or earning it; answer first')
-    if _affirmative_match(_DISCOUNT, joined):
-        problems.append('offers a discount, cheaper option or bundle; the price is fixed and there is one product')
+    offer = offer_for(snapshot, ctx.profile, snapshot['current_message']['body']) if hasattr(ctx.profile, 'may_offer') else None
+    problems.extend(_commercial_terms_problems(joined, texts, snapshot, offer,
+        legacy_message='offers a discount, cheaper option or bundle; the price is fixed and there is one product'))
     if _LATER.search(joined):
         problems.append('promises to message him later; there is no timed follow-up')
-    offer = offer_for(snapshot, ctx.profile, snapshot['current_message']['body']) if hasattr(ctx.profile, 'may_offer') else None
     bad = _unsupported_quantities(texts, snapshot, offer)
     if bad:
         problems.append('states a content quantity that is not in the card facts (' + ', '.join(bad[:3]) + '); use only CONTENTS numbers or none')
@@ -480,13 +518,12 @@ def edit_problems(texts, ctx):
     joined = ' '.join(texts)
     if _WITHHOLD.search(joined):
         problems.append('makes an answer conditional on the fan answering')
-    if _affirmative_match(_DISCOUNT, joined):
-        problems.append('offers a discount, cheaper option or bundle')
+    from .writer_context import offer_for
+    offer = offer_for(ctx.snapshot, ctx.profile, ctx.snapshot['current_message']['body'])
+    problems.extend(_commercial_terms_problems(joined, texts, ctx.snapshot, offer, legacy_message='offers a discount, cheaper option or bundle'))
     if _LATER.search(joined):
         problems.append('promises to message later')
     problems.extend(_identity_problems(texts, ctx))
-    from .writer_context import offer_for
-    offer = offer_for(ctx.snapshot, ctx.profile, ctx.snapshot['current_message']['body'])
     if _unsupported_quantities(texts, ctx.snapshot, offer):
         problems.append('states a content quantity that is not in the card facts')
     return problems

@@ -227,6 +227,7 @@ class PromptContext:
     prefixed: bool = False            # in-character retry
     max_texts: int = 4
     commercial: bool = True           # False in text-only delivery mode: no offer, contract or sales-state instructions
+    terms_mode: str = ''              # 'commercial.v1' for approved-terms accounts (variant/bundle wording); '' = legacy bytes
 
 
 @dataclass(frozen=True)
@@ -599,4 +600,4 @@ def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, bud
         purchases=tuple(p['label'] for p in purchases[:budget.purchases]) if isinstance(purchases, list) else None,
         identity_line=identity_line, recent_questions=recent_her_questions(snapshot),
         examples=tuple(examples), fix=tuple(fix), prefixed=prefixed,
-        commercial=snapshot.get('delivery_mode') != 'text_only')
+        commercial=snapshot.get('delivery_mode') != 'text_only', terms_mode=snapshot.get('terms_mode', ''))

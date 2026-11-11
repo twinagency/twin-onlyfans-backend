@@ -440,6 +440,23 @@ def _item(kind, ident, owner, next_step, summary, conversation=None, revision=No
     return row
 
 
+def _send_evidence_view(s, row):
+    """The sanitized evidence kept on the engine attempt of an unknown send (see fans_api_adapter.send_evidence), or None."""
+    if row.attempt_id is None:
+        return None
+    from db.onlyfans_engine_models import OfEngineAttempt
+    attempt = s.get(OfEngineAttempt, (row.account_id, row.attempt_id))
+    if attempt is None or not attempt.evidence_json or attempt.outcome != 'unknown':
+        return None
+    try:
+        value = json.loads(attempt.evidence_json)
+    except ValueError:
+        return None
+    if type(value) is not dict or value.get('v') != 1:
+        return None
+    return {key: value[key] for key in ('provider', 'hold', 'release') if type(value.get(key)) is dict} or None
+
+
 def _acknowledged(s, account, binding):
     """Item ids an operator already reconciled (plan_c_reconcile records); the record itself is permanent."""
     out = {}
@@ -485,13 +502,15 @@ def unresolved(store, tenant, account, actor=None):
             item_id = f'unknown_send:{row.intent_id}'
             note = seen.get(item_id)
             summary = (f'A send to fan {row.fan_id} may have reached the fan (status {row.status}). Do not resend. '
-                       'Only provider history showing the exact message releases the hold.')
+                       'Provider history showing the exact message releases the hold; so does an audited release when '
+                       'complete provider history read after a 30 minute quiet period proves nothing arrived.')
             step = 'reconcile_with_provider_history'
             if note is not None:
                 step = 'awaiting_provider_proof'
                 summary += f' Operator evidence recorded by {note.actor[:20]}: {note.reason[:120]}; it does not release the hold.'
+            evidence = _send_evidence_view(s, row)
             items.append(_item('unknown_send', row.intent_id, 'operator', step, summary, cid, revision,
-                               row.wire_started_at or row.created_at))
+                               row.wire_started_at or row.created_at, **({'sendEvidence': evidence} if evidence else {})))
         # 2. Money that is not linked to an unlock (kept apart from access evidence until a person links or dismisses it).
         from fans_api_adapter.evidence_scope import webhook_binding
         unscoped_provider_evidence = False
@@ -1069,7 +1088,9 @@ def reconcile(store, tenant, account, item_id, body):
     """Record the operator's checked evidence for one unresolved item.
 
     unknown_send: audit only. The intent stays unknown and its fan stays held, no key is replaced, nothing is
-      resent and it is never marked not-sent: releasing it needs positive provider history (send_recovery.reconcile).
+      resent and it is never marked not-sent: releasing it needs positive provider history (send_recovery.reconcile)
+      or the separate audited absence release (send_recovery.release_unconfirmed_send: complete guarded history after a
+      quiet period, a newer fan message, every other hold intact; the intent becomes unconfirmed, never not-sent).
     unlinked_transaction / unreconciled_access on an of_fans_evidence row: a held row (or a stale pending
       transaction) is dismissed with the operator as resolved_by; it is never converted into a grant.
     unreconciled_access on revoked access evidence: audit only (acknowledged, state untouched).

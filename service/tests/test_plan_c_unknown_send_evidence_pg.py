@@ -312,3 +312,28 @@ def test_evidence_write_failure_never_changes_the_outcome(database, monkeypatch)
     store, authority, transport, intent, outcome = dispatch_unknown(database, provider)
     assert outcome == 'unknown' and status(database, intent).reason == 'invalid_receipt'
     assert len(provider.posts) == 1
+
+
+def test_positive_reconciliation_still_settles_the_attempt_and_audits_the_kept_evidence(database, monkeypatch):
+    """The existing positive path is untouched: the unknown evidence is preserved in the audit row, then the receipt wins."""
+    from types import SimpleNamespace
+    import native_pilot.recovery as recovery
+    from onlyfans_runtime import send_recovery
+    from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+    provider = Provider((503, '{"error":"SERVICE_UNAVAILABLE","request_outcome":"unknown"}', {'x-ofapi-trace-id': 'tr-pos'}))
+    store, authority, transport, intent, outcome = dispatch_unknown(database, provider)
+    assert outcome == 'unknown'
+    # the account id of this fixture is not an OnlyFans-form id, so stand in for the history matcher only
+    monkeypatch.setattr(recovery, '_matches', lambda raw, snapshot: SimpleNamespace(message_id=raw['id'], created_at=raw['createdAt']))
+    monkeypatch.setattr(recovery, 'proof_hash', lambda raw, snapshot: 'f' * 64)
+    raw = {'id': 9001, 'createdAt': utcnow().isoformat() + 'Z'}
+    result = send_recovery.reconcile(authority, TENANT, ACCOUNT, FAN, intent, history=[raw], complete=True,
+                                     provider_message_id=9001, command_key='c' * 64, actor='op-session:' + 'a' * 64,
+                                     reason='Operator found the exact message')
+    assert result['outcome'] == 'accepted'
+    row = attempt(database)
+    assert row.outcome == 'accepted' and json.loads(row.evidence_json)['message_id'] == 9001, 'the receipt replaces unknown evidence'
+    with Session(database[1]) as s:
+        before = json.loads(s.scalar(select(OfLaunchCommand)).before_json)
+        assert before['sendEvidence']['provider']['http_status'] == 503 and before['sendEvidence']['hold']['reason'] == 'invalid_receipt'
+    assert len(provider.posts) == 1

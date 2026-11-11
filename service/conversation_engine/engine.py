@@ -427,7 +427,7 @@ class EngineService:
                     Message.is_unsent.is_(False), current_binding_message(runtime.binding_id)).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(101)))
                 connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account, OfFansConnection.status == 'active'))
                 connection_epoch = connection.epoch if connection else None
-                pending_rows = s.execute(select(OfEngineDecision, OfTextIntent.status).outerjoin(OfTextIntent,
+                pending_rows = s.execute(select(OfEngineDecision, OfTextIntent.status, OfTextIntent.reason).outerjoin(OfTextIntent,
                     (OfTextIntent.account_id == OfEngineDecision.account_id) &
                     (OfTextIntent.intent_id == OfEngineDecision.intent_id)).where(
                     OfEngineDecision.account_id == account, OfEngineDecision.fan_id == fan_id,
@@ -464,9 +464,12 @@ class EngineService:
                     'offer_reference': offer_match,
                     'catalogue_search': catalogue_view,
                     'pending_actions': [{'decision_id': d.decision_id, 'request_id': d.request_id,
-                        'generation': d.generation, 'action': d.action, 'outcome': intent_status or d.status, 'body': d.body,
+                        'generation': d.generation, 'action': d.action,
+                        # An operator-released unknown send is neither delivered nor "cancelled unsent": say so.
+                        'outcome': ('unconfirmed' if intent_reason == 'operator_released_unconfirmed_send'
+                                    else intent_status or d.status), 'body': d.body,
                         'terms': json.loads(d.terms_json) if d.terms_json else None}
-                        for d, intent_status in pending_rows[:50]],
+                        for d, intent_status, intent_reason in pending_rows[:50]],
                     'pending_actions_truncated': len(pending_rows) > 50,
                     'open_requests': [{'request_id': r.request_id, 'source_message_id': r.source_message_id,
                         'source_body': request_text.get(r.source_message_id),

@@ -10,6 +10,7 @@ Real PostgreSQL, the real Plan C text-only pilot rig (signed webhooks, ticks, fa
 """
 from dataclasses import replace
 from datetime import datetime, timedelta
+import hashlib
 import json
 import re
 
@@ -40,7 +41,8 @@ REASON = 'History shows nothing arrived; fan wrote again'
 
 
 def K(n):
-    return f'{n:064x}'
+    # distinct from the small integers the fixture chain already used as command keys
+    return hashlib.sha256(f'unknown-send-release:{n}'.encode()).hexdigest()
 
 
 def provider_message(ident, sender, body, when, **extra):
@@ -281,7 +283,8 @@ def test_replay_of_the_same_command_key_is_idempotent_and_a_different_request_is
     first = release(rig, intent, history)
     done = facts(rig)
     assert release(rig, intent, history) == first, 'replay returns the first result'
-    assert release(rig, intent, read(rig, FAN, intent)) == first, 'a replay does not need (or trust) a new history read'
+    stale = replace(history, started_at=history.started_at - timedelta(hours=2), ended_at=history.ended_at - timedelta(hours=2))
+    assert release(rig, intent, stale) == first, 'a replay returns the audited result and re-checks nothing'
     assert facts(rig) == done
     with pytest.raises(Refused, match='conflict'):
         release(rig, intent, history, next_input=81003)
@@ -313,16 +316,19 @@ def test_the_quiet_period_cannot_be_shortened_only_lengthened(scene):
 
 def test_history_read_before_the_quiet_period_ended_does_not_count(scene):
     rig, wire, intent = scene
-    early = read(rig, FAN, intent)           # read while the send is still seconds old
     age(rig)
+    history = read(rig, FAN, intent)
+    # a read that finished 30 seconds ago but began three minutes ago, i.e. before the 30 minute quiet period had ended
+    early = replace(history, started_at=utcnow() - timedelta(minutes=3), ended_at=utcnow() - timedelta(seconds=30))
     refused(rig, intent, early, 'read before the quiet period')
+    release(rig, intent, history)           # the same send releases with a read that began after the quiet period
 
 
 def test_stale_history_is_refused(scene):
     rig, wire, intent = scene
-    age(rig)
+    age(rig, minutes=45)
     history = read(rig, FAN, intent)
-    stale = replace(history, started_at=history.started_at - timedelta(minutes=10), ended_at=history.ended_at - timedelta(minutes=10))
+    stale = replace(history, started_at=history.started_at - timedelta(minutes=10), ended_at=history.ended_at - timedelta(minutes=9))
     refused(rig, intent, stale, 'fresh provider history')
     skewed = replace(history, ended_at=utcnow() + timedelta(minutes=10))
     refused(rig, intent, skewed, 'fresh provider history')
@@ -363,7 +369,7 @@ def test_history_read_needs_the_current_pilot_request_guard(scene):
     age(rig)
     with pytest.raises(Refused, match='request guard'):
         read(rig, FAN, intent, client=operator_client(rig, guarded=False))
-    with pytest.raises(Refused, match='request guard'):
+    with pytest.raises(Refused, match='guard revision'):      # a stale guard cannot even verify the provider identity
         read(rig, FAN, intent, client=operator_client(rig, revision=10_000))
     other = operator_client(rig)
     with pytest.raises(Refused):
@@ -515,6 +521,9 @@ def _restrict(rig):
 
 def _unresolved_delivery(rig):
     with Session(rig.w.database[1]) as s, s.begin():
+        s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=94001, direction='out', body='older message',
+                      created_at=utcnow() - timedelta(days=2), media_ids='[]', media_count=0, price_cents=0))
+        s.flush()
         s.add(OfMessageDelivery(account_id=ACCOUNT, fan_id=FAN, message_id=94001, outcome='unknown'))
 
 
@@ -541,7 +550,8 @@ def test_a_pending_human_message_is_pilot_evidence_that_still_holds(scene):
     history = read(rig, FAN, intent)
     from db.onlyfans_fans_intake_models import OfFansEvidence
     columns = {c.name: c for c in OfFansEvidence.__table__.columns}
-    row = dict(account_id=ACCOUNT, evidence_id='human-1', kind='human_sent', fan_id=FAN, status='held', reason='unclassified',
+    row = dict(account_id=ACCOUNT, evidence_id='human-1', dedupe_key='human-1', kind='human_sent', source='webhook', fan_id=FAN,
+               occurred_at=utcnow(), status='held', reason='unclassified', raw_sha256='0' * 64,
                created_at=utcnow(), updated_at=utcnow())
     with Session(rig.w.database[1]) as s, s.begin():
         s.add(OfFansEvidence(**{k: v for k, v in row.items() if k in columns}))
@@ -583,3 +593,14 @@ def test_two_fans_are_released_independently_and_each_is_answered_once(rig):
     assert all(state[0] is None for state in final['states'].values())
     assert sorted(r[1] for r in final['requests']) == ['cancelled', 'cancelled', 'completed', 'completed']
     assert final['used'] == after['used'] + 1 and final['used'] >= 4
+
+
+def test_the_unknown_send_item_shows_the_kept_evidence_and_disappears_after_the_release(scene):
+    rig, wire, intent = scene
+    [item] = rig.items('unknown_send')
+    assert item['nextStep'] == 'reconcile_with_provider_history' and 'audited release' in item['summary']
+    assert item['sendEvidence']['provider']['transport_error'] == 'ReadTimeout'
+    assert item['sendEvidence']['hold']['reason'] == 'invalid_receipt'
+    age(rig)
+    release(rig, intent, read(rig, FAN, intent))
+    assert rig.items('unknown_send') == []

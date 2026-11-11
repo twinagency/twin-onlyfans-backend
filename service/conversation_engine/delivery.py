@@ -285,3 +285,28 @@ def payment_observed(s, intent, kind):
     request.next_step = 'verify_access' if kind == 'purchase' else 'review_refund_or_chargeback'
     request.updated_at = utcnow()
     request.revision += 1
+
+
+def released_unconfirmed(s, intent):
+    """An operator released the hold of an unknown send that provider history proved absent (send_recovery).
+
+    The decision becomes 'held' (the only non-terminal status an unknown decision may take): it is never completed,
+    never retried and never called "not sent". Its approval is withdrawn, unsent later parts are cancelled, and the
+    request is closed so the fan's NEXT message plans a fresh reply. Attempt evidence stays 'unknown'.
+    """
+    decision = s.scalar(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
+                                                       OfEngineDecision.intent_id == intent.intent_id))
+    if decision is None or decision.status != 'unknown':
+        raise Refused('engine decision is not unknown')
+    decision.status, decision.updated_at = 'held', utcnow()
+    from .approval import invalidate_generation_in_session
+    invalidate_generation_in_session(s, intent.account_id, decision.request_id, decision.generation, 'released_unconfirmed')
+    for part in s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
+            OfEngineDecision.request_id == decision.request_id, OfEngineDecision.generation == decision.generation,
+            OfEngineDecision.part_index > decision.part_index, OfEngineDecision.status == 'ready')):
+        part.status, part.updated_at = 'cancelled', utcnow()
+    request = s.get(OfEngineRequest, (intent.account_id, decision.request_id))
+    if request.status in {'handover_pending', 'handover_accepted'}:
+        raise Refused('request is with a human')
+    request.status, request.next_step, request.updated_at = 'cancelled', 'released_unconfirmed_send', utcnow()
+    request.revision += 1

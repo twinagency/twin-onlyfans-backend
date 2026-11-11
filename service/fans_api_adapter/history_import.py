@@ -515,6 +515,8 @@ def _fail(store, guard, client, account, work, *, failure, cause, status, retry_
         if failure != "refused":
             _meter(s, account, work["source"], now, outcome="rate_limited" if cause == "provider_rate_limited" else "failed",
                    balance=client.credits_balance)
+        s.flush()
+        refresh_states(s, account)
     return {"outcome": "failed", "failure": failure, "cause": cause, "stop": failure == "auth", "exhausted": exhausted}
 
 
@@ -617,7 +619,7 @@ def _commit(store, tenant, account, guard, client, work, result, now):
                                      attempts=0, exhausted=True, now=done)
         else:
             state = json.loads(source.cursor_json)
-            state["first_page_at"] = state.get("first_page_at") or _iso(done)
+            state["first_page_at"] = state.get("first_page_at") or done.isoformat()
             if source_name == "transactions":
                 state["marker"], state["end_reached"] = result.next_page, result.next_page is None
             else:
@@ -635,6 +637,8 @@ def _commit(store, tenant, account, guard, client, work, result, now):
             OfFansImportGap.gap_id == _page_gap_id(source_name, work.get("fan"), ref), OfFansImportGap.resolved_at.is_(None))
             .values(resolved_at=done, resolved_by="retry_succeeded", resolution="retry_succeeded", updated_at=done))
         _meter(s, account, source_name, done, outcome="ok", rows=len(items), balance=client.credits_balance)
+        s.flush()
+        refresh_states(s, account)
     return {"outcome": "ok", "rows": len(items), "end": end, "quarantined": counts["quarantined"]}
 
 
@@ -753,6 +757,8 @@ def _gap_command(store, tenant, account, gap_id, *, command_key, actor, reason, 
         else:
             gap.resolved_at, gap.resolved_by, gap.resolution, gap.updated_at = now, actor, "reviewed", now
             outcome = "reviewed"
+        s.flush()
+        refresh_states(s, account)
         result = {"gapId": gap_id, "source": gap.source, "kind": gap.kind, "outcome": outcome}
         s.add(OfLaunchCommand(account_id=account, command_key=command_key, binding_id=runtime.binding_id, kind="history_gap",
             request_hash=request_hash, actor=actor, reason=reason, before_json=_encoded(before), result_json=_encoded(result),
@@ -782,3 +788,211 @@ def record_vault_outcome(store, account, result):
     with Session(store.engine) as s, s.begin():
         if s.get(OfFansImportSource, (account, "vault_window")) is not None:
             _meter(s, account, "vault_window", utcnow(), outcome=outcome, rows=result.get("upserted", 0))
+            s.flush()
+            refresh_states(s, account)
+
+
+# ---------------------------------------------------------------- coverage (derived, never time-based)
+_MIRROR = {"complete": "complete", "partial": "partial", "unknown": "not_started"}
+
+
+def _genuinely_complete(cursor, boundary):
+    """A fan's chat history reached the provider's end of pages, starting from a first page read after the boundary."""
+    return (cursor.status == "complete" and cursor.pages >= 1 and cursor.completed_at is not None
+            and cursor.first_page_at is not None and cursor.first_page_at >= boundary)
+
+
+def _gap_summary(s, account):
+    from sqlalchemy import func
+    out = {}
+    for source, kind, exhausted, count in s.execute(select(OfFansImportGap.source, OfFansImportGap.kind, OfFansImportGap.exhausted,
+            func.count()).where(OfFansImportGap.account_id == account, OfFansImportGap.resolved_at.is_(None))
+            .group_by(OfFansImportGap.source, OfFansImportGap.kind, OfFansImportGap.exhausted)):
+        node = out.setdefault(source, {"page": 0, "row": 0, "exhausted": 0})
+        node[kind] += count
+        node["exhausted"] += count if exhausted else 0
+    return out
+
+
+def _webhooks(s, account, vault_row):
+    from db.onlyfans_engine_models import OfFansWebhook
+    held = json.loads(vault_row.evidence_json).get("webhooks")
+    seen = s.scalar(select(OfFansWebhook.event_key).where(OfFansWebhook.account_id == account,
+        OfFansWebhook.received_at >= vault_row.boundary_at, OfFansWebhook.status == "accepted").limit(1)) is not None
+    return {"attested": held is not None, "seenSinceBoundary": seen, "ok": held is not None or seen}
+
+
+def _source_states(s, account):
+    """Every source's state, computed from cursors, retained gaps and counters. None when no import is configured."""
+    from sqlalchemy import func
+    from db.onlyfans_vault_models import OfVaultSyncJob
+    rows = {r.source: r for r in s.scalars(select(OfFansImportSource).where(OfFansImportSource.account_id == account))}
+    if len(rows) != len(SOURCES):
+        return None
+    gaps, hooks = _gap_summary(s, account), _webhooks(s, account, rows["vault_window"])
+    boundary = rows["vault_window"].boundary_at
+    out = {}
+    for name in ("transactions", "chargebacks"):
+        row, cursor = rows[name], json.loads(rows[name].cursor_json)
+        gap = gaps.get(name, {"page": 0, "row": 0, "exhausted": 0})
+        reasons = (["page_gap_open"] if gap["page"] else []) + (["row_gap_open"] if gap["row"] else [])
+        if row.rows_seen != row.rows_new + row.rows_duplicate + row.rows_conflict + row.rows_ignored + row.rows_quarantined:
+            reasons.append("counters_unreconciled")
+        read = row.pages_ok > 0
+        first = cursor.get("first_page_at")
+        try:
+            after_boundary = first is not None and datetime.fromisoformat(first) >= boundary
+        except (TypeError, ValueError):
+            after_boundary = False
+        at_end = read and bool(cursor.get("end_reached")) and after_boundary
+        if not at_end:
+            reasons.append("not_at_end" if read else "unread")
+        elif not hooks["ok"]:
+            reasons.append("webhooks_unverified")
+        state = "complete" if not reasons else "partial" if read or gap["page"] or gap["row"] else "unknown"
+        out[name] = {"state": state, "reasons": reasons, "pagesOk": row.pages_ok, "pagesFailed": row.pages_failed,
+                     "completedAt": row.completed_at if at_end else None}
+    chats, cursors = rows["chats"], OfFansHistoryCursor
+    total = s.scalar(select(func.count()).where(cursors.account_id == account)) or 0
+    genuine = s.scalar(select(func.count()).where(cursors.account_id == account, cursors.status == "complete", cursors.pages >= 1,
+        cursors.completed_at.is_not(None), cursors.first_page_at.is_not(None), cursors.first_page_at >= boundary)) or 0
+    progressed = s.scalar(select(func.count()).where(cursors.account_id == account, cursors.pages > 0)) or 0
+    gap = gaps.get("chats", {"page": 0, "row": 0, "exhausted": 0})
+    reasons = (["page_gap_open"] if gap["page"] else []) + (["row_gap_open"] if gap["row"] else [])
+    if not total:
+        reasons.append("no_fans_listed")
+    elif genuine < total:
+        reasons.append("fans_incomplete")
+    if json.loads(chats.cursor_json).get("universe") != "enumerated":
+        reasons.append("universe_unenumerated")
+    out["chats"] = {"state": "complete" if not reasons else "partial" if progressed or gap["page"] or gap["row"] else "unknown",
+                    "reasons": reasons, "pagesOk": chats.pages_ok, "pagesFailed": chats.pages_failed,
+                    "fansListed": total, "fansComplete": genuine, "universe": json.loads(chats.cursor_json).get("universe"),
+                    "completedAt": None}
+    job = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account, OfVaultSyncJob.provider_kind == "fansapi")
+                   .order_by(OfVaultSyncJob.requested_at.desc(), OfVaultSyncJob.job_id.desc()).limit(1))
+    selected = None
+    if job is None:
+        state, reasons = "unknown", ["no_vault_job"]
+    elif job.status == "complete":
+        state, reasons, selected = "complete", [], len(json.loads(job.window_json).get("selected", []))
+    else:
+        state, reasons = ("partial" if job.pages_read else "unknown"), ["vault_job_" + job.status]
+    out["vault_window"] = {"state": state, "reasons": reasons, "selected": selected, "pagesOk": rows["vault_window"].pages_ok,
+                           "pagesFailed": rows["vault_window"].pages_failed, "completedAt": None}
+    return {"rows": rows, "sources": out, "gaps": gaps, "webhooks": hooks, "boundary": boundary}
+
+
+def refresh_states(s, account):
+    """Mirror the derived states onto the source rows for operators; readers always recompute."""
+    states = _source_states(s, account)
+    if states is None:
+        return
+    for name, row in states["rows"].items():
+        mirror = _MIRROR[states["sources"][name]["state"]]
+        if name == "vault_window" and "vault_job_failed" in states["sources"][name]["reasons"]:
+            mirror = "failed"
+        if row.state != mirror:
+            row.state = mirror
+
+
+def fan_state(s, account, fan_id):
+    """One fan's coverage: complete only when his chat reached its end and the account-level evidence did too."""
+    states = _source_states(s, account)
+    if states is None:
+        return {"state": "unknown", "reasons": ["import_not_configured"], "asOf": None}
+    cursor = s.get(OfFansHistoryCursor, (account, fan_id))
+    if cursor is None:
+        return {"state": "unknown", "reasons": ["fan_not_listed"], "asOf": None}
+    reasons = []
+    if cursor.status == "gapped":
+        reasons.append("history_gapped")
+    elif not _genuinely_complete(cursor, states["boundary"]):
+        reasons.append("history_unread" if cursor.pages == 0 and cursor.status == "needed" else "history_incomplete")
+    own = s.execute(select(OfFansImportGap.kind).where(OfFansImportGap.account_id == account, OfFansImportGap.fan_id == fan_id,
+        OfFansImportGap.resolved_at.is_(None)).distinct()).scalars().all()
+    reasons += [kind + "_gap_open" for kind in ("page", "row") if kind in own]
+    for name in ("transactions", "chargebacks"):
+        for reason in states["sources"][name]["reasons"]:
+            reasons.append(name + "_incomplete" if reason in ("unread", "not_at_end") else
+                           reason if reason == "webhooks_unverified" else name + "_" + reason)
+    reasons = list(dict.fromkeys(reasons))
+    progressed = cursor.pages > 0 or any(states["sources"][n]["pagesOk"] for n in ("transactions", "chargebacks")) or bool(own)
+    if reasons:
+        return {"state": "partial" if progressed else "unknown", "reasons": reasons, "asOf": None}
+    stamps = [cursor.completed_at] + [states["sources"][n]["completedAt"] for n in ("transactions", "chargebacks")]
+    return {"state": "complete", "reasons": [], "asOf": _iso(max(stamps))}
+
+
+def fan_coverage(store, tenant, account, fan_id):
+    with Session(store.engine) as s:
+        store._runtime(s, tenant, account, lock=False)
+        return fan_state(s, account, fan_id)
+
+
+def _measurement(s, account, states):
+    meter = list(s.scalars(select(OfFansReadMeter).where(OfFansReadMeter.account_id == account).order_by(OfFansReadMeter.hour)))
+    sources, hours = {}, set()
+    for name in SOURCES:
+        mine = [m for m in meter if m.source == name]
+        hours |= {m.hour for m in mine}
+        requests = sum(m.requests for m in mine)
+        ok, limited, failed = sum(m.ok for m in mine), sum(m.rate_limited for m in mine), sum(m.failed for m in mine)
+        first = next((m.balance_first for m in mine if m.balance_first is not None), None)
+        last = next((m.balance_last for m in reversed(mine) if m.balance_last is not None), None)
+        sources[name] = {"requests": requests, "ok": ok, "rateLimited": limited, "failed": failed,
+                         "dispatchedUnrecorded": requests - ok - limited - failed, "creditsReserved": sum(m.credits_reserved for m in mine),
+                         "rowsRead": sum(m.rows_read for m in mine), "balanceFirst": first, "balanceLast": last}
+    total = {k: sum(v[k] for v in sources.values()) for k in ("requests", "ok", "rateLimited", "failed", "dispatchedUnrecorded", "creditsReserved", "rowsRead")}
+    span = 1 if not hours else int((max(hours) - min(hours)).total_seconds() // 3600) + 1
+    states_seen = [v["state"] for v in states["sources"].values()]
+    return {"sources": sources, "total": total, "requestsPerHour": round(total["requests"] / span, 2),
+            "completeness": {k: states_seen.count(k) for k in ("complete", "partial", "unknown")}}
+
+
+def coverage_in(s, account):
+    """The persisted coverage, recomputed. Safe to call from any read path."""
+    from sqlalchemy import func
+    from db.onlyfans_fans_intake_models import OfFansProjection
+    states = _source_states(s, account)
+    if states is None:
+        return {"configured": False}
+    rows, cursors, boundary = states["rows"], OfFansHistoryCursor, states["boundary"]
+    sources = {}
+    for name, node in states["sources"].items():
+        row = rows[name]
+        sources[name] = {**{k: v for k, v in node.items() if k != "completedAt"},
+            "counts": {"seen": row.rows_seen, "new": row.rows_new, "duplicate": row.rows_duplicate, "conflict": row.rows_conflict,
+                       "ignored": row.rows_ignored, "quarantined": row.rows_quarantined, "late": row.rows_late},
+            "budget": {"requests": row.requests_budget, "credits": row.credits_budget, "requestsUsed": row.requests_used,
+                       "creditsReserved": row.credits_reserved},
+            "minIntervalSeconds": row.min_interval_seconds, "nextReadAt": _iso(row.next_read_at), "lastError": row.last_error,
+            "openGaps": states["gaps"].get(name, {"page": 0, "row": 0, "exhausted": 0})}
+    known = s.scalar(select(func.count()).where(cursors.account_id == account)) or 0
+    open_fans = select(OfFansImportGap.fan_id).where(OfFansImportGap.account_id == account, OfFansImportGap.resolved_at.is_(None),
+        OfFansImportGap.fan_id.is_not(None))
+    account_level = all(states["sources"][n]["state"] == "complete" for n in ("transactions", "chargebacks"))
+    complete = s.scalar(select(func.count()).where(cursors.account_id == account, cursors.status == "complete", cursors.pages >= 1,
+        cursors.completed_at.is_not(None), cursors.first_page_at.is_not(None), cursors.first_page_at >= boundary,
+        cursors.fan_id.not_in(open_fans))) if account_level else 0
+    unread = s.scalar(select(func.count()).where(cursors.account_id == account, cursors.pages == 0, cursors.status != "complete")) or 0
+    complete = complete or 0
+    overall = [v["state"] for v in states["sources"].values()]
+    state = "complete" if all(v == "complete" for v in overall) else "unknown" if all(v == "unknown" for v in overall) else "partial"
+    tallies = {k: sum(getattr(rows[n], k) for n in HISTORY_SOURCES) for k in ("rows_duplicate", "rows_conflict", "rows_late", "rows_quarantined")}
+    held = s.scalar(select(func.count()).where(OfFansProjection.account_id == account, OfFansProjection.status == "held")) or 0
+    ownership = "unknown" if not complete else "complete" if complete == known and sources["chats"]["state"] == "complete" else "partial"
+    return {"configured": True, "revision": max(r.revision for r in rows.values()), "boundaryAt": _iso(boundary), "state": state,
+            "ownership": ownership, "sources": sources, "webhooks": {k: v for k, v in states["webhooks"].items() if k != "ok"},
+            "fans": {"known": known, "complete": complete, "partial": max(0, known - complete - unread), "unknown": unread},
+            "gaps": {"openPages": sum(g["page"] for g in states["gaps"].values()), "openRows": sum(g["row"] for g in states["gaps"].values()),
+                     "exhausted": sum(g["exhausted"] for g in states["gaps"].values())},
+            "reconcile": {"duplicates": tallies["rows_duplicate"], "conflicts": tallies["rows_conflict"], "late": tallies["rows_late"],
+                          "quarantined": tallies["rows_quarantined"], "heldProjections": held},
+            "measurement": _measurement(s, account, states)}
+
+
+def coverage_view(store, tenant, account):
+    with Session(store.engine) as s:
+        store._runtime(s, tenant, account, lock=False)
+        return coverage_in(s, account)

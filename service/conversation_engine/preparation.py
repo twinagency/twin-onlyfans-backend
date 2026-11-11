@@ -297,6 +297,11 @@ def view(store,tenant,account):
             "pagesRead":job.pages_read,"itemsSeen":job.items_seen,"error":job.last_error,
             "selected":len(json.loads(job.window_json).get("selected",[])),
             "retryAttempts":job.retry_attempts,"retryNotBefore":_iso(job.retry_not_before)}
+        from fans_api_adapter import history_import
+        history=history_import.coverage_in(s,account)
+        if history["configured"]:
+            # Coverage is recomputed from cursors, gaps and counters; an account with no import keeps "pending".
+            result["history"]=history;result["historyCoverage"]=history["state"];result["ownershipCoverage"]=history["ownership"]
         attempt=read_attempt(row)
         result["lastAttempt"]=None if attempt is None else {k:attempt[k] for k in
             ("at","outcome","cause","retryNotBefore","attempts","exhausted","operatorAction")}

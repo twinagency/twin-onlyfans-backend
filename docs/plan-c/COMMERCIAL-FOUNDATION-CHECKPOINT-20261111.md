@@ -35,3 +35,8 @@ The actual Next/BFF -> actual ASGI agency middleware -> real isolated PostgreSQL
 4. Complete staff coexistence, voluntary tips and ten-creator isolation/fairness.
 5. Qualify the unseeded normal conversation/sale/unlock/continuation path, historical failures, final image, real model/provider, deployment composition, populated restore/rollback and stop.
 6. Only then prepare bounded activation under individually approved profiles/catalogue, audience, budgets and recovery owner. Current trial settings and budgets stay unchanged.
+
+
+## Frozen-artifact compatibility repair
+
+The first frozen run (ab1ea35795812d1bd3b4316ccd42dd7b719b1b5a / sha256:9df9f90fa3db73122581e9c277da59a31baf0bd78b2abbe6a58b323038c62c95) reported 284 passed and 21 failed, including subtest failures. Raw evidence is retained in foundation-exact.log. The provider extension assumed every legacy provenance caller supplied provider_kind and a full connection status. Existing native availability helpers omit the new field; cached preview checks intentionally pass a reduced identity-only connection view. Restore those native provenance contracts, retain readiness's own status/expiry checks, refuse unknown provider kinds, and require the explicit typed FansAPI connection for FansAPI observations. Existing failing assertions are unchanged. Focused source repair: 31 passed plus 17 subtests. A new immutable image and its separate artifact results are required; the failed image is not qualified.

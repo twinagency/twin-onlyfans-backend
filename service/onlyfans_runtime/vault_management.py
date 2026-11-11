@@ -261,14 +261,15 @@ def request_sync(store, tenant, account, *, expected_connection_revision, comman
 
 
 def _provenance(row, observation, job, connection, binding, *, current_revision=True):
-    if job is not None and job.provider_kind=="fansapi":
+    provider=getattr(job,"provider_kind","native") if job is not None else None
+    if provider=="fansapi":
         from db.onlyfans_engine_models import OfFansConnection
         return (type(connection) is OfFansConnection and observation is not None
             and connection.status=="active" and job.binding_id==connection.binding_id==binding
             and job.connection_revision==connection.epoch and job.provider_account==connection.provider_account_id
             and str(job.owner_id)==connection.provider_creator_id and observation.raw_hash==digest(row.raw_json))
+    if provider!="native":return False
     return (observation is not None and job is not None and connection is not None
-        and getattr(connection,"status",None)=="verified"
         and job.binding_id == binding and connection.binding_id == binding
         and job.owner_id == connection.owner_id
         and (not current_revision or job.connection_revision == connection.revision)
@@ -289,7 +290,7 @@ def _ready(row, observation, job, connection, binding):
     # Same binding and owner, unchanged raw item: a credential-only connection
     # revision (model key save, activation) does not invalidate vault identity,
     # matching vault_previews. The connection itself must still be verified.
-    fansapi = job is not None and job.provider_kind=="fansapi"
+    fansapi = job is not None and getattr(job,"provider_kind","native")=="fansapi"
     if (not _provenance(row, observation, job, connection, binding, current_revision=False)
         or not fansapi and (connection.status != "verified" or connection.expires_at <= utcnow())):
         return False, "unverified_owner"

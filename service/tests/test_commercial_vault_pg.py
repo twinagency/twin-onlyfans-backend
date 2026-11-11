@@ -233,3 +233,17 @@ def test_description_refresh_keeps_commercial_classification_contract(database,c
             .where(VaultFolderItem.account_id==ACCOUNT,VaultFolderItem.media_id==11)))
         assert ("Miscellaneous" in folders)==(reason!="metadata_evidence")
     store.close()
+
+
+def test_unknown_provider_kind_cannot_inherit_native_provenance():
+    from test_onlyfans_vault_offer_availability import NativeVaultOfferAvailability
+    from onlyfans_runtime.vault_management import _ready
+    args=NativeVaultOfferAvailability().fixture();args[2].provider_kind="unknown"
+    assert _ready(*args)==(False,"unverified_owner")
+
+
+def test_fansapi_observation_cannot_use_a_native_connection_view():
+    from test_onlyfans_vault_offer_availability import NativeVaultOfferAvailability
+    from onlyfans_runtime.vault_management import _ready
+    args=NativeVaultOfferAvailability().fixture();args[2].provider_kind="fansapi"
+    assert _ready(*args)==(False,"unverified_owner")

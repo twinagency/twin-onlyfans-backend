@@ -201,3 +201,4 @@ slop/evidence/
 docs/health/*
 !docs/health/README.md
 .scratch/
+.local/

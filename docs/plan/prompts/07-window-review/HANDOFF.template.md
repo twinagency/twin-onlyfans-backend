@@ -1,0 +1,2 @@
+Resume W<N> rwl (owner said ready, <date>). Read in order: `.scratch/rwl-W<N>/STATE.md` (decisions + launch plan), COMMON.md, PROMPTS.md.
+Do: `git fetch`; if origin/<main> moved past <HEAD_SHA>, add new PRs to the right lane + bump window in COMMON/PROMPTS. Launch wave A per STATE "Launch plan"; fill the Threads table; create the 20-min tick (`schedule_task`, prompt = `schedules/window-tick.md` with W<N> filled) bound to this thread; end turn. Report each Ship line; final report per CLAUDE.md.

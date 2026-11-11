@@ -1,0 +1,127 @@
+# Handover: OnlyFans engine and commercial build (11 Nov 2026)
+
+Sections 0 and onward explain the project. Sections 1-7 answer the 7-point ask-list. Names only, never secret values. Each item says what was verified live today (V) or comes from notes/memory or is unknown (U). Where the owner must fill something in, it says OWNER TO FILL.
+
+## 0. What we are doing (start here)
+**Goal.** Build one OnlyFans conversation-and-sales engine that works for ten creators on the same code. A fan messages a creator; an AI writes the reply; when approved it sends it, offers a priced content card, recognises the exact unlock, and carries on the conversation. The first creator must prove a bounded real sale before anything expands.
+**Where we are.**
+- A live two-fan TEST trial runs now on one creator (commit 659ea29, text only, no sales). It is the only thing live.
+- The commercial build is on the `claude/commercial-*` branches. Not deployed. Milestone 1 (four repairs R0-R3) is built and tested; next come the commercial steps below.
+**Roadmap (in order; each ends with tests on one frozen build):**
+1. Repairs R0-R3 (done): stuck-after-429 requests, importer ignoring Retry-After, hidden login failures, stale categories.
+2. Step 2, scope transition (BUILDING; migration 0134): promote a prepared creator account to a commercial contract in place, with no budget reset. Plan: `plans/step2-transition.md`.
+3. Step 3, catalogue and terms (migration 0135): remove the 200-row bound, approved singles, explicit bundles, agency category prices, optional approved discount, one terms source for prompt/validators/grants/dispatch. Plan: `plans/step3-catalogue-terms.md`.
+4. Step 1, history and ownership coverage (migration 0136): conversation, purchase and unlock history, never "unowned" when unknown. Plan: `plans/step1-history-ownership.md`.
+5. Sale and purchase flow end to end: exact card, receipt, unlock and access matching, with no per-fan grant injected in tests.
+6. Staff coexistence and verified voluntary tips.
+7. Whole-system qualification (ten accounts, crashes, stop/takeover, unknown outcomes), then freeze one release, real dashboard build, restore/rollback tests, a bounded live sale, and only then expansion.
+Plans in `plans/` are drafts written by an agent from the code at d10e065: check file and line references against the real code before building.
+**Still needed from the owners before real onboarding or a live sale:** approved per-creator credential references and creator ids, per-creator read and model budgets, agency category prices, approved profiles and boundaries, a named recovery owner. Do not invent these or reuse the trial's budget.
+
+## People and roles
+- Ronan: owner. Makes the decisions and approvals; the only one who says "deploy".
+- Jesse: partner who approved the trial budgets; his reviewer (ChatGPT) writes the briefs and independently reviews.
+- Claude: builder of the engine repairs and commercial build (one builder per area at a time).
+- Codex: another AI builder that has worked on the R0 repair; check for a lock file before editing the same area.
+- Jaka: developer helping on the OnlyFans work.
+Rule: one builder per owner area. Before editing the scheduler, model runtime, preparation, vault, catalogue or migrations, say so in the group chat first.
+
+## Reading order for a new agent
+1. This file. 2. `docs/plan-c/COMMERCIAL-SALES-BUILD-PLAN-v2-20261111.md` (the agreed product spec; its early gap table is partly historical). 3. `docs/plan-c/CURRENT-PILOT.md` and `DECISIONS.md`. 4. `plans/` (the three drafts above). 5. The code listed in the code map.
+
+## Code map (backend, under `service/`)
+- Conversation: `conversation_engine/` (`engine.py` plan/turn, `model_runtime.py` model chain and retry, `model_ledger.py` reserved/settled/released/unknown calls, `model_client.py`, `writer_context.py`, `model_output.py` and `claims.py` validators, `prompt_provider_a_original.py`, `approval.py`, `commerce.py` offers and grants, `catalogue.py`, `journey.py`, `pilot_scope.py` scope rows, `preparation.py` creator preparation).
+- Scheduler and worker: `model_transport/pilot_supervised.py` (picks work each tick), `model_transport/openrouter.py`, `plan_c_worker.py` (HTTP intake and readiness), `onlyfans_worker.py`.
+- FansAPI side: `fans_api_adapter/` (`protocol.py`, `vault_sync.py`, `backfill.py`, `events.py`, `event_scope.py`, `real_transport.py`).
+- Runtime and delivery: `onlyfans_runtime/` (`store.py`, `media_delivery.py`, `offer_import.py`, `vault_editing.py`, `content_sync.py`).
+- Vault AI: `vault_auto_folders.py`, `vault_ai_api.py`.
+- Database: `db/` (`schema.py` head and trigger pins, `onlyfans_engine_models.py`, `migrations/versions/`).
+- Host supervisor for the live trial: `ops/plan-c-supervision/` (deployed separately, not part of the image).
+- Tests: `service/tests/` (names ending `_pg.py` need PostgreSQL).
+
+## Working agreements
+- Failing test first, then the fix. Never weaken a send-safety check, budget, ownership or stop control to make a test pass.
+- Say which existing assertions you changed and why. Say what you did NOT run. No "done" without a passing test.
+- Offline only: no servers, no deploys, no real provider or model calls, no real fan messages.
+- Own branch per task (`name/topic-date`), small commits, one topic each. Never force-push `claude/*` or `codex/*`. Never push `main` in `twin-dashboard` (it deploys).
+- Migrations are additive with a downgrade that refuses to destroy evidence. Chain: 0129_reconnect_receipt -> 0129b_model_retry_due -> 0130 -> 0131 -> 0132 -> 0133, next 0134-0136 as above. Update `db/schema.py` (HEAD, rank, trigger hash) and every head-pin test.
+- The live trial must only ever get 0129 -> 0129b, never the commercial schema.
+- Product rules that do not bend: manual agency prices only; recent-1,000 window is not ownership proof; unknown means unknown; a bundle with any owned paid item is excluded; discounts only as an approved lower price when the fan asks; no proactive tip requests; accounts never share context, prices, purchases or jobs.
+
+## How to run tests
+- Start a throwaway Postgres: `docker run -d --name my-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:16 -c fsync=off -c max_connections=300`.
+- Env: `ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres@127.0.0.1:55432/postgres` and `ONLYFANS_TEST_PG_EMPTY_TEMPLATE=1`. Each test makes its own database.
+- The official runs use a frozen Docker image of the exact commit, with your source mounted over `/app/service`. Ask Ronan for the image (about 0.5 GB, a copy exists on the Work Server and can be moved to a home server) or build the dependencies yourself from `service/requirements*`.
+- Run only the suites for your area. The whole Plan C set takes about an hour on 1 CPU. Dashboard: `npm run typecheck` and the node tests under `tests/components`.
+- Before asking for review, list suites run with pass counts, suites not run, and changed assertions.
+
+## 1. Where the work is pushed (V)
+All current work is on GitHub as branches. Nothing is on main. Workflows pin other branch names, so none of these trigger deploys.
+- Backend repo `twinagency/twin-onlyfans-backend`:
+  - `handover/20261111` = this branch (tip of the commercial line + this file)
+  - `claude/commercial-r0-r3-20261111` d10e065, the newest engine line (R0-R3 repairs)
+  - `claude/plan-c-r0-retry-20261111` 5eee7e5, the small fix for the live trial (NOT deployed)
+  - `claude/plan-c-deletion-proof-20261111` 659ea29, the code the live trial runs now
+  - `codex/commercial-sales-20261111` 7aa81dc, the earlier reviewed baseline
+  - The default branch `codex/onlyfans-of-b1` is about 620 commits behind. There is no main.
+- Dashboard repo `twinagency/twin-dashboard`: `handover/20261111` and `claude/commercial-dashboard-r2-20261111` 95ca2d9. Its `main` is the LIVE dashboard (a1dd0ff, 3 Nov) and shares NO history with our engine dashboard branch.
+- NOT pushed yet (in flight on the build server only): Step 2 scope-transition work, branch `claude/commercial-step2-transition-20261111`, built by an agent right now. Written plans for steps 1-3: `/srv/projects/claude-commercial-plans-20261111/*.md` on the Work Server (backed up, not in git).
+- Backups: restore-tested git bundles, on Ronan's laptop (`~/twin/work-server-backup-20261111`) and the home server (`~/backups/work-server-backup-20261111`).
+
+## 2. Known bugs and workarounds
+1. Live trial: a model HTTP 429 strands the fan's request forever (3 cases today). Workaround: a new fan message starts a new request. Fix is built (R0), not deployed. (V)
+2. Live trial: reply to fan 318022380 at 6:25 pm Brisbane has an unconfirmed delivery (intent 6d566ed7 `unknown / invalid_receipt`, request 63c74441 `waiting_provider`) with 2 more parts queued behind it. Needs a reconciliation check before more sends to that fan. (V)
+3. Why the provider returned 429 is unknown: the old code threw away the error body and headers. R0 now keeps sanitized evidence. (V)
+4. Bot tone (10-turn live test): explicit from the first message, skips some questions, 3 replies read like rules ("nothing for sale in this chat", "words only"). No automatic score because no AI key is configured for the tester. Fix is prompt/profile work, not started. (V)
+5. Host config drift: the sender's early-stop budget is 400 on the host (`guard_core.py`) but 300 in git. (V)
+6. Image labels say schema 0129 / old overlay values and `BUILD_SHA` is stale on the trial image. Cosmetic. (V)
+7. Work Server: the commercial backend repo's git history has a damaged old ancestor (commit b376d92) and borrows objects from `/srv/projects/moxy-reply-repair-20261104`. Use the bundles or GitHub as the source of truth. (V)
+8. R3 leftover: an item that drops to "uncertain" keeps any older auto-category folder (e.g. Casual) next to Miscellaneous. It stays unsellable. (V)
+9. Two migration lines: trial = 0129 -> 0129b only. Commercial = 0129 -> 0129b -> 0130 ... 0133. Several tests pin the head and differ per line. (V)
+10. Wide test suites are slow (whole Plan C set about 1 hour on 1 CPU) and the Work Server is near capacity (load 4-5). Run only your area's suites. (V)
+
+## 3. In-flight work and what to finish first
+- Milestone 1 (R0-R3 repairs): built and tested; the wide Plan C suites on the final frozen images were still running when this was written. Report draft: `TWIN-R0-R3-BUILD-2026-11-11.txt` (owner's laptop).
+- Step 2 (scope transition to a commercial contract): being built (migration `0134_commercial_scope_contract`). Finish first: it is the base for the rest.
+- Steps 3 (catalogue, bundles, prices, discounts; migration 0135) and 1 (history/ownership coverage; migration 0136): designed, not started.
+- Decisions taken from the plans' recommendations (owner can change): text-only commercial scopes only until step 3; audience cap 100 fans per creator; one person may configure and activate as two audited commands; legacy trial scope stays frozen.
+- Decisions still needed: how to fold the engine dashboard into the live dashboard `main` (unrelated histories); whether the backend gets a `main` (fast-forward is possible, history is linear); fan enumeration for history import (no list call verified).
+- R0 for the live trial: ready, needs the owner's yes to deploy.
+
+## 4. Environment inventory (V = listed today)
+**AWS ap-southeast-2** (one box per service; Name tag -> role):
+- `twin-dashboard-prod` (m7i.2xlarge, running): the operator dashboard AND the OnlyFans stack: Plan C pilot (sender, intake, pilot Postgres), OnlyFans worker/API/database, creator sign-in, managed proxy, vault-description workers, FLIRT dashboards, `next-app` and `next-app-of`. Cron: `watchdog-dashboard.sh` every minute and a nightly `docker-prune.sh` (both in `/opt/allieai2-ops/`). `cloudflared` runs here.
+- `twin-bot-prod`, `twin-mtproto-prod`, `closer2me-prod`, `tsocial-app-prod`, `flirt-telegram-bots-prod`, `twin-n8n`: other products, running. `twin-worker` and `numberinbio-server`: stopped. (Not part of the OnlyFans engine.)
+- ECR repos: twin-bot, twin-dashboard, twin-onlyfans, twin-plan-c-pilot, twin-userbot, flirt-dashboard, clone-platform, clone-hub.
+- Pilot restart owner: systemd `plan-c-pilot-supervisor.service` (watchdog) and `plan-c-pilot-sender.service` (bound to the supervisor, `Restart=no` on purpose: a failure stops sending until a human restarts it through the guarded sequence). Operators: Ronan and Claude. Everything else on the box: OWNER TO FILL who restarts it.
+- Pilot files live under `/srv/projects/twin-plan-c-pilot-20261109/` (config/, supervision-v11/, backups/, evidence/).
+
+**Work Server** (DigitalOcean droplet, build/test box; hostname ubuntu-s-4vcpu-8gb-syd1, 4 CPU / 8 GB): hosts many throwaway Postgres test containers (`*-pg-*`), the Clara stack (clara-voice-public, clara-app-*, caddy, tailscale: another project, LIVE, do not disturb), and all `/srv/projects/*` working trees. Cron: daily `clara-private/backup-workspace.py` (17:17 UTC). No snapshot is configured (OWNER TO FILL). Restart owner: manual (OWNER TO FILL for the Clara stack).
+
+**Home servers** (Ronan's): ThinkCentre runs atlas, caddy, sable, x-web, comlink, moxy, vaultwarden (password manager), nextcloud, pihole, rbrain-*, others; Dell runs cortex, n8n, worldmonitor, code-web, ragents. All Twin cron jobs on the ThinkCentre are disabled since 17 Aug. Both are used as spare compute for tests.
+
+**Laptop** (Ronan): cron `scratch/kuma/aws-push.sh` every minute; user timers `overwatch-collector`, `rosai-nightly-poll`, `rosai-backup`, `rosai-nightly`; old promo loops are commented out as STOPPED.
+
+## 5. Where credentials live (names and places only)
+**How to get them:** none of the values are in this repo or this document, on purpose. Ask Ronan, who shares them through the password manager (or on the box itself, in the folders listed below). For offline engine work (code and tests) you need NO production secrets: tests use fake data and a throwaway database.
+- AWS box, `/srv/projects/twin-plan-c-pilot-20261109/config/`: `pilot-database-url`, `pilot-worker-database-url`, `pilot-worker-fansapi.env`, `fansapi.env`, `openrouter.key`, `pilot-worker-openrouter-reused-v1.key` (an OpenRouter key shared with other traffic), `pilot-worker-webhook-secret`, `pilot-connection-encryption-key`, `pilot-connection-token`, `pg-bootstrap-password`, `pg-runtime-password`, `ecr-pull/`.
+- Laptop: `~/twin/twin-testbot/.env` (Gmail SMTP user and app password, a partner's email), `~/onlyfans2/.env` (FansAPI key), `~/twin/of-qa/secrets/fan-session.json` (the test fan's OnlyFans session cookies), `~/.config/supabase/.env` (management token), `~/.config/duoplus/.env`, `~/.aws/credentials`, `~/.ssh/` (`id_ed25519`, `twin-n8n.pem`), GitHub CLI login (keyring), `~/twin/API-KEYS-2026-11-06.txt`.
+- GitHub Actions secrets (names): twin-dashboard: `FLIRT_SUPABASE_SERVICE_KEY`, `TWIN_STAGING_OPENROUTER_API_KEY`, `TWIN_STAGING_SUPABASE_SERVICE_KEY`; twin-bot: `FLIRT_SUPABASE_SERVICE_KEY`; twin-onlyfans-backend: none listed.
+- Password manager: a Vaultwarden instance on the ThinkCentre (what it holds: OWNER TO FILL).
+- RISK to fix: `~/twin/API-KEYS-2026-11-06.txt` is a plaintext list of keys in a normal folder. Move into the password manager and rotate if it has been shared or synced. Also check whether any key was ever pasted into chats (OWNER TO FILL).
+
+## 6. Deploy and rollback, as actually done
+**A. OnlyFans live trial (Plan C pilot) (V from the host scripts, steps from notes)**
+- Image: `twin-plan-c-pilot` in ECR, pinned by sha256 digest inside `supervision-v11/start-pilot-sender.sh`. No git-triggered deploy.
+- Deploy: run the offline qualification on the exact image first; set the scope to stopped (`pilot_scope.set_status`); update the pins (keep the old files as `*.pre-<sha>`); start `plan-c-pilot-sender` (its `ExecStartPre` runs `preflight-sender.py`, which refuses if anything is unready); then set the scope active and watch the supervisor.
+- Stop: `set_status` stopped, or `systemctl stop plan-c-pilot-sender`. Rollback: restore the previous pins and image digest, restart through the same guarded sequence.
+- Database: dumps with sha256 files in `backups/`. A migration changes the schema: restore only through a compatible forward path.
+- DO NOT: deploy the unfinished commercial branch or schema 0130+ to the trial; restore an older database over newer sends or purchases; run two builders; raise budgets or caps without the owner's written approval; send messages from tests; deploy without Ronan's explicit yes; touch the old production database.
+**B. Dashboard and bots (from the owner's repo notes; NOT re-verified today)**
+- Push to `main` builds the image in GitHub Actions; the box pulls it by digest through AWS SSM. `.md`/`.txt`/`archive` changes do not deploy. `twin-ops/deploy.sh <target> --dry-run` is the manual fallback, `rollback.sh` the undo. One deployer at a time; migrations belong to the owner of `twin-bot`.
+- DO NOT: push unreviewed work to `twin-dashboard` main; point anything at the old paying-users Supabase project (use only the "Allie AI New" project).
+
+## 7. Third-party accounts (billing owner: OWNER TO FILL for each)
+FansAPI (OnlyFans API provider, credits-based; trial pricing noted to end about 13 Nov), OpenRouter (model calls; upstream pinned to one provider), AWS, DigitalOcean (Work Server droplet), GitHub org twinagency, Supabase (projects: "Allie AI New" only), Google Workspace (company mailbox used by the Gmail connector), Gmail account used for SMTP, ElevenLabs, Deepgram, DuoPlus, IPRoyal (proxies), Sendblue (Closer2), Cloudflare (tunnel), Telegram bot tokens, domain registrar (OWNER TO FILL). The billing email owner for each is not recorded anywhere I could verify.
+
+Everything else (how to run locally, where logs are, architecture) can be derived from the code.

@@ -1,0 +1,7 @@
+# Close a window (paste after STATE Summary says all lanes done)
+
+1. **Deploy** (section 05 rules): one gated deploy of `<main>` to each target, in order of blast radius (staging/client first). For every shipped behaviour add a `WATCH.md` line `- <id> | added <date> | expires +3d | <check> | <PR url>` so the 4h sweep watches it; no fitting check → add one in the same PR.
+2. **Thermo pass** (closing count, `docs/thermo-pass-W<N>.md`): table per lane: PR, merge sha, found, open. Counting rule: **found** = findings the PR body states with a number (R1 + R2-new, overlap once; `?` if none); **open** = top-level bullets under its "Open findings". Script: `python3 tools/open_findings.py --tsv --prs <a>-<b> --heads '^rwl/W<N>-'` (needs `gh`, run in the repo).
+3. **Triage** (`docs/open-findings-triage-W<N>.md`): dedupe (script merges Jaccard ≥0.8; mark manual dups), drop fixed/gone, then PICK ≤6 groups, bug/data-risk first (lose data, send twice/wrong recipient, race, 5xx, cross-tenant write), then structure that blocks review; everything else one word: polish / test-only / cosmetic / speculative / docs / perf-paused / owner-decided. Picks become next window's first lanes or standalone PRs.
+4. **Learn** (`docs/learn/W<N>.md`, ≤10 lines): lanes, found/open totals, biggest class of defect, what to add to REVIEW.md (promote only lessons that generalize), what to change in COMMON for W<N+1>.
+5. Set next window base = this head sha. `Ship:` line.

@@ -28,6 +28,7 @@ from db.onlyfans_fans_intake_models import OfFansEvidence, OfFansLink, OfFansPro
 from onlyfans_runtime.store import Event, Refused, utcnow
 from transaction_contract import strip_html
 from . import payment_evidence as ev
+from . import message_facts
 from .intake import _message, _nonfinite, _unique_object
 from .webhooks import verify_signature
 
@@ -554,6 +555,7 @@ class FansEventIntake:
         _, outcome = ev.add(s, connection.account_id, dedupe=f'unlock:{message_id}', kind='unlock', source='webhook',
             event_key=raw.event_key, fan_id=fan_id, message_id=message_id, amount=ev.cents(payload.get('amountGross')),
             occurred=ev.stamp(payload.get('createdAt')), raw_sha256=raw.payload_sha256, now=now)
+        message_facts.mark_opened(s, connection.account_id, fan_id, message_id, ev.stamp(payload.get('createdAt')))
         self._drive_after(connection.account_id, fan_id, after)
         return ('held', 'conflicting_duplicate') if outcome == 'conflict' else ('projected', 'unlock_' + outcome)
 
@@ -604,6 +606,7 @@ class FansEventIntake:
             raise Refused('sent message recipient is missing')
         fan_id = ev.numeric(to_user.get('id'))
         message_id = ev.numeric(payload.get('id'))
+        self._card_fact(s, connection.account_id, fan_id, message_id, payload, now)
         if payload.get('isFromQueue') is True:
             # A scheduled/mass send is not a reply in this chat, so it is not takeover evidence. But a queued send that
             # reached a fan the engine owns is a competing writer the local fence cannot stop (it was queued at the
@@ -636,6 +639,19 @@ class FansEventIntake:
         row.reason = 'awaiting_classification' if outcome == 'new' else row.reason
         after.append(lambda: self.classify_sent(account, fan_id))
         return 'projected', 'sent_' + outcome
+
+    @staticmethod
+    def _card_fact(s, account, fan_id, message_id, payload, now):
+        """Best effort: a card we cannot read simply has no fact, which ownership treats as unknown."""
+        try:
+            price = payload.get('price')
+            cents = 0 if price in (None, 0) or type(price) is bool else ev.cents(price)
+            media = tuple(ev.numeric(m.get('id')) for m in payload.get('media') or () if type(m) is dict)
+            text = payload.get('text') if type(payload.get('text')) is str else ''
+            event = Event(fan_id, message_id, payload['createdAt'], 'out', text, media, cents).normalized()
+            message_facts.record(s, account, fan_id, message_id, payload, event, via='webhook', now=now)
+        except (Refused, KeyError, TypeError, ValueError):
+            return
 
     # ------------------------------------------------------------ re-drivable
     def drive(self, account, fan_id, *, fan_scoped=False):
@@ -860,6 +876,8 @@ class FansEventIntake:
                 detail.append(recorded)
             if recorded == 'backpressure':
                 raise IntakeBackpressure('outgoing history requires intake capacity before completion')
+            # First-seen card terms (previews, lock, queue origin, opening) before normalisation discards them.
+            message_facts.record(s, account, fan_id, message_id, item, event, via='history', now=now)
             digest = ev.digest(item)
             price = item.get('price')
             if item.get('isOpened') is True and price not in (None, 0) and float(price) > 0:

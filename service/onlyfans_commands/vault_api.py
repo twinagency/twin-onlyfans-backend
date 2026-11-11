@@ -232,6 +232,20 @@ async def message_media(request: Request, account_id: str, fan_id: str, message_
         return refuse("message_media_unavailable", 503, "That message attachment could not be read.")
 
 
+@router.get("/accounts/{account_id}/vault/category-review/{folder_id}")
+async def category_review(request: Request, account_id: str, folder_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse): return context
+    try:
+        if set(request.query_params)!={"mediaIds"} or len(request.query_params.getlist("mediaIds"))!=1:
+            raise InvalidVault("Choose the exact media to review.")
+        from onlyfans_runtime.vault_editing import get_category_review
+        result = await asyncio.to_thread(get_category_review,*context,account_id,folder_id,
+                                        request.query_params["mediaIds"].split(","))
+        return response({"ok":True,"accountId":account_id,"reviewedState":result})
+    except Exception as exc:return failure(exc)
+
+
 @router.post("/accounts/{account_id}/vault/category-drafts")
 async def category_drafts(request: Request, account_id: str):
     context = authenticate(request, account_id)

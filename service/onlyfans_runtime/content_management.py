@@ -164,6 +164,9 @@ def _v2_guard(acknowledge_override):
             if type(description) is not str or not description.strip():
                 raise InvalidContent("Approve a factual description before enabling this item.")
             _media_ready(session, row)
+            from db.onlyfans_models import OfRuntime
+            from .vault_editing import assert_category_review
+            assert_category_review(session, session.get(OfRuntime, row.account_id), row)
     return guard
 
 

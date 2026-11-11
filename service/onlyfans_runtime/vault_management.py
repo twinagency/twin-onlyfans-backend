@@ -418,19 +418,25 @@ def create_category_drafts(store, tenant, account, *, category, command_key, act
     _identity(command_key, actor)
     if actor.startswith('worker-import:'):
         raise Refused('agency pricing permission required')
-    keys = {'folderId', 'priceCents', 'classificationConfirmed', 'products'}
+    keys = {'folderId', 'priceCents', 'classificationConfirmed', 'rightsConfirmed', 'reviewedState', 'products'}
     if type(category) is not dict or set(category) != keys:
         raise InvalidVault('Provide one category and its explicit agency price.')
     folder_id = category['folderId']
     if (type(folder_id) is not int or not 0 < folder_id < 2**31
-            or category['classificationConfirmed'] is not True
+            or category['classificationConfirmed'] is not True or category['rightsConfirmed'] is not True
             or type(category['products']) is not list or not 1 <= len(category['products']) <= 25):
         raise InvalidVault('Confirm the category and select 1-25 product drafts.')
     products = []
     for value in category['products']:
-        if type(value) is not dict or set(value) != {'label', 'description', 'mediaIds', 'previewMediaIds'}:
+        if type(value) is not dict or set(value) not in ({'label', 'description', 'mediaIds', 'previewMediaIds'},
+                {'label', 'description', 'mediaIds', 'previewMediaIds', 'approvedTotalCents'}):
             raise InvalidVault('Each draft needs reviewed text and exact media references.')
-        products.append(validate_product({**value, 'priceCents': category['priceCents'], 'enabled': False}))
+        if type(value.get('mediaIds')) is list and len(value['mediaIds']) > 1 and 'approvedTotalCents' not in value:
+            raise InvalidVault('A bundle needs an explicitly approved total, separate from the category single price.')
+        fields = {key: val for key, val in value.items() if key != 'approvedTotalCents'}
+        products.append(validate_product({**fields, 'priceCents': value.get('approvedTotalCents', category['priceCents']), 'enabled': False}))
+    if type(category['priceCents']) is not int or not 300 <= category['priceCents'] <= 20000:
+        raise InvalidVault('Set an explicit category single price.')
     hashes = [digest(sorted(int(mid) for mid in product['mediaIds'])) for product in products]
     if len(set(hashes)) != len(hashes):
         raise InvalidVault('A product may occur only once in a category batch.')
@@ -448,10 +454,12 @@ def create_category_drafts(store, tenant, account, *, category, command_key, act
             VaultFolder.account_id == account, VaultFolder.deleted_at.is_(None)).with_for_update(read=True))
         if folder is None:
             raise Refused('vault folder unavailable')
-        if folder.name.strip().casefold() in {'miscellaneous', 'misc', 'unknown', 'uncategorized', 'unclassified', 'unsure'}:
-            raise Refused('uncertain category needs classification before pricing')
-        connection = _connection(session, runtime)
+        from .vault_editing import category_review_state
         all_media = {int(mid) for product in products for mid in product['mediaIds']}
+        reviewed = category_review_state(session, account, folder_id, sorted(all_media))
+        if category['reviewedState'] != reviewed:
+            raise Refused('reviewed category or asset changed')
+        connection = _connection(session, runtime)
         members = set(session.scalars(select(VaultFolderItem.media_id).where(
             VaultFolderItem.account_id == account, VaultFolderItem.folder_id == folder_id,
             VaultFolderItem.media_id.in_(all_media)).with_for_update(read=True)))
@@ -468,7 +476,9 @@ def create_category_drafts(store, tenant, account, *, category, command_key, act
                 'categoryName': folder.name, 'item': editable(row, 0)}
             session.add(OfVaultProductCreate(account_id=account, command_key=key, item_id=row.id,
                 request_hash=fingerprint, media_hash=digest(sorted(media)), actor=actor,
-                product_json=canonical({**product, 'agencyCategoryId': str(folder.id)}),
+                product_json=canonical({**product, 'agencyCategoryId': str(folder.id),
+                    'classificationConfirmed': True, 'rightsConfirmed': True,
+                    'reviewedState': {**reviewed, 'assets': {mid: reviewed['assets'][mid] for mid in product['mediaIds']}}}),
                 acknowledgement_json=canonical(acknowledgement), created_at=row.created_at))
             result.append(acknowledgement)
         return {'items': result}

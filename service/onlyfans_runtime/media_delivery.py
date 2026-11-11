@@ -36,6 +36,9 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
             or type(item.description_for_ai) is not str or not item.description_for_ai.strip()
             or len(item.description_for_ai.encode()) > 2000):
         raise Refused("approved catalogue terms unavailable")
+    from db.onlyfans_models import OfRuntime
+    from .vault_editing import assert_category_review
+    assert_category_review(session, session.get(OfRuntime, account_id), item)
     from automations._price_limits import OF_PRICE_FLOOR_CENTS, OF_PRICE_MAX_CENTS
     price = item.price_cents if price_cents is None else price_cents
     if (type(price) is not int or type(item.price_cents) is not int

@@ -68,6 +68,65 @@ def folder_view(s,row):
         "fingerprint":digest([row.account_id,row.id,row.name,row.deleted_at,ids])}
 
 
+def category_review_state(session, account, folder_id, media_ids):
+    """Selected versions; unrelated membership changes do not invalidate review.
+
+    Fingerprints bind evidence/corrections, not factual accuracy or permission.
+    Explicit agency attestations are retained in the existing product audit.
+    """
+    folder = _folder(session, account, folder_reference(str(folder_id)))
+    from vault_auto_folders import OWNER_PREFIX
+    uncertain = {"miscellaneous", "misc", "unknown", "uncategorized", "uncategorised",
+                 "unclassified", "unsure", "unsorted"}
+    if (folder.name.strip().casefold() in uncertain or
+            folder.created_by in {OWNER_PREFIX+"pending", OWNER_PREFIX+"uncategorised"}):
+        raise Refused("uncertain category needs classification before pricing")
+    ids = sorted(media_reference(str(mid)) for mid in media_ids)
+    if not ids or len(ids)>500 or len(set(ids))!=len(ids):
+        raise InvalidVault("Select distinct reviewed asset references.")
+    members=set(session.scalars(select(VaultFolderItem.media_id).where(
+        VaultFolderItem.account_id==account, VaultFolderItem.folder_id==folder.id,
+        VaultFolderItem.media_id.in_(ids)).with_for_update(read=True)))
+    if members!=set(ids): raise Refused("category membership changed")
+    from db.onlyfans_models import OfRuntime
+    runtime=session.get(OfRuntime,account)
+    return {"version":"agency-category-review.v1", "bindingId":runtime.binding_id, "categoryFingerprint":digest([
+        folder.account_id,folder.id,folder.name,folder.deleted_at,folder.created_by]),
+        "assets":{str(mid):asset_view(_asset(session,account,mid))["fingerprint"] for mid in ids}}
+
+
+def get_category_review(store,tenant,account,folder_id,media_ids):
+    with Session(store.engine) as session,session.begin():
+        store._runtime(session,tenant,account)
+        return category_review_state(session,account,folder_id,media_ids)
+
+
+def assert_category_review(session,runtime,item):
+    """The existing immutable product-create audit owns reviewed versions."""
+    from db.onlyfans_vault_models import OfVaultProductCreate
+    record=session.scalar(select(OfVaultProductCreate).where(
+        OfVaultProductCreate.account_id==item.account_id,OfVaultProductCreate.item_id==item.id))
+    if record is None:return
+    saved=json.loads(record.product_json)
+    if "agencyCategoryId" not in saved:return
+    reviewed=saved.get("reviewedState")
+    if (runtime is None or saved.get("classificationConfirmed") is not True or
+            saved.get("rightsConfirmed") is not True or type(reviewed) is not dict):
+        raise Refused("category product needs reviewed classification and rights")
+    current=category_review_state(session,runtime.account_id,saved["agencyCategoryId"],
+                                  json.loads(item.media_ids))
+    if current!=reviewed:raise Refused("reviewed category or asset changed")
+    from db.onlyfans_vault_models import OfVaultObservation,OfVaultSyncJob
+    from .vault_management import _connection,_ready
+    connection=_connection(session,runtime)
+    for mid in json.loads(item.media_ids):
+        row=session.get(VaultItem,(runtime.account_id,mid))
+        observation=session.get(OfVaultObservation,(runtime.account_id,mid))
+        job=session.get(OfVaultSyncJob,(runtime.account_id,observation.job_id)) if observation else None
+        if row is None or not _ready(row,observation,job,connection,runtime.binding_id)[0]:
+            raise Refused("reviewed media readiness unavailable")
+
+
 def get_folders(store,tenant,account,folder_id=None,*,include_covers=True):
     if type(include_covers) is not bool:
         raise InvalidVault("Use an explicit folder cover option.")

@@ -1,6 +1,11 @@
 # claude-progress.txt — twin-onlyfans-backend. Newest first. Every session: run ./init.sh first (verify-first smoke), read this, then features.json.
 # NOTE: init.sh uses container twin-of-test-pg :55432 — if a local stack already runs on it, do not re-run init.sh against it; use a separate throwaway PG (e.g. :55433).
 
+2026-11-11 · steps 3-5 · branches jaka/review-rules-20261111 (234155de), jaka/rules-tests-20261111 (c2c09b01 at e8e90954), RISKS D1-D15 on jaka/takeover-20261111
+- REVIEW.md tightened (62 lines), approved by orchestrator after Fable + DA x3; smoke: 5/6 lenses ran, DeepSeek unavailable; findings .scratch/review-smoke/FINDINGS.md.
+- W1 cut: 8 directory lanes, review-only, .scratch/rwl-W1/ (not launched).
+- Rule tests: 11 files, 65 pass / 18 red (tips, denylist, retained vault single, stale head pins). features.json 3/16 pass.
+
 2026-11-11 · step 2 takeover (section 00) · branch jaka/takeover-20261111
 - docs/TAKEOVER-20261111.md, docs/RISKS.md, features.json (15 rows = TEAM-BRIEFING §7, all passes=false), this file. init.sh kept; added ops/plan-c-supervision to its printed PYTHONPATH.
 - Next: RUN step 3 (REVIEW.md tighten + smoke). Open: owner OK to read origin/handover/20261111 docs/handover/context/**.

@@ -104,11 +104,13 @@ class World:
 
     def calls(self):
         with Session(self.w.database[1]) as s:
-            return list(s.scalars(select(OfEngineModelCall).order_by(OfEngineModelCall.created_at, OfEngineModelCall.seq)))
+            return list(s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == ACCOUNT)
+                .order_by(OfEngineModelCall.created_at, OfEngineModelCall.seq)))
 
     def request(self, source):
         with Session(self.w.database[1]) as s:
-            r = s.scalar(select(OfEngineRequest).where(OfEngineRequest.source_message_id == source))
+            r = s.scalar(select(OfEngineRequest).where(OfEngineRequest.account_id == ACCOUNT,
+                                                      OfEngineRequest.source_message_id == source))
             return None if r is None else (r.status, r.next_step, r.handover_target)
 
     def out_messages(self):

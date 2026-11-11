@@ -1,0 +1,112 @@
+{
+  "repo": "twin-onlyfans-backend",
+  "source": "handover/TEAM-BRIEFING.md §7",
+  "rule": "agents flip only `passes`; red first, then green",
+  "features": [
+    {
+      "id": "R01-send-authority",
+      "rule": "nothing sends unless every safety check passes; stop/takeover/no-contact/unknown-delivery/budget always win",
+      "test": "send-authority unit + slop kill-switch: flip each hold mid-run -> 0 sends in 5 s",
+      "where": "service/tests + slop/",
+      "passes": false
+    },
+    {
+      "id": "R02-ledger-unknown-no-retry",
+      "rule": "unknown ledger state never retried, cost stays reserved",
+      "test": "unit on model_ledger: inject unknown -> no second call, reservation intact; slop invariant unknown_retries == 0",
+      "where": "service/tests + slop/",
+      "passes": false
+    },
+    {
+      "id": "R03-released-retry-matrix",
+      "rule": "released refusal retries <=2 then human; 4xx -> human at once",
+      "test": "unit matrix 429/408/5xx/not_sent/400/401/403/404/422 -> expected path",
+      "where": "service/tests",
+      "passes": false
+    },
+    {
+      "id": "R04-inbound-supersedes",
+      "rule": "new inbound supersedes unsent work",
+      "test": "slop inbox-storm variant: second message mid-draft -> first draft never delivered",
+      "where": "slop/",
+      "passes": false
+    },
+    {
+      "id": "R05-tenant-isolation",
+      "rule": "same fan/media id in two accounts shares nothing",
+      "test": "slop seed two accounts with same fan + media id -> no shared context/price/purchase/job rows (SQL)",
+      "where": "slop/",
+      "passes": false
+    },
+    {
+      "id": "R06-migrations-additive",
+      "rule": "migrations additive, downgrade refuses to destroy, head pins consistent",
+      "test": "CI: alembic upgrade head on empty PG + downgrade one step refuses; schema.py HEAD == alembic head; pin test",
+      "where": "service/tests + CI",
+      "passes": false
+    },
+    {
+      "id": "R07-trial-le-0129b",
+      "rule": "trial stays <=0129b",
+      "test": "check: plan-c-* branch migration head <= 0129b",
+      "where": "check script",
+      "passes": false
+    },
+    {
+      "id": "R08-manual-prices-only",
+      "rule": "manual category prices only; uncertain -> Miscellaneous, unsellable",
+      "test": "unit: no price without operator row; unknown category -> unsellable",
+      "where": "service/tests",
+      "passes": false
+    },
+    {
+      "id": "R09-window-not-ownership",
+      "rule": "1,000-item window != ownership; unknown ownership != unowned",
+      "test": "unit: item outside window with purchase evidence stays owned; missing evidence -> unknown",
+      "where": "service/tests",
+      "passes": false
+    },
+    {
+      "id": "R10-card-builder-matrix",
+      "rule": "singles + approved bundles only; bundle excluded if any paid item owned; no invented discounts/stacking/repricing of sent cards",
+      "test": "unit matrix on card builder; slop invariant price_changes_after_send == 0",
+      "where": "service/tests + slop/",
+      "passes": false
+    },
+    {
+      "id": "R11-tips-never-requested",
+      "rule": "tips acknowledged only, never requested",
+      "test": "reply validator: outbound tip-request text -> rejected",
+      "where": "service/tests",
+      "passes": false
+    },
+    {
+      "id": "R12-staff-is-context",
+      "rule": "staff messages are context, never approval/purchase; new context cancels stale AI work",
+      "test": "unit: staff message -> no approval row; pending AI draft cancelled",
+      "where": "service/tests",
+      "passes": false
+    },
+    {
+      "id": "R13-validator-denylist",
+      "rule": "no customs, physical goods, external access, timed packages",
+      "test": "validator denylist test",
+      "where": "service/tests",
+      "passes": false
+    },
+    {
+      "id": "R14-no-creds-in-logs",
+      "rule": "no OF credentials/cookies in logs or fixtures",
+      "test": "gitleaks + log-scan check (11h sweep)",
+      "where": "check script",
+      "passes": false
+    },
+    {
+      "id": "R15-test-guard",
+      "rule": "no assertion weakened silently",
+      "test": "scripts/ci/test-guard.sh (section 10)",
+      "where": "scripts/ci",
+      "passes": false
+    }
+  ]
+}

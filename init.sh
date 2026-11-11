@@ -31,6 +31,6 @@ cat <<EOT
 
 Test env (run from service/tests):
   . .venv/bin/activate; cd service/tests
-  ONLYFANS_TEST_PG_URL=${PG_URL} ONLYFANS_TEST_PG_EMPTY_TEMPLATE=1 PYTHONPATH=../..:..:. nice -n 10 python -m pytest -x -q <file>
+  ONLYFANS_TEST_PG_URL=${PG_URL} ONLYFANS_TEST_PG_EMPTY_TEMPLATE=1 PYTHONPATH=../..:..:.:../../ops/plan-c-supervision nice -n 10 python -m pytest -x -q <file>
 API boot (offline, dummy tokens): see docs/learn/local-run-backend.md
 EOT

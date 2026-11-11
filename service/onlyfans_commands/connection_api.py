@@ -108,6 +108,28 @@ async def command(request:Request,account_id:str):
     except Exception as exc:return failure(exc)
 
 
+@router.post('/accounts/{account_id}/capture-from-curl')
+async def capture_from_curl(request:Request,account_id:str):
+    """Derive a connection capture + X-Hash + owner from a pasted DevTools curl.
+
+    Pure derivation: writes nothing. The dashboard runs the normal save + verify
+    with the returned material, so this reuses every existing credential path."""
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        body=await read_json(request)
+        if not {'curl'}<=set(body) or not set(body)<={'curl','staticParamOverride'} or type(body['curl'])is not str:raise ValueError()
+        if 'staticParamOverride' in body and body['staticParamOverride'] is not None and type(body['staticParamOverride'])is not str:raise ValueError()
+    except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid curl capture request.'},400)
+    try:
+        import session_bootstrap
+        result=await asyncio.to_thread(session_bootstrap.build_connection_capture,body['curl'],static_param_override=body.get('staticParamOverride'))
+        return response({'ok':True,'capture':result['capture'],'xHash':result['xHash'],'ownerId':result['ownerId']})
+    except session_bootstrap.CurlParseError as exc:
+        return response({'ok':False,'code':'invalid_request','error':f'Could not read that curl: {exc}'},400)
+    except Exception:
+        return response({'ok':False,'code':'outcome_unconfirmed','error':'The curl could not be converted to a capture. Copy a fresh signed request and try again.'},502)
+
 @router.get('/enrollments')
 async def enrollments(request:Request):
     context=authenticate(request)

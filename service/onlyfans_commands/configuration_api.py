@@ -226,3 +226,77 @@ async def commercial_write(request:Request,account_id:str):
         return refuse("commercial_conflict",409,"The commercial scope command was refused. Refresh and check the prepared connection, disabled runtime and limits.")
     except Exception:return refuse("outcome_unconfirmed",500,"The outcome is unconfirmed. Retry the same commercial scope request.")
     return response({"ok":True,"accountId":account_id,"commandKey":body["commandKey"],"commercial":data})
+
+
+# ------------------------------------------------------------------ history coverage and ownership (0136)
+@router.get("/accounts/{account_id}/history-coverage")
+async def history_coverage(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from fans_api_adapter.history_import import coverage_view
+    try:data=await asyncio.to_thread(coverage_view,store,tenant,account_id)
+    except Refused:return refuse("not_available",404,"That preparation account is unavailable.")
+    except Exception:return refuse("history_unavailable",503,"History coverage could not be read.")
+    return response({"ok":True,"accountId":account_id,"coverage":data})
+
+@router.get("/accounts/{account_id}/ownership/{fan_id}")
+async def history_ownership(request:Request,account_id:str,fan_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    try:
+        query=request.query_params
+        raw=query.get("mediaIds","")
+        fan=int(fan_id) if re.fullmatch(r"[1-9][0-9]{0,18}",fan_id) and int(fan_id)<2**63 else None
+        media=[int(v) for v in raw.split(",")] if re.fullmatch(r"[1-9][0-9]{0,18}(,[1-9][0-9]{0,18}){0,49}",raw) else None
+        if fan is None or media is None or len(query.multi_items())!=1 or len(set(media))!=len(media) or any(m>=2**63 for m in media):raise ValueError()
+    except (ValueError,TypeError):
+        return refuse("invalid_request",400,"Invalid ownership request.")
+    from fans_api_adapter.history_import import fan_state
+    from conversation_engine.history_ownership import derive
+    from sqlalchemy.orm import Session
+    def read():
+        with Session(store.engine) as s:
+            store._runtime(s,tenant,account_id,lock=False)
+            return fan_state(s,account_id,fan),derive(s,account_id,fan,media)
+    try:coverage,states=await asyncio.to_thread(read)
+    except Refused:return refuse("not_available",404,"That preparation account is unavailable.")
+    except Exception:return refuse("history_unavailable",503,"Ownership could not be read.")
+    return response({"ok":True,"accountId":account_id,"ownership":{"fan":{"fanId":str(fan),**coverage},
+        "media":[{"mediaId":m,"state":v.state,"asOf":v.as_of,"reasons":list(v.reasons),"evidence":list(v.evidence)} for m,v in sorted(states.items())]}})
+
+@router.post("/accounts/{account_id}/history-import")
+async def history_import_write(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from fans_api_adapter import history_import
+    from onlyfans_read.agency_scope import actor_allowed
+    try:
+        if request.headers.get("content-type","").split(";")[0].strip().lower()!="application/json":raise ValueError()
+        raw=bytearray()
+        async for part in request.stream():
+            if len(raw)+len(part)>32768:return refuse("request_too_large",413,"The history import request is too large.")
+            raw.extend(part)
+        body=json.loads(raw,object_pairs_hook=unique_keys)
+        common={"action","commandKey","actor","reason"}
+        shapes={"configure":common|{"expectedRevision","spec"},"retry-gap":common|{"gapId"},"dismiss-gap":common|{"gapId"}}
+        if type(body) is not dict or body.get("action") not in shapes or set(body)!=shapes[body["action"]]:raise ValueError()
+        if type(body["actor"]) is not str:raise ValueError()
+        if not actor_allowed(body["actor"]):return refuse("forbidden",403,"History import management permission is required.")
+    except (ValueError,TypeError,UnicodeError,RecursionError):
+        return refuse("invalid_request",400,"Invalid history import request.")
+    options={"command_key":body["commandKey"],"actor":body["actor"],"reason":body["reason"]}
+    try:
+        if body["action"]=="configure":
+            data=await asyncio.to_thread(history_import.configure,store,tenant,account_id,body["spec"],expected_revision=body["expectedRevision"],**options)
+        elif body["action"]=="retry-gap":
+            data=await asyncio.to_thread(history_import.retry_gap,store,tenant,account_id,body["gapId"],**options)
+        else:
+            data=await asyncio.to_thread(history_import.dismiss_row_gap,store,tenant,account_id,body["gapId"],**options)
+    except Refused as exc:
+        if str(exc)=="scope unavailable":return refuse("not_available",404,"That preparation account is unavailable.")
+        return refuse("history_import_refused",409,"The history import request was refused. Refresh and check the preparation, budgets and gap.")
+    except Exception:return refuse("outcome_unconfirmed",500,"The outcome is unconfirmed. Retry the same history import request.")
+    return response({"ok":True,"accountId":account_id,"commandKey":body["commandKey"],"history":data})

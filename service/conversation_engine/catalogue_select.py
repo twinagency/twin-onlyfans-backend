@@ -159,3 +159,14 @@ def _browse(s, runtime, kinds, owned):
                           AND m.revision = t.revision AND m.media_id = ANY(CAST(:owned AS bigint[])))
         ORDER BY c.id LIMIT :n"""
     return [(r[0], True) for r in s.execute(text(sql), {'a': runtime.account_id, 'kinds': kinds, 'owned': sorted(owned), 'n': WINDOW + 1}).all()]
+
+
+def price_information(catalogue_view, source_body):
+    """Informational prices for a price question, from the fan-scoped shortlist only (max 3). Standard amounts only: a discount is
+    never volunteered, it exists only when the fan explicitly asks for a cheaper option."""
+    from .writer_context import is_price_question
+    if not is_price_question(source_body):
+        return []
+    items = [i for i in (catalogue_view or {}).get('items', []) if isinstance(i, dict) and i.get('productKind')][:3]
+    return [{'itemId': i['itemId'], 'label': i['label'], 'priceCents': i['standardCents'], 'currency': 'USD',
+             'kind': i['productKind'], 'counts': i['counts']} for i in items]

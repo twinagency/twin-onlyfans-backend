@@ -22,3 +22,11 @@ def commercial_scope(s, runtime):
         return False
     return s.scalar(select(OfCatalogueTerms.item_id).where(OfCatalogueTerms.account_id == runtime.account_id,
                                                            OfCatalogueTerms.status == 'approved').limit(1)) is not None
+
+
+TERMS_MODE = 'commercial.v1'
+
+
+def terms_mode_view(s, runtime):
+    """{'terms_mode': 'commercial.v1'} for commercial accounts, {} otherwise (legacy snapshots gain no key and keep their digest)."""
+    return {'terms_mode': TERMS_MODE} if commercial_scope(s, runtime) else {}

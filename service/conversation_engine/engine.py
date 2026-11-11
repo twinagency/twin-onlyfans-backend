@@ -130,14 +130,22 @@ def _offer_grants(s, runtime, fan_id):
             continue
         item = terms['item']
         kinds = [f.get('kind') for f in terms.get('files', [])]
-        out.append({'grantId': grant.grant_id, 'itemId': str(grant.item_id),
+        entry = {'grantId': grant.grant_id, 'itemId': str(grant.item_id),
                     'label': item.get('label') or item.get('description_for_ai'),
                     'priceCents': terms['price_cents'], 'currency': 'USD',
                     'description': item.get('description_for_ai'), 'mediaCount': len(terms['media_ids']),
                     # Payload facts: the only quantities any text may state about this card's contents.
                     'media': {'total': len(terms['media_ids']),
                               'pictures': sum(1 for k in kinds if k in {'image', 'photo'}),
-                              'videos': sum(1 for k in kinds if k == 'video')}})
+                              'videos': sum(1 for k in kinds if k == 'video')}}
+        from onlyfans_runtime.catalogue_terms import commercial_facts
+        facts = commercial_facts(terms)
+        if facts is not None:
+            # The approved-terms facts every prompt, validator and claim check reads; legacy cards gain no keys.
+            entry.update({'kind': facts['kind'], 'variant': facts['variant'], 'standardCents': facts['standardCents'],
+                          'discountApproved': facts['discountApproved'], 'isBundle': facts['isBundle'],
+                          'productCount': facts['productCount'], 'counts': facts['counts']})
+        out.append(entry)
     return out
 
 
@@ -473,7 +481,11 @@ class EngineService:
                 if type(self.model).__name__ == 'ModelRuntime':
                     # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
                     snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)
-                    snapshot['price_information'] = _price_information(s, runtime, message.body)
+                    from .catalogue_select import price_information as commercial_price_information
+                    from .commercial_scope import terms_mode_view
+                    snapshot['price_information'] = (_price_information(s, runtime, message.body)
+                                                     or commercial_price_information(catalogue_view, message.body))
+                    snapshot.update(terms_mode_view(s, runtime))
                     snapshot['verified_purchases'] = _verified_purchases(s, runtime, fan_id)
                 # JOURNEY-HOOK-1 (A7): deterministic journey facts for the model; no-op unless the account is 'fansapi'.
                 from .journey import journey_context

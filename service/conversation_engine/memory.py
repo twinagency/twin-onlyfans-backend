@@ -47,6 +47,9 @@ def references_fingerprint(account, policy, offer_view, catalogue_view, *, s=Non
             from .engine import _price_information
             runtime = s.get(OfRuntime, account)
             data['price_information'] = _price_information(s, runtime, source_body) if runtime is not None else []
+            if not data['price_information']:
+                from .catalogue_select import price_information as commercial_price_information
+                data['price_information'] = commercial_price_information(catalogue_view, source_body)
 
     canonical = json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str)
     return sha256(canonical.encode()).hexdigest()

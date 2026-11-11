@@ -316,6 +316,12 @@ def pick_offer(snapshot, fan_text):
     words = set(re.findall(r'[a-z0-9]+', fan_text.lower()))
     video = bool(words & {'video', 'videos', 'vid', 'vids', 'clip', 'clips'})
     picture = bool(words & {'photo', 'photos', 'picture', 'pictures', 'pic', 'pics', 'image', 'images'})
+    bundle = bool(words & {'bundle', 'bundles', 'pack', 'packs', 'collection', 'collections', 'combo'})
+    if bundle and any('isBundle' in g for g in grants):
+        # An explicit bundle request is only ever met by an approved bundle card (commercial cards carry isBundle).
+        grants = [g for g in grants if g.get('isBundle') is True]
+        if not grants:
+            return None
     if video != picture:
         key = 'videos' if video else 'pictures'
         grants = [g for g in grants if isinstance(g.get('media'), dict)

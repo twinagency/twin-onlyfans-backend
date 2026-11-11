@@ -572,10 +572,11 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
             from .engine import _offer_grants, _price_information
             from .offers import match as match_offers
             reference = match_offers(s, runtime, request.fan_id, source.body, include_cards=True)
+            from .commercial_scope import terms_mode_view
             context = JudgeContext(snapshot={'current_message': {'body': source.body},
                 'offer_reference': reference,
                 'price_information': _price_information(s, runtime, source.body),
-                'offer_grants': _offer_grants(s, runtime, request.fan_id)}, profile=profile)
+                'offer_grants': _offer_grants(s, runtime, request.fan_id), **terms_mode_view(s, runtime)}, profile=profile)
             problems = edit_problems([part.strip() for part in parts], context)
             if problems:
                 raise Refused('edited draft violates creator or pilot rules: ' + problems[0])

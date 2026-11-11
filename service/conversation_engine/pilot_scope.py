@@ -47,6 +47,37 @@ def _exact(obj, keys):
         raise Refused('invalid pilot configuration fields')
 
 
+def validated_operator(operator, authorization_mode):
+    """The named operator and its explicit permissions; shared by every scope contract."""
+    _exact(operator, ('actor', 'name', 'permissions'))
+    actor, name, permissions = operator['actor'], operator['name'], operator['permissions']
+    if (type(actor) is not str or not _ACTOR.fullmatch(actor) or type(name) is not str or not name.strip()
+            or name != name.strip() or len(name) > 100 or any(ord(c) < 32 for c in name)
+            or type(permissions) is not list or any(type(value) is not str or value not in _ACTIONS for value in permissions)
+            or len(set(permissions)) != len(permissions)
+            or not {'configure', 'activate', 'stop', 'read'}.issubset(permissions)
+            or authorization_mode == 'supervised' and 'approve' not in permissions):
+        raise Refused('invalid pilot operator permissions')
+    return {'actor':actor, 'name':name, 'permissions':sorted(permissions)}
+
+
+def validated_model(model):
+    """The pinned single-provider model and its spend caps; shared by every scope contract."""
+    _exact(model, ('provider', 'primary', 'upstream', 'reported', 'version', 'daily_cap_microusd', 'creator_cap_microusd'))
+    if (model['provider'] != 'openrouter' or type(model['primary']) is not str or not _MODEL.fullmatch(model['primary'])
+            or model['primary'].startswith('openrouter/auto') or model['primary'].endswith(':auto')
+            or type(model['upstream']) is not str or not re.fullmatch(r'[a-z0-9][a-z0-9._:/-]{0,127}', model['upstream'])
+            or type(model['reported']) is not str or not model['reported'].strip() or model['reported'] != model['reported'].strip()
+            or len(model['reported']) > 64 or any(ord(c) < 32 for c in model['reported'])
+            or type(model['version']) is not str or not _CFG.fullmatch(model['version'])):
+        raise Refused('invalid pilot model configuration')
+    daily = _integer(model['daily_cap_microusd'], 1, 10**12)
+    creator = _integer(model['creator_cap_microusd'], 1, daily)
+    return {'provider':'openrouter', 'primary':model['primary'], 'upstream':model['upstream'],
+            'reported':model['reported'], 'version':model['version'],
+            'daily_cap_microusd':daily, 'creator_cap_microusd':creator}
+
+
 def validate(config):
     required = {'fans', 'product', 'operator', 'model', 'limits', 'qualification', 'authorization_mode', 'creator_profile'}
     if type(config) is not dict or not required <= set(config) <= required | {'offer_coverage', 'delivery_mode'}:
@@ -100,25 +131,8 @@ def validate(config):
         raise Refused('this pilot requires one photo at USD 3.00')
     if not set(preview).issubset(media):
         raise Refused('pilot previews must belong to the product')
-    _exact(operator, ('actor', 'name', 'permissions'))
-    actor, name, permissions = operator['actor'], operator['name'], operator['permissions']
-    if (type(actor) is not str or not _ACTOR.fullmatch(actor) or type(name) is not str or not name.strip()
-            or name != name.strip() or len(name) > 100 or any(ord(c) < 32 for c in name)
-            or type(permissions) is not list or any(type(value) is not str or value not in _ACTIONS for value in permissions)
-            or len(set(permissions)) != len(permissions)
-            or not {'configure', 'activate', 'stop', 'read'}.issubset(permissions)
-            or config['authorization_mode'] == 'supervised' and 'approve' not in permissions):
-        raise Refused('invalid pilot operator permissions')
-    _exact(model, ('provider', 'primary', 'upstream', 'reported', 'version', 'daily_cap_microusd', 'creator_cap_microusd'))
-    if (model['provider'] != 'openrouter' or type(model['primary']) is not str or not _MODEL.fullmatch(model['primary'])
-            or model['primary'].startswith('openrouter/auto') or model['primary'].endswith(':auto')
-            or type(model['upstream']) is not str or not re.fullmatch(r'[a-z0-9][a-z0-9._:/-]{0,127}', model['upstream'])
-            or type(model['reported']) is not str or not model['reported'].strip() or model['reported'] != model['reported'].strip()
-            or len(model['reported']) > 64 or any(ord(c) < 32 for c in model['reported'])
-            or type(model['version']) is not str or not _CFG.fullmatch(model['version'])):
-        raise Refused('invalid pilot model configuration')
-    daily = _integer(model['daily_cap_microusd'], 1, 10**12)
-    creator = _integer(model['creator_cap_microusd'], 1, daily)
+    operator_spec = validated_operator(operator, config['authorization_mode'])
+    model_spec_ = validated_model(model)
     _exact(limits, ('send_units', 'daily_send_units', 'throttle_seconds', 'provider_requests',
                     'provider_credit_budget', 'provider_credits_per_request'))
     send_units = _integer(limits['send_units'], 1, 10000)
@@ -129,10 +143,7 @@ def validate(config):
     per_request = _integer(limits['provider_credits_per_request'], 1, credits)
     result = {'creator_profile':profile_data(profile), 'authorization_mode':config['authorization_mode'], 'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
             'fans':fans, 'product':{'id':item, 'price_cents':price, 'media_ids':media, 'preview_ids':preview},
-            'operator':{'actor':actor, 'name':name, 'permissions':sorted(permissions)},
-            'model':{'provider':'openrouter', 'primary':model['primary'], 'upstream':model['upstream'],
-                     'reported':model['reported'], 'version':model['version'],
-                     'daily_cap_microusd':daily, 'creator_cap_microusd':creator},
+            'operator':operator_spec, 'model':model_spec_,
             'limits':{'send_units':send_units, 'daily_send_units':daily_units, 'throttle_seconds':throttle,
                       'provider_requests':requests, 'provider_credit_budget':credits,
                       'provider_credits_per_request':per_request}}

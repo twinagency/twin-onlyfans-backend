@@ -639,8 +639,9 @@ def test_incomplete_provider_response_keeps_budget_and_never_falls_back(database
 
 def test_pinned_model_crash_before_identity_verification_never_reuses_answer(database):
     cfg = config(upstream_provider='fixture-host', upstream_reported_name='Fixture Host')
+    clock = Clock()
     answer = ChatResult(text=ok('stored answer'), usage=Usage(100, 10, 500), model='m/primary', provider='Fixture Host')
-    store, authority, engine, runtime, client, _ = with_model(database, [answer], cfg=cfg)
+    store, authority, engine, runtime, client, _ = with_model(database, [answer], cfg=cfg, clock=clock)
     incoming(store, 1, 'hello')
     original = engine._model_recheck
     calls = {'n':0}
@@ -654,6 +655,10 @@ def test_pinned_model_crash_before_identity_verification_never_reuses_answer(dat
         engine.plan(TENANT, ACCOUNT, FAN, 1)
     engine._model_recheck = original
     assert rows(database)[0].outcome == 'identity_pending' and len(client.requests) == 1
+    with pytest.raises(ModelBusy, match='identity verification is still leased'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert rows(database)[0].outcome == 'identity_pending' and len(client.requests) == 1
+    clock.offset = timedelta(seconds=cfg.lease_seconds + 1)
     with pytest.raises(Refused, match='identity is unverified'):
         engine.plan(TENANT, ACCOUNT, FAN, 1)
     assert len(client.requests) == 1

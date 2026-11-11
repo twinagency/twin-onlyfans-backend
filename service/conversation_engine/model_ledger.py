@@ -70,11 +70,13 @@ class CallRow:
     actual_microusd: int | None
     retry_not_before: object = None
     wire_started_at: object = None
+    lease_expires_at: object = None
 
 
 def _row(r):
     return CallRow(r.call_id, r.seq, r.chain_pos, r.chain_step, r.model, r.status, r.outcome, r.snapshot_sha256,
-                   r.response_text, r.updated_at, r.reserved_microusd, r.actual_microusd, r.retry_not_before, r.wire_started_at)
+                   r.response_text, r.updated_at, r.reserved_microusd, r.actual_microusd, r.retry_not_before, r.wire_started_at,
+                   r.lease_expires_at)
 
 
 def _counted():

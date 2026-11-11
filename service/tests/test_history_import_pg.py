@@ -548,3 +548,23 @@ def test_accounts_without_a_configured_import_behave_exactly_as_before(database)
         assert prep.view(store, TENANT, account)["historyCoverage"] == "pending"
     finally:
         store.close()
+
+
+def test_a_row_the_database_cannot_store_is_quarantined_before_it_can_poison_the_ingress_drain(database):
+    store, account, cfg = prepared(database)
+    wire = Provider(cfg)
+    wire.chats[FAN] = [chat_page([fan_message(9971, FAN, "fine"), fan_message(9972, FAN, "nul \x00 inside"), fan_message(9973, FAN, "also fine")])]
+    wire.tx = [tx_page([tx_row("t1", FAN), {**tx_row("t2", FAN), "note": "bad \x00"}])]
+    try:
+        hist().enlist_fan(store, account, FAN, priority=0)
+        drive(store, account, wire, lambda: cursor_of(database, account).status == "complete" and
+              json_cursor(source_of(database, account, "transactions"))["end_reached"])
+        chats = source_of(database, account, "chats")
+        assert (chats.rows_seen, chats.rows_new, chats.rows_quarantined) == (3, 2, 1) and invariant(chats)
+        assert source_of(database, account, "transactions").rows_quarantined == 1
+        assert {g.reason_code for g in gaps_of(database, account, kind="row")} == {"row_malformed"}
+        from db.models import Message
+        with Session(database[1]) as s:
+            assert {m.message_id for m in s.scalars(select(Message).where(Message.account_id == account))} == {9971, 9973}
+    finally:
+        store.close()

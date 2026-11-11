@@ -189,7 +189,9 @@ def test_retry_after_http_date_and_bounds():
     assert _retry_after('Wed, 11 Nov 2026 08:01:30 GMT', now=now) == 90
     assert _retry_after('Wed, 11 Nov 2026 07:59:00 GMT', now=now) == 0
     assert _retry_after('99999') == 99999 and _retry_after('7') == 7
-    assert _retry_after('soon') is None and _retry_after(None) is None and _retry_after('1' * 100) is None
+    assert _retry_after('soon') is None and _retry_after(None) is None
+    assert _retry_after('1' * 100) == 10**64 and _retry_after('9' * 10000) == 10**64
+    assert _retry_after('0' * 100 + '7') == 7 and _retry_after('0' * 100) == 0
 
 
 def test_restart_before_due_retries_exactly_once(make_world):

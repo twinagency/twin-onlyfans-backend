@@ -107,7 +107,8 @@ def test_retry_peer_preserves_active_identity_verification_lease(make_world, mon
     assert [c.outcome for c in w.calls()] == ['http_429', 'verified_ok']
 
 
-@pytest.mark.parametrize('delay', ['7200', '9' * 60, 'http-date'])
+@pytest.mark.parametrize('delay', ['7200', '9' * 60, '9' * 100, '9' * 10000, '0' * 100 + '7200', 'http-date'],
+                         ids=['seconds', 'large', 'overflow', 'oversized', 'leading-zeroes', 'http-date'])
 def test_long_provider_delay_is_operator_work_never_an_early_retry(make_world, monkeypatch, delay):
     value = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=7200), usegmt=True) if delay == 'http-date' else delay
     w = make_world([(429, {'Retry-After': value})])
@@ -115,6 +116,10 @@ def test_long_provider_delay_is_operator_work_never_an_early_retry(make_world, m
     w.ticks(1)
     [call] = w.calls()
     assert call.retry_not_before - call.updated_at > timedelta(seconds=3600)
+    if len(value.lstrip('0')) > 64:
+        detail = json.loads(call.failure_detail_json)
+        assert detail['retryAfterBeyondRange'] is True and len(call.failure_detail_json.encode()) <= 2000
+        assert call.retry_not_before == datetime.max
     assert w.request(92001) == ('handover_pending', 'await_handover_acceptance', 'operator')
     shown = request_item(w, 92001, monkeypatch)
     assert shown['recoveryState'] == 'deferred_operator' and shown['operatorAlert']

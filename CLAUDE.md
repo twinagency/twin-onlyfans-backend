@@ -95,3 +95,18 @@ cd app && pnpm dev                                           # UI on :3001
 # tests (plain-assert scripts, not pytest)
 ./scripts/run-tests.sh
 ```
+
+<!-- twin-ai-kit: appended by install.sh; edit freely, do not delete marker -->
+## AI operating rules (twin-ai-kit)
+- Read `handover/TEAM-BRIEFING.md` (scope, start branches, hard rules, engine model) and `REVIEW.md` before any review or fix (root canonical, `.claude/REVIEW.md` identical mirror). Read `.claude/orchestration.md` before delegating. Two levels only.
+- Local Supabase only (`127.0.0.1:54321/54322`). Prod project refs are denied in `.claude/settings.json`; a denial is a stop, not a workaround. Never prod, never paid APIs, never real sends.
+- Branches: start from `handover/TEAM-BRIEFING.md` §2; own branch `jaka/<topic>-<date>`; never push `main` (deploys prod), never force-push `claude/*`/`codex/*`, never base on `codex/onlyfans-of-b1`. PRs only. Say which files you will touch before starting (team's Claude edits the same areas).
+- Every task: own branch `jaka/<topic>-<date>` from the current working branch; commit/push there; before PR squash to one commit per topic, `git rebase origin/<working>`, re-test, `git push --force-with-lease` (own branch only). PR → working branch, never `main`.
+- Tests: throwaway Postgres on 127.0.0.1:55432 only; failing test first; report suites run/not run with counts.
+- Volume/concurrency change → scenario in the ONE `slop/` harness; `slop/run --changed` green; quote the evidence folder by name, never `latest`; FAULT pick → `--break` CAUGHT.
+- Scheduled things live in T3 on the owner's Mac (`schedules/`), never as new cron in this repo (`tools/tick.ts` is the only cron; bot schedules in `tracker_bots.every_minutes`).
+- Post-deploy watch: for every shipped behaviour append `- <id> | added YYYY-MM-DD | expires +3d | <WATCH_CHECKS name> | <PR url>` to `docs/health/WATCH.md`; no fitting check → add one in the same PR.
+- Review windows (W1, W2, …): `.scratch/rwl-W<N>/` COMMON/PROMPTS/STATE/HANDOFF; lanes are top-level threads; deploy after the window.
+- Reports to the team's tracker use `LOW LEVEL` / `HIGH LEVEL` (team CLAUDE.md); the operator cannot open files.
+- After each task write `docs/learn/<slug>.md` (≤10 lines: what, why, verify by hand, what breaks it, concept to learn).
+- Report ends: `Ship: PR <url> · merged <sha|no + why> · deployed <yes|no + why|n/a>`.

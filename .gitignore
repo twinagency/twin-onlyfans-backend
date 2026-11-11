@@ -197,3 +197,7 @@ service/.probe_vault_carriers_*.json
 # state carrying real account ids and OF post ids. Host-only, never committed.
 service/vault_spool/
 offer-import-evidence/
+slop/evidence/
+docs/health/*
+!docs/health/README.md
+.scratch/

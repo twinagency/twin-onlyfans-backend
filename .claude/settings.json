@@ -1,0 +1,137 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git fetch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git worktree:*)",
+      "Bash(git push origin HEAD:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh run:*)",
+      "Bash(gh api:*)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx playwright:*)",
+      "Bash(pnpm:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker build:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker logs:*)",
+      "Bash(curl *localhost*)",
+      "Bash(curl *127.0.0.1*)",
+      "Bash(nice -n 10 *)",
+      "Bash(slop/run:*)",
+      "Bash(./slop/run:*)",
+      "Bash(codex exec:*)",
+      "Bash(psql postgresql://postgres:postgres@127.0.0.1:54322/*)",
+      "ClaudeInChromeDomain(localhost:3001)",
+      "ClaudeInChromeDomain(localhost:3000)",
+      "ClaudeInChromeDomain(127.0.0.1:54323)",
+      "Bash(psql postgresql://postgres@127.0.0.1:55432/*)",
+      "Bash(docker run * postgres:*)",
+      "Bash(git rebase:*)",
+      "Bash(git push --force-with-lease origin jaka/*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(rm -r:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(*aouaenqayfltoqrmpitg*)",
+      "Bash(*cnnsllgzskqkvdovyiiv*)",
+      "Bash(*supabase.co*)",
+      "Bash(aws *)",
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(rsync *)",
+      "Bash(scripts/deploy*)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(**/secrets/**)",
+      "NotebookEdit",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "AskUserQuestion"
+    ]
+  },
+  "model": "opus[1m]",
+  "effortLevel": "xhigh",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    },
+    "claude-fable-5-1": {
+      "effortLevel": "high"
+    }
+  },
+  "outputStyle": "Concise",
+  "disableBundledSkills": true,
+  "autoMemoryEnabled": true,
+  "autoCompactWindow": 260000,
+  "statusLine": {
+    "type": "command",
+    "command": "npx ccstatusline@latest"
+  },
+  "autoMode": {
+    "soft_deny": [
+      "$defaults",
+      "Any command touching Supabase project aouaenqayfltoqrmpitg or cnnsllgzskqkvdovyiiv (live prod, paying users) — confirm; dev uses 127.0.0.1:54321 only",
+      "Push to main in twin-dashboard or twin-bot deploys prod — confirm",
+      "Deploy scripts (scripts/deploy-vps.sh, twin-ops) and aws/ssh/scp/rsync to any server — confirm"
+    ],
+    "environment": [
+      "**Organization**: twinagency (GitHub org, private repos)",
+      "**Repos in scope**: twinagency/twin-onlyfans-backend (start branch claude/commercial-r0-r3-20261111; NO main; default codex/onlyfans-of-b1 is 600 commits behind, never base on it), twinagency/twin-dashboard (start claude/commercial-dashboard-r2-20261111; main = prod deploy)",
+      "**Live**: trial on backend 659ea29 (schema 0129, text only). Everything on claude/commercial-* is NOT live; going live needs owner approval",
+      "**Default / protected branches**: main (dashboard, deploys prod on push), codex/onlyfans-of-b1 (backend)",
+      "**Production data**: Supabase aouaenqayfltoqrmpitg (live Twin) and cnnsllgzskqkvdovyiiv (old prod) — never read or write from dev machines",
+      "**Dev data**: local Docker Supabase 127.0.0.1:54321 (API) / 54322 (Postgres) via ~/Projects/twinagency/dev.sh",
+      "**Deploy targets**: AWS boxes via twin-ops; backend VPS via scripts/deploy-vps.sh — manual, confirmed, section 05 only",
+      "**External boundaries to fake in slop**: Telegram Bot API (fake on 54399), OnlyFans (curl_cffi relay), BrowserBase",
+      "**Secrets**: local .env per repo (gitignored); names in CONNECT.env.example; never in git, logs, or prompts",
+      "**Paid services never called from tests**: OpenRouter, ElevenLabs, Deepgram, DeepSeek, BrowserBase live sessions",
+      "**Tests**: throwaway Postgres 127.0.0.1:55432 (ONLYFANS_TEST_PG_URL); never a shared DB; Plan C suite ≈ 1 h, run own area first"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-main-push.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/audit-log.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

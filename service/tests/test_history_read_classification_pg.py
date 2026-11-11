@@ -65,7 +65,7 @@ def test_200_with_an_invalid_shape_is_a_schema_failure_not_a_transient_one():
             result = reads(client_for(lambda req, body=body: answer(200, body)))[read]()
             assert (result.state, result.failure, result.cause, result.retry_after) == (
                 "unavailable", "schema", "provider_response_invalid", None), (read, body)
-    result = reads(client_for(lambda req: httpx.Response(200, content=b"not json", headers={"content-length": "8"})))["chargebacks"]()
+    result = reads(client_for(lambda req: httpx.Response(200, headers={"content-length": "8"}, stream=httpx.ByteStream(b"not json"))))["chargebacks"]()
     assert (result.state, result.failure, result.cause) == ("unavailable", "schema", "provider_response_invalid")
 
 

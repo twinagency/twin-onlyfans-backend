@@ -209,7 +209,11 @@ class FansApiClient:
         self._identity_verified = True
         return Result('verified', {'account':self.account, 'creator_id':self.creator_id, 'epoch':self.epoch}, trace_id=trace, http_status=status, original_trace_id=original_trace)
 
-    def history(self, chat_id, *, limit=50, next_page=None):
+    def history(self, chat_id, *, limit=50, next_page=None, lenient_rows=False):
+        """One chat-history page. A failure is classified (transient with Retry-After, auth or schema) exactly like the vault.
+
+        ``lenient_rows`` leaves per-row validation to the caller so one malformed row can be quarantined instead of
+        failing the page; the page shape, bound and continuation are still validated."""
         if not self._identity_verified: raise ValueError('verified provider identity required')
         chat = _id(chat_id)
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -230,17 +234,18 @@ class FansApiClient:
                 raise ValueError('invalid continuation parameter')
         status, body, trace, original_trace = self._request('GET', url)
         if status != 200:
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace)
         try:
             page = parse_history_page(body, connection_id=self.account, chat_id=chat, base=self.base)
-            if len(page.messages) > limit or any(type(item) is not dict for item in page.messages):
+            if len(page.messages) > limit or (not lenient_rows and any(type(item) is not dict for item in page.messages)):
                 raise ValueError('unbounded or invalid page')
-            for item in page.messages:
-                _id(item.get('id'))
+            if not lenient_rows:
+                for item in page.messages:
+                    _id(item.get('id'))
             if page.next_page == url:
                 raise ValueError('non-advancing pagination')
         except (ValueError, TypeError):
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace, failure='schema', cause='provider_response_invalid')
         return Result('observed', page.messages, page.next_page, trace, status, original_trace)
 
     def send(self, chat_id, *, key, text, media=(), previews=(), price_cents=0, currency='USD', block_banned_words=None):
@@ -311,7 +316,7 @@ class FansApiClient:
             return self._fail('unavailable', status, trace, original_trace)
         return Result('observed', tuple(data['list']), None, trace, status, original_trace)
 
-    def transactions(self, *, limit=10, marker=None, start_date=None):
+    def transactions(self, *, limit=10, marker=None, start_date=None, lenient_rows=False):
         if not self._identity_verified: raise ValueError('verified provider identity required')
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('invalid transaction page bound')
@@ -323,20 +328,21 @@ class FansApiClient:
             params['marker'] = transaction_marker(marker)
         status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/transactions?' + urlencode(params))
         if status != 200 or type(body) is not dict or type(body.get('data')) is not dict:
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace)
         data = body['data']
         if type(data.get('list')) is not list or len(data['list']) > limit or type(data.get('hasMore')) is not bool:
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
-        if any(type(row) is not dict or not ((type(row.get('id')) is str and re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', row['id']))
+            return self._fail('unavailable', status, trace, original_trace, failure='schema', cause='provider_response_invalid')
+        if not lenient_rows and any(type(row) is not dict or not ((type(row.get('id')) is str and re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', row['id']))
                 or type(row.get('id')) is int and 0 < row['id'] < 2**63) for row in data['list']):
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace, failure='schema', cause='provider_response_invalid')
         marker_out = data.get('nextMarker')
         if data['hasMore']:
             try:
                 marker_out = transaction_marker(marker_out)
                 if marker is not None and marker_out == transaction_marker(marker):
                     raise ValueError('non-advancing marker')
-            except (ValueError, UnicodeError): return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            except (ValueError, UnicodeError):
+                return self._fail('unavailable', status, trace, original_trace, failure='schema', cause='provider_response_invalid')
         else: marker_out = None
         # Observations are not proof of item ownership or absence.
         return Result('observed', tuple(data['list']), marker_out, trace, status, original_trace)
@@ -348,7 +354,7 @@ class FansApiClient:
         status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/chargebacks?' + urlencode({'limit':limit, 'offset':offset, **({'start_date':_date(start_date)} if start_date is not None else {})}))
         # Provider response layout/evidence semantics still need qualification.
         if status != 200 or body is None:
-            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            return self._fail('unavailable', status, trace, original_trace)
         return Result('unverified_observation', body, trace_id=trace, http_status=status, original_trace_id=original_trace)
 
     def webhook(self, raw, *, signature, secret, event_key):

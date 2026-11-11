@@ -430,10 +430,10 @@ def test_stop_during_inflight_failure_does_not_overwrite_new_authority(database)
 
 # ---- schema ------------------------------------------------------------------
 
-def test_attempt_column_does_not_weaken_the_scope_guard_and_0133_stays_in_the_head_chain(database):
+def test_attempt_column_does_not_weaken_the_scope_guard_and_0133_is_in_the_chain(database):
     store, account, cfg = setup(database)
     try:
-        assert HEAD == "0134_commercial_scope_contract"      # 0133 is now an ancestor of the head
+        assert HEAD == "0135_commercial_catalogue_terms"  # Step 3 head; 0133 remains an ancestor, its columns are still checked
         with database[1].connect() as c:
             check_schema(c)
         prep.PreparationRequestGuard(store, TENANT, account, 1)("GET", "https://api.fansapi.com/api/accounts", True)

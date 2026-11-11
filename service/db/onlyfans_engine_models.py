@@ -208,7 +208,7 @@ class OfEngineOfferGrant(Base):
         UniqueConstraint('account_id', 'fan_id', 'item_id', 'terms_hash', 'issuance', name='uq_engine_offer_grant_issuance', info={'onlyfans_since':'0127_offer_grant_lineage'}),
         UniqueConstraint('account_id', 'predecessor_grant_id', name='uq_engine_offer_grant_successor', info={'onlyfans_since':'0127_offer_grant_lineage'}),
         ForeignKeyConstraint(['account_id', 'predecessor_grant_id'], ['of_engine_offer_grant.account_id', 'of_engine_offer_grant.grant_id'], ondelete='RESTRICT', name='fk_engine_offer_grant_predecessor'),
-        CheckConstraint("issuance >= 0 AND ((issuance = 0 AND predecessor_grant_id IS NULL AND issuance_reason = 'initial') OR (issuance > 0 AND predecessor_grant_id IS NOT NULL AND issuance_reason IN ('cancelled_unsent','expired_renewal')))", name='lineage', info={'onlyfans_since':'0127_offer_grant_lineage'}),
+        CheckConstraint("issuance >= 0 AND ((issuance = 0 AND predecessor_grant_id IS NULL AND issuance_reason = 'initial') OR (issuance > 0 AND predecessor_grant_id IS NOT NULL AND issuance_reason IN ('cancelled_unsent','expired_renewal','terms_revision','discount_variant')))", name='lineage', info={'onlyfans_since':'0127_offer_grant_lineage'}),
         CheckConstraint("jsonb_typeof(authorization_json::jsonb) = 'object'", name='authorization', info={'onlyfans_since':'0127_offer_grant_lineage'}),
         {'info': INFO},
     )

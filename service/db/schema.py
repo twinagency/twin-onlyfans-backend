@@ -86,7 +86,8 @@ CATEGORY_PRICES = "0131_manual_category_prices"
 ACCOUNT_PREPARATION = "0132_account_preparation"
 PREPARATION_RETRY_STATE = "0133_preparation_retry_state"
 COMMERCIAL_SCOPE = "0134_commercial_scope_contract"
-HEAD = COMMERCIAL_SCOPE
+CATALOGUE_TERMS = "0135_commercial_catalogue_terms"
+HEAD = CATALOGUE_TERMS
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -128,6 +129,7 @@ REVISION_RANK[CATEGORY_PRICES] = 131
 REVISION_RANK[ACCOUNT_PREPARATION] = 132
 REVISION_RANK[PREPARATION_RETRY_STATE] = 133
 REVISION_RANK[COMMERCIAL_SCOPE] = 134
+REVISION_RANK[CATALOGUE_TERMS] = 135
 
 
 class SchemaMismatch(RuntimeError):
@@ -151,6 +153,7 @@ def _metadata():
     from . import onlyfans_case_models  # noqa: F401
     from . import onlyfans_substitution_models  # noqa: F401
     from . import onlyfans_sales_models  # noqa: F401
+    from . import onlyfans_catalogue_terms_models  # noqa: F401
     from . import onlyfans_earnings_total_models  # noqa: F401
     from onlyfans_runtime import history_telemetry, history_policy  # noqa: F401
     return Base.metadata
@@ -319,7 +322,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         # A matching revision is insufficient if the immutable evidence guards
         # or row security have been removed from an existing database.
         for table, trigger, digest in [
-            ("of_engine_offer_grant", "of_engine_offer_grant_guard", ("af92b7c06ef0ac7f3b949eb42d9b1528f6371bb89b3caf5b68951e2f1bc4b5ac" if expected_rank >= 127 else "4047964965e2da94c621737aaf4c7a37cfb3f29a71c1f1460e33ecb02d03667f")),
+            ("of_engine_offer_grant", "of_engine_offer_grant_guard", ("aa2a668c7b78b36402cbac25d1199d009b06e5d0bb2c288c5c64a2bdc9482675" if expected_rank >= 135 else "af92b7c06ef0ac7f3b949eb42d9b1528f6371bb89b3caf5b68951e2f1bc4b5ac" if expected_rank >= 127 else "4047964965e2da94c621737aaf4c7a37cfb3f29a71c1f1460e33ecb02d03667f")),
             ("of_engine_access_evidence", "of_engine_access_immutable", "b1ca5e7cec1420390577f7847545d2176356f7c3240201d3149e5f19fab9d56b"),
             ("of_fans_connection", "of_fans_connection_guard", "264c6c5c69c11743c33f0596fa521dee3b782e9dc6f769e66fd99f04c118f074"),
             ("of_fans_webhook_conflict", "of_fans_webhook_conflict_immutable", "39d01166ca3144e7023fbc6732a73c9ee1866f05b9b9a9cdb8642133c85ae7e2"),
@@ -474,6 +477,19 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         if (len(guard)!=1 or guard[0][0] not in {"O","A"} or guard[0][1]!=19
                 or " ".join(guard[0][2].split())!=" ".join(expected_source.split())):
             failures.append("missing vault provider provenance protection")
+    if expected_rank >= 135:
+        for table, trigger, digest in [
+            ("of_catalogue_terms", "of_catalogue_terms_guard", "5a7ca9d9a2031464ef424ce6879986ec5f377c54478c88d1b08cdc1f5ab41b40"),
+            ("of_catalogue_terms_member", "of_catalogue_terms_member_guard", "9c477610622bbb07cac4c7465349ae7cde0e4d893d55e9e816015d0bae83a8ae"),
+        ]:
+            guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+                FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+                WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+                {"table": table, "trigger": trigger}).all()
+            if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27 or guard[0][2] != trigger
+                    or guard[0][4] != "plpgsql"
+                    or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != digest):
+                failures.append(f"missing catalogue terms protection {table}")
     if expected_rank >= 95:
         marker = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.prosrc::text
             FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid

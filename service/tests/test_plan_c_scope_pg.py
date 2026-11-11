@@ -73,7 +73,7 @@ def test_scope_schema_is_current_and_requires_complete_configuration(configured_
     world, env, _, seen = configured_draft
     with world.database[1].begin() as conn:
         check_schema(conn)
-        assert HEAD == '0134_commercial_scope_contract'
+        assert HEAD == '0135_commercial_catalogue_terms'  # Step 3 head
     cfg = config_for(world, env)
     for patch in ({'fans':[]}, {'operator':{'actor':OTHER, 'name':'', 'permissions':[]}},
                   {'product':{**cfg['product'], 'price_cents':1}}, {'limits':{**cfg['limits'], 'provider_requests':0}}):

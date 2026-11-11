@@ -2,6 +2,7 @@
 import multiprocessing
 import os
 import threading
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
@@ -9,10 +10,10 @@ from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database  # noqa: F401
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
-from test_engine_model_pg import PROFILE, config, ok, rows, with_model
+from test_engine_model_pg import PROFILE, Clock, config, ok, rows, with_model
 from test_engine_simulated_journey_pg import incoming
 from conversation_engine.engine import EngineService
-from conversation_engine.model_client import ChatResult, FixtureChatClient, Usage
+from conversation_engine.model_client import ChatResult, FixtureChatClient, ModelBusy, Usage
 from conversation_engine.model_ledger import LENGTH_LIMITED, LENGTH_PENDING
 from conversation_engine.model_runtime import ModelRuntime
 from conversation_engine.writer_context import StaticCreatorProfiles
@@ -51,11 +52,23 @@ def crash_at(runtime, point):
     return lambda: setattr(ledger, name, original)
 
 
-def restart(database, engine, client, cfg):
+def restart(database, engine, client, cfg, *, clock=None):
     """A brand-new worker (runtime + ledger, new worker id) built from the same database and provider client."""
-    runtime = ModelRuntime(database[1], client, cfg, StaticCreatorProfiles({ACCOUNT: PROFILE}))
+    runtime = ModelRuntime(database[1], client, cfg, StaticCreatorProfiles({ACCOUNT: PROFILE}), clock=clock)
     engine.model = runtime
     return runtime
+
+
+def retain_active_identity_lease_then_expire(database, engine, client, clock, cfg):
+    """Restart is not proof the original lease ended. Check the live hold before exercising crash expiry."""
+    fields = ('call_id', 'status', 'outcome', 'reserved_microusd', 'actual_microusd', 'usage_known', 'response_text')
+    before = [tuple(getattr(row, field) for field in fields) for row in rows(database)]
+    calls = len(client.requests)
+    with pytest.raises(ModelBusy, match='identity verification is still leased'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [tuple(getattr(row, field) for field in fields) for row in rows(database)] == before
+    assert len(client.requests) == calls and decisions(database) == []
+    clock.offset = timedelta(seconds=cfg.lease_seconds + 1)
 
 
 PLAIN_POINTS = ['after_settle', 'before_set_outcome', 'after_set_outcome']
@@ -71,8 +84,9 @@ def _cases():
 @pytest.mark.parametrize('pinned,point', _cases())
 def test_length_limited_response_is_never_delivered_after_interruption_at_each_boundary(database, pinned, point):
     cfg = config(**(PINNED if pinned else {}))
+    clock = Clock()
     store, authority, engine, runtime, client, _ = with_model(database, [answer(CUT, 'length', pinned=pinned),
-                                                                          answer(GOOD, pinned=pinned)], cfg=cfg)
+                                                                          answer(GOOD, pinned=pinned)], cfg=cfg, clock=clock)
     try:
         incoming(store, 1, 'hello')
         crash_at(runtime, point)
@@ -81,10 +95,11 @@ def test_length_limited_response_is_never_delivered_after_interruption_at_each_b
         [saved] = rows(database)
         assert saved.response_text is not None and saved.outcome != 'verified_ok' and saved.outcome != 'ok'
         assert decisions(database) == [] and len(client.requests) == 1
-        restart(database, engine, client, cfg)
+        restart(database, engine, client, cfg, clock=clock)
         if pinned and point in PINNED_STILL_UNVERIFIED:
             # identity was not yet recorded: the existing protection hands it to a human; nothing is reused or sent
             assert saved.outcome == LENGTH_PENDING
+            retain_active_identity_lease_then_expire(database, engine, client, clock, cfg)
             with pytest.raises(Refused, match='identity is unverified'):
                 engine.plan(TENANT, ACCOUNT, FAN, 1)
             assert len(client.requests) == 1 and decisions(database) == []
@@ -113,15 +128,17 @@ def test_uninterrupted_control_matches_replay(database, pinned):
 @pytest.mark.parametrize('pinned,point', _cases())
 def test_completed_response_replays_once_without_new_model_call(database, pinned, point):
     cfg = config(**(PINNED if pinned else {}))
+    clock = Clock()
     store, authority, engine, runtime, client, _ = with_model(database, [answer(GOOD, pinned=pinned),
-                                                                          answer('must not be requested', pinned=pinned)], cfg=cfg)
+                                                                          answer('must not be requested', pinned=pinned)], cfg=cfg, clock=clock)
     try:
         incoming(store, 1, 'hello')
         crash_at(runtime, point)
         with pytest.raises(RuntimeError, match='injected crash ' + point):
             engine.plan(TENANT, ACCOUNT, FAN, 1)
-        restart(database, engine, client, cfg)
+        restart(database, engine, client, cfg, clock=clock)
         if pinned and point in PINNED_STILL_UNVERIFIED:
+            retain_active_identity_lease_then_expire(database, engine, client, clock, cfg)
             with pytest.raises(Refused, match='identity is unverified'):
                 engine.plan(TENANT, ACCOUNT, FAN, 1)
             assert len(client.requests) == 1 and decisions(database) == []
@@ -269,8 +286,9 @@ def _child_dies_after_settle(database, engine, runtime):
 @pytest.mark.parametrize('pinned', [False, True])
 def test_process_killed_after_response_persisted_keeps_length_verdict(database, pinned):
     cfg = config(**(PINNED if pinned else {}))
+    clock = Clock()
     store, authority, engine, runtime, client, _ = with_model(database, [answer(CUT, 'length', pinned=pinned),
-                                                                          answer(GOOD, pinned=pinned)], cfg=cfg)
+                                                                          answer(GOOD, pinned=pinned)], cfg=cfg, clock=clock)
     try:
         incoming(store, 1, 'hello')
         ctx = multiprocessing.get_context('fork')
@@ -281,9 +299,10 @@ def test_process_killed_after_response_persisted_keeps_length_verdict(database, 
         [saved] = rows(database)
         assert saved.outcome == (LENGTH_PENDING if pinned else LENGTH_LIMITED) and saved.response_text is not None
         # the child consumed its own copy of the provider script; the restarted worker gets a fresh provider client
-        runtime2 = restart(database, engine, FixtureChatClient([answer(GOOD, pinned=pinned)], cost_microusd=500), cfg)
+        runtime2 = restart(database, engine, FixtureChatClient([answer(GOOD, pinned=pinned)], cost_microusd=500), cfg, clock=clock)
         runtime2.worker_id = 'restarted-worker'
         if pinned:
+            retain_active_identity_lease_then_expire(database, engine, runtime2.client, clock, cfg)
             with pytest.raises(Refused, match='identity is unverified'):
                 engine.plan(TENANT, ACCOUNT, FAN, 1)
             assert decisions(database) == []

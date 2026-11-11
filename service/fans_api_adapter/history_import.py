@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from db.onlyfans_history_models import (OfFansHistoryCursor, OfFansImportGap, OfFansImportSource,
@@ -419,6 +420,9 @@ def _ingest(intake, tenant, account, work, item):
     from fans_api_adapter import payment_evidence as ev
     from fans_api_adapter.events import IntakeBackpressure
     source = work["source"]
+    if "\\u0000" in json.dumps(item, default=str):
+        # PostgreSQL text cannot hold NUL; one such row would poison the shared ingress drain for the whole account.
+        raise ValueError("row contains a NUL character")
     if source == "chats":
         if type(item) is not dict:
             raise ValueError("row is not an object")
@@ -555,7 +559,7 @@ def _commit(store, tenant, account, guard, client, work, result, now):
             outcome = _ingest(intake, tenant, account, work, item)
         except IntakeBackpressure:
             return _backpressure(store, guard, account, work, now)
-        except (Refused, ValueError, TypeError, KeyError, AttributeError, ArithmeticError) as exc:
+        except (IntegrityError, DataError, Refused, ValueError, TypeError, KeyError, AttributeError, ArithmeticError) as exc:
             reason = "row_refused" if isinstance(exc, Refused) else "row_malformed"
             detail = _clean(exc) if isinstance(exc, Refused) else type(exc).__name__.lower()
             quarantined.append({"gap": sha256(("row|%s|%s|%s" % (source_name, work.get("fan") or "", _digest(item))).encode()).hexdigest()[:40],

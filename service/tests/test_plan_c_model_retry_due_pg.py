@@ -40,7 +40,7 @@ def ok_response(request):
 class Provider:
     """Scripted provider: 'ok' | int status | (int status, headers) | 'connect' | 'timeout'. Exhausted script = 'ok'."""
     def __init__(self, script=()):
-        self.script, self.calls, self.lock = list(script), [], threading.Lock()
+        self.script, self.calls, self.requests, self.lock = list(script), [], [], threading.Lock()
         self.transport = httpx.MockTransport(self.handle)
 
     def handle(self, request):
@@ -48,8 +48,17 @@ class Provider:
             with self.lock:
                 step = self.script.pop(0) if self.script else 'ok'
                 self.calls.append(step if not isinstance(step, tuple) else step[0])
+                self.requests.append(json.loads(request.content))
             if step == 'ok':
                 return ok_response(request)
+            if step in ('invalid', 'multipart', 'identity'):
+                response = json.loads(ok_response(request).content)
+                if step == 'identity':
+                    response['model'] = 'm/unverified'
+                else:
+                    response['choices'][0]['message']['content'] = json.dumps(
+                        {'body': 'it is only $5 for the set'} if step == 'invalid' else {'body': 'hey you', 'parts': ['how was your day', 'tell me more']})
+                return httpx.Response(200, json=response)
             if step == 'connect':
                 raise httpx.ConnectError('synthetic connect failure', request=request)
             if step == 'timeout':
@@ -151,11 +160,11 @@ def test_failure_evidence_is_bounded_and_sanitized(make_world):
     world.ticks(1)
     [row] = world.calls()
     detail = json.loads(row.failure_detail_json)
-    assert detail['status'] == 429 and detail['retryAfter'] == '45' and detail['rateLimitRemaining'] == '0'
+    assert detail['status'] == 429 and detail['retryAfterSeconds'] == '45' and detail['rateLimitRemaining'] == '0'
     assert detail['requestId'] == 'req-synthetic-1' and detail['providerName'] == 'Fixture Upstream'
     assert detail['errorCode'] == 429
     raw = row.failure_detail_json
-    assert SECRET_IN_BODY not in raw and 'sk-or' not in raw and 'PROMPT TEXT' not in raw and '[redacted]' in raw
+    assert SECRET_IN_BODY not in raw and 'sk-or' not in raw and 'PROMPT TEXT' not in raw and 'prose omitted' in raw
     assert len(raw.encode()) <= 2000
     assert timedelta(seconds=44) <= row.retry_not_before - row.updated_at <= timedelta(seconds=46)
 
@@ -177,7 +186,7 @@ def test_retry_after_http_date_and_bounds():
     now = datetime(2026, 11, 11, 8, 0, 0, tzinfo=timezone.utc)
     assert _retry_after('Wed, 11 Nov 2026 08:01:30 GMT', now=now) == 90
     assert _retry_after('Wed, 11 Nov 2026 07:59:00 GMT', now=now) == 0
-    assert _retry_after('99999') == 3600 and _retry_after('7') == 7
+    assert _retry_after('99999') == 99999 and _retry_after('7') == 7
     assert _retry_after('soon') is None and _retry_after(None) is None and _retry_after('1' * 100) is None
 
 
@@ -255,6 +264,7 @@ def test_other_availability_refusals_recover(make_world, status):
     world.advance(31)
     world.ticks(3)
     assert world.provider.calls == [status, 'ok'] and world.request(91008)[0] == 'completed'
+    assert len(world.w.fans.posts) == 1 and world.out_messages() == 1
 
 
 def test_not_sent_connect_failure_recovers(make_world):
@@ -266,6 +276,7 @@ def test_not_sent_connect_failure_recovers(make_world):
     world.advance(31)
     world.ticks(3)
     assert world.provider.calls == ['connect', 'ok'] and world.request(91009)[0] == 'completed'
+    assert len(world.w.fans.posts) == 1 and world.out_messages() == 1
 
 
 def test_unknown_outcome_stays_held_and_is_never_retried(make_world):

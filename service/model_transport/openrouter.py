@@ -36,7 +36,7 @@ class KeyUnavailable(Exception):
 # Bounded and sanitized: never the key, the prompt or a raw body. Only short scalar fields survive.
 _MAX_ERROR_BODY = 65_536
 _SAFE = re.compile(r'[^A-Za-z0-9 ._:/@()\[\],;=+\-\'"?!%#]')
-_SECRET = re.compile(r'(sk-[A-Za-z0-9_-]{6,}|Bearer\s+\S+|[A-Za-z0-9_-]{32,})')
+_SECRET = re.compile(r'(sk-[A-Za-z0-9_-]{6,}|Bearer\s+\S+)', re.IGNORECASE)
 
 
 def _clean(value, limit, *, redact=False):
@@ -50,12 +50,12 @@ def _clean(value, limit, *, redact=False):
 
 
 def _retry_after(value, *, now=None):
-    """Retry-After as whole seconds (delta or HTTP-date), clamped to 0..3600; None when absent or unreadable."""
+    """Retry-After in whole seconds, rounded UP; never shorten a valid provider delay."""
     if type(value) is not str or not value.strip() or len(value) > 64:
         return None
     value = value.strip()
-    if value.isdigit():
-        return min(int(value), 3600)
+    if re.fullmatch(r'[0-9]+', value):
+        return int(value)
     from email.utils import parsedate_to_datetime
     from datetime import datetime, timezone
     try:
@@ -67,16 +67,32 @@ def _retry_after(value, *, now=None):
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     seconds = (when - (now or datetime.now(timezone.utc))).total_seconds()
-    return max(0, min(int(seconds + 0.999), 3600))
+    from math import ceil
+    return max(0, ceil(seconds))
 
 
-def _failure_detail(response):
+def _failure_detail(response, *, secret='', messages=()):
     headers = response.headers
     detail = {'status': response.status_code}
-    for name, key in (('x-request-id', 'requestId'), ('retry-after', 'retryAfter'), ('x-ratelimit-limit', 'rateLimitLimit'),
-                      ('x-ratelimit-remaining', 'rateLimitRemaining'), ('x-ratelimit-reset', 'rateLimitReset')):
-        value = _clean(headers.get(name), 64)
+    def identifier(value, limit=64):
+        if type(value) is int:
+            return value if -10**9 < value < 10**9 else None
+        if (type(value) is not str or len(value) > limit or
+                not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 ._:/-]*', value) or _SECRET.search(value) or
+                secret and secret in value or any(value in str(m.get('content', '')) for m in messages)):
+            return None
+        return value
+    for name, key in (('x-request-id', 'requestId'), ('x-provider-request-id', 'providerRequestId')):
+        value = identifier(headers.get(name))
         if value is not None:
+            detail[key] = value
+    retry = _retry_after(headers.get('retry-after'))
+    if retry is not None:
+        detail['retryAfterSeconds'] = str(retry)
+    for name, key in (('x-ratelimit-limit', 'rateLimitLimit'), ('x-ratelimit-remaining', 'rateLimitRemaining'),
+                      ('x-ratelimit-reset', 'rateLimitReset')):
+        value = headers.get(name)
+        if type(value) is str and re.fullmatch(r'[0-9]{1,20}', value):
             detail[key] = value
     content = response.content if len(response.content) <= _MAX_ERROR_BODY else b''
     try:
@@ -85,18 +101,17 @@ def _failure_detail(response):
         body = None
     error = body.get('error') if type(body) is dict else None
     if type(error) is dict:
-        for key, limit in (('code', 32), ('type', 64), ('message', 300)):
-            value = _clean(error.get(key), limit, redact=key == 'message')
+        for key, limit in (('code', 32), ('type', 64)):
+            value = identifier(error.get(key), limit)
             if value is not None:
                 detail['error' + key.capitalize()] = value
         meta = error.get('metadata') if type(error.get('metadata')) is dict else {}
-        provider = _clean(meta.get('provider_name'), 64)
+        provider = identifier(meta.get('provider_name'))
         if provider is not None:
             detail['providerName'] = provider
-    elif type(error) is str:
-        value = _clean(error, 300, redact=True)
-        if value is not None:
-            detail['errorMessage'] = value
+    # Provider prose can echo a credential, prompt or private text in arbitrary formats. Keep a fixed diagnostic
+    # rather than pretending token-pattern redaction can make that prose safe.
+    detail['diagnostic'] = f'Provider returned HTTP {response.status_code}; response prose omitted'
     return detail
 
 
@@ -272,7 +287,7 @@ class OpenRouterClient:
         except httpx.HTTPError:
             raise ModelOutcomeUnknown('the request may have reached the provider') from None
         if response.status_code != 200:
-            raise ModelHTTPStatus(response.status_code, detail=_failure_detail(response),
+            raise ModelHTTPStatus(response.status_code, detail=_failure_detail(response, secret=self._key, messages=request.messages),
                                   retry_after=_retry_after(response.headers.get('retry-after')))
         try:
             data = response.json()

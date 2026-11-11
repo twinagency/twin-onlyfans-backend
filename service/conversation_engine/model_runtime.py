@@ -33,6 +33,7 @@ import uuid
 from onlyfans_runtime.store import Refused
 
 from .model_client import (ChatRequest, ModelBusy, ModelCallError, ModelHTTPStatus, ModelIncompleteResponse, http_refusal,
+                           retryable_release, released_failure, MAX_AUTOMATIC_RETRY_SECONDS,
                            ModelNotSent, ModelOutcomeUnknown, ModelUnavailable)
 from .model_config import input_token_upper_bound
 from .model_ledger import CONTENT_FAILURES, IDENTITY_UNSETTLED, LENGTH_LIMITED, ModelLedger
@@ -57,10 +58,7 @@ def is_availability_failure(outcome):
     """True when a failed call says the PROVIDER was unavailable (not that it declined or that we sent something bad)."""
     if outcome in ('not_sent', 'timeout', 'lease_expired'):
         return True
-    if type(outcome) is str and outcome.startswith('http_') and outcome[5:].isdigit():
-        status = int(outcome[5:])
-        return status in (408, 429) or 500 <= status <= 599
-    return False  # 400/401/403/404/422 (config, auth, moderation) and unclassified client errors never fall back
+    return retryable_release(outcome)  # transport fallback policy also includes timeout above; retry eligibility does not
 
 
 @dataclass(frozen=True)
@@ -177,6 +175,8 @@ class ModelRuntime:
         unavailable, blocked = False, False  # primary failed for availability / failed in a way that never falls back
         http_refused = []  # same-snapshot provider refusals a retry cannot fix (HTTP 400/401/403/404/422...)
         now = self._clock()
+        if any(r.status != 'released' and (retryable_release(r.outcome) or http_refusal(r.outcome)) for r in rows):
+            raise ModelUnavailable('model failure evidence is not a confirmed release; operator review required')
         for row in rows:
             same = row.snapshot_sha256 == turn.snapshot_sha256
             if row.status in ('reserved', 'calling'):
@@ -205,14 +205,14 @@ class ModelRuntime:
                     pos, content_failed = max(pos, row.chain_pos + 1), True
                     outcomes.append(row.outcome)
                     refused = refused or row.outcome in SILENT_OR_REFUSED
-            elif row.status == 'released' and row.outcome == 'lease_expired':
+            elif released_failure(row.status, row.outcome, row.wire_started_at) == 'never_wired':
                 continue  # never reached the wire: simply try that step again
             else:  # a transport-type failure: about the provider, not about the content
                 if is_availability_failure(row.outcome):
                     unavailable = True
                 else:
                     blocked = True  # 400/401/403 and unclassified failures never fall back
-                    if row.status == 'released' and http_refusal(row.outcome):
+                    if released_failure(row.status, row.outcome, row.wire_started_at) == 'permanent':
                         http_refused.append(row.outcome)
                 # The durable due time (provider Retry-After or the transport cooldown) when recorded; rows from before
                 # it existed fall back to the fixed cooldown from their last update.
@@ -228,6 +228,16 @@ class ModelRuntime:
             # fix it. Visible human work instead of a silent open request or a timed blind retry.
             turn.handover('model_http_refused', {'outcomes': http_refused[-4:]})
             raise Refused('provider refused the model request; request handed to a human')
+        deferred = [r for r in rows if released_failure(r.status, r.outcome, r.wire_started_at) == 'retryable'
+                    and r.retry_not_before is not None
+                    and r.retry_not_before - r.updated_at > timedelta(seconds=max(MAX_AUTOMATIC_RETRY_SECONDS, cfg.transport_retry_seconds))]
+        if deferred:
+            turn.handover('model_retry_deferred', {'call_ids': [r.call_id for r in deferred],
+                'retry_not_before': max(r.retry_not_before for r in deferred).isoformat()})
+            raise Refused('provider delay requires operator recovery; request handed to a human')
+        if any(released_failure(r.status, r.outcome, r.wire_started_at) == 'retryable'
+               and r.retry_not_before is not None and r.retry_not_before > now for r in rows):
+            raise ModelUnavailable('model retry is scheduled and is not due')
         if refused:
             # A refusal (or the silent empty completion DeepSeek/OpenRouter return for one) is not re-asked in other
             # words or on another model/provider route: it is human work.
@@ -263,16 +273,27 @@ class ModelRuntime:
             try:
                 result = self.client.chat(request)  # the only network step; no database transaction is open
             except (ModelNotSent, ModelHTTPStatus) as exc:
-                retryable = is_availability_failure(exc.error_class)  # not_sent / HTTP 408, 429, 5xx
+                retryable = released_failure('released', exc.error_class) == 'retryable'
                 delay = max(cfg.transport_retry_seconds, getattr(exc, 'retry_after', None) or 0) if retryable else None
                 ledger.release(turn.account, reservation.call_id, self.worker_id,
                                outcome=exc.error_class, error_class=exc.error_class,
-                               retry_delay_seconds=min(delay, 3600) if delay is not None else None,
+                               retry_delay_seconds=delay,
                                failure_detail=getattr(exc, 'detail', None))
                 dead.add(model); pos = chain_pos + 1
                 unavailable, blocked = unavailable or retryable, blocked or not retryable
                 if not retryable and http_refusal(exc.error_class):
-                    http_refused.append(exc.error_class)
+                    turn.handover('model_http_refused', {'outcomes': [r.outcome or r.status for r in rows] + [exc.error_class]})
+                    raise Refused('provider refused the model request; request handed to a human')
+                if delay is not None and delay > max(MAX_AUTOMATIC_RETRY_SECONDS, cfg.transport_retry_seconds):
+                    turn.handover('model_retry_deferred', {'call_id': reservation.call_id,
+                        'provider_delay_seconds': str(getattr(exc, 'retry_after', delay))})
+                    raise Refused('provider delay requires operator recovery; request handed to a human')
+                if reservation.seq + 1 >= cfg.max_calls_per_generation:
+                    turn.handover('model_call_limit', {'outcomes': [r.outcome or r.status for r in ledger.rows(
+                        turn.account, turn.request_id, turn.generation)]})
+                    raise Refused('model call limit reached; request handed to a human')
+                if getattr(exc, 'retry_after', None) is not None:
+                    break  # explicit provider timing applies to this request, including a configured fallback
                 continue
             except ModelOutcomeUnknown as exc:
                 incomplete = isinstance(exc, ModelIncompleteResponse)

@@ -57,31 +57,44 @@ class ModelHTTPStatus(ModelCallError):
 
     `detail` is a bounded, sanitized dict (status, provider error code, provider name, short redacted message,
     request id, rate-limit headers) kept as evidence; `retry_after` is the provider's Retry-After in whole seconds
-    (0..3600) when it sent one. Neither ever carries a key, prompt or raw body."""
+    when supplied. Delays above the automatic recovery window require an operator; they are never shortened."""
     def __init__(self, status, *, detail=None, retry_after=None):
         super().__init__(f'provider returned HTTP {status}')
         self.status = status
         self.error_class = f'http_{status}'
         self.detail = detail if type(detail) is dict else None
-        self.retry_after = retry_after if type(retry_after) is int and 0 <= retry_after <= 3600 else None
+        self.retry_after = retry_after if type(retry_after) is int and retry_after >= 0 else None
+
+
+MAX_AUTOMATIC_RETRY_SECONDS = 3600
+RETRYABLE_RELEASE_OUTCOMES = ('not_sent',) + tuple(f'http_{s}' for s in (408, 429, *range(500, 600)))
+PERMANENT_RELEASE_OUTCOMES = tuple(f'http_{s}' for s in range(100, 600)
+                                   if s != 200 and f'http_{s}' not in RETRYABLE_RELEASE_OUTCOMES)
 
 
 def retryable_release(outcome):
     """A released call whose failure is a definitive availability refusal: nothing is in flight, no usage is unknown,
     and the same request may be asked again after its due time (not_sent, HTTP 408/429/5xx). Every other released
     outcome is either a never-wired lease (handled separately) or a provider refusal a retry cannot fix."""
-    if outcome == 'not_sent':
-        return True
-    if type(outcome) is str and outcome.startswith('http_') and outcome[5:].isdigit() and len(outcome) == 8:
-        status = int(outcome[5:])
-        return status in (408, 429) or 500 <= status <= 599
-    return False
+    return outcome in RETRYABLE_RELEASE_OUTCOMES
 
 
 def http_refusal(outcome):
     """A released call refused by the provider with a non-retryable HTTP status (400/401/403/404/422...)."""
-    return (type(outcome) is str and outcome.startswith('http_') and outcome[5:].isdigit() and len(outcome) == 8
-            and not retryable_release(outcome))
+    return outcome in PERMANENT_RELEASE_OUTCOMES
+
+
+def released_failure(status, outcome, wire_started_at=None):
+    """State AND outcome establish a confirmed release; a timeout or unsettled row is never a retry permission."""
+    if status != 'released':
+        return 'held'
+    if retryable_release(outcome):
+        return 'retryable'
+    if http_refusal(outcome):
+        return 'permanent'
+    if outcome == 'lease_expired' and wire_started_at is None:
+        return 'never_wired'
+    return 'held'
 
 
 class ModelOutcomeUnknown(ModelCallError):

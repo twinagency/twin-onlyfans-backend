@@ -22,6 +22,10 @@ VERSION="preparation.v1"
 
 class BudgetExhausted(Refused):
     """The explicit per-account read ceiling is spent; never an automatic increase."""
+class SourceBudgetExhausted(BudgetExhausted):
+    """One import source's own sub-budget is spent; the other sources and the account keep their allowance."""
+    def __init__(self,source):
+        super().__init__("preparation source budget exhausted");self.source=source
 class AuthorityChanged(Refused):
     """Stop/reconfigure happened under an in-flight pass; the newer command owns the status."""
 class PreparationHold(Refused):
@@ -323,6 +327,7 @@ class PreparationRequestGuard:
                 raise Refused("preparation wire does not match qualification")
             if parsed.scheme!="https" or parsed.netloc not in {urlsplit(b).netloc for b in ALLOWED_BASES} or parsed.username or parsed.password or parsed.fragment:
                 raise Refused("preparation provider endpoint refused")
+            source=None
             if parsed.path=="/api/accounts":
                 if parsed.query:raise Refused("preparation identity query refused")
             elif parsed.path=="/api/"+config["provider_account"]+"/media/vault":
@@ -332,11 +337,21 @@ class PreparationRequestGuard:
                     or not query["limit"].isdecimal() or not 10<=int(query["limit"])<=24
                     or not query["offset"].isdecimal() or not 0<=int(query["offset"])<=4800):
                     raise Refused("preparation vault page refused")
-            else:raise Refused("preparation provider endpoint refused")
+                source="vault_window"
+            else:
+                # Read-only chat history, transactions and chargebacks of a configured history import (0136).
+                from fans_api_adapter import history_import
+                source=history_import.validate_read(s,self.account,config,parsed)
+                if source is None:raise Refused("preparation provider endpoint refused")
             limits=config["limits"]
             if row.provider_requests_used>=limits["provider_requests"] or row.provider_credits_reserved+limits["provider_credits_per_request"]>limits["provider_credit_budget"]:
                 raise BudgetExhausted("preparation provider budget exhausted")
-            row.provider_requests_used+=1;row.provider_credits_reserved+=limits["provider_credits_per_request"];row.updated_at=utcnow()
+            now=utcnow()
+            if source is not None:
+                # Refusal here rolls back this whole transaction, so no level keeps a reservation for a refused read.
+                from fans_api_adapter import history_import
+                history_import.reserve(s,self.account,source,limits["provider_credits_per_request"],now)
+            row.provider_requests_used+=1;row.provider_credits_reserved+=limits["provider_credits_per_request"];row.updated_at=now
 
 def prepare_one(store,tenant,account,*,client_factory):
     """One identity proof and at most one shared-import page; no send code path.

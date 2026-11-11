@@ -87,7 +87,8 @@ def test_retry_peer_preserves_active_identity_verification_lease(make_world, mon
     with ThreadPoolExecutor(max_workers=2) as pool:
         observer = pool.submit(peer.tick)
         assert selected.wait(30), 'peer did not select due retry'
-        owner = pool.submit(w.pilot.tick)
+        # Its previous 429 tick retained the scheduler page cursor; the first tick wraps, the second selects.
+        owner = pool.submit(w.ticks, 2)
         try:
             observer.result(timeout=30)
             assert w.request(92901) == ('open', 'prepare_reply', None)

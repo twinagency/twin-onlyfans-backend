@@ -242,6 +242,9 @@ def test_an_accepted_response_with_an_invalid_receipt_names_the_field_that_faile
     value, raw = kept(database)
     assert value['hold']['reason'] == 'invalid_receipt'
     assert value['hold']['proof'] == {'field': field, 'detail': detail}
+    assert value['hold']['message_id_present'] is (name != 'wrong_type')
+    if name not in ('wrong_type', 'bad_message_id'):
+        assert value['hold']['message_id'] == 7001, 'the provider did answer with a message: its id is kept'
     forbid(raw, TOKEN, BODY, 'another-attempt', 'yesterday-ish', 'x' * 40)
 
 

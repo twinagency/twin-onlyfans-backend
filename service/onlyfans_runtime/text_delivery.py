@@ -203,6 +203,10 @@ def _hold_extra(evidence):
             out[key] = evidence[key][:limit]
     if type(evidence.get("http_status")) is int and 100 <= evidence["http_status"] <= 599:
         out["http_status"] = evidence["http_status"]
+    if type(evidence.get("message_id_present")) is bool:
+        out["message_id_present"] = evidence["message_id_present"]
+    if type(evidence.get("message_id")) is int and 0 < evidence["message_id"] < 2**63:
+        out["message_id"] = evidence["message_id"]     # a provider message id is an identifier, not message content
     return out
 
 
@@ -1319,8 +1323,12 @@ class TextAuthority:
             except (Refused, TypeError, AttributeError) as exc:
                 if row.status == "accepted" or retired:
                     raise Refused("accepted receipt conflict")
-                self._hold_unknown(s, row, "invalid_receipt", tenant_id,
-                                   {"proof": self._proof_failure(receipt, exc)})
+                extra = {"proof": self._proof_failure(receipt, exc), "message_id_present": False}
+                if type(receipt) is Accepted:
+                    # The provider did answer with a message: keep its id (valid or not) apart from the failing field.
+                    extra["message_id_present"] = receipt.message_id is not None
+                    extra["message_id"] = receipt.message_id
+                self._hold_unknown(s, row, "invalid_receipt", tenant_id, extra)
                 return "unknown"
             if row.status == "accepted":
                 if row.receipt_json != encoded:

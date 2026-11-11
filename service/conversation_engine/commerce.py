@@ -25,6 +25,28 @@ def _hash(value):
     return sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode()).hexdigest()
 
 
+def _terms_stamp(terms):
+    """What a commercial grant records about the approved terms it covers (revision, variant, offered amount); None for legacy terms."""
+    block = terms.get('commercial') if isinstance(terms, dict) else None
+    if not isinstance(block, dict):
+        return None
+    return {'revision': block['revision'], 'variant': block['variant'], 'priceCents': terms['price_cents']}
+
+
+def _grant_stamp(grant):
+    try:
+        doc = json.loads(grant.authorization_json)
+    except (TypeError, ValueError):
+        return None
+    stamp = doc.get('terms') if isinstance(doc, dict) else None
+    return stamp if isinstance(stamp, dict) and type(stamp.get('priceCents')) is int else None
+
+
+def _grant_price(grant):
+    stamp = _grant_stamp(grant)
+    return None if stamp is None else stamp['priceCents']
+
+
 def _sales_permits(owner, item_id):
     if owner.sales_mode == 'open':
         return True
@@ -100,7 +122,7 @@ class SyntheticCoverage:
     valid_until: datetime
 
 
-def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage):
+def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage, *, price_cents=None):
     if type(coverage) is not SyntheticCoverage or coverage.account_id != account or coverage.fan_id != fan_id or coverage.item_id != item_id:
         raise Refused('synthetic coverage scope mismatch')
     _id(fan_id); _id(item_id)
@@ -116,7 +138,7 @@ def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage):
                 or policy is None or policy.transport_kind != 'synthetic' or not policy.media_enabled
                 or not _sales_permits(owner, item_id)):
             raise Refused('synthetic offer is not authorized')
-        terms = catalog_terms(s, account, item_id)
+        terms = catalog_terms(s, account, item_id, price_cents=price_cents)
         if type(coverage.media_ids) is not tuple or tuple(terms['media_ids']) != coverage.media_ids:
             raise Refused('synthetic ownership coverage does not match the bundle')
         _unowned(s, account, fan_id, terms)
@@ -127,9 +149,12 @@ def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage):
                 raise Refused('existing offer authorization needs review')
             return prior.grant_id
         grant_id = str(uuid.uuid4())
+        stamp = _terms_stamp(terms)
+        extra = {} if stamp is None else {'authorization_json': json.dumps(
+            {'kind': 'commercial_initial', 'terms': stamp}, sort_keys=True, separators=(',', ':'))}
         s.add(OfEngineOfferGrant(account_id=account, grant_id=grant_id, fan_id=fan_id,
             binding_id=runtime.binding_id, item_id=item_id, terms_hash=digest,
-            coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until, created_at=utcnow()))
+            coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until, created_at=utcnow(), **extra))
         return grant_id
 
 
@@ -246,7 +271,7 @@ def _successor(s, runtime, owner, prior, coverage, policy):
     renewal = _explicit_renewal(s, runtime, prior, pilot, config) if expired else None
     if proof is None and not expired:
         raise Refused('offer_successor_not_required')
-    terms = _real_catalogue_terms(s, runtime.account_id, prior.item_id)
+    terms = _real_catalogue_terms(s, runtime.account_id, prior.item_id, price_cents=_grant_price(prior))
     if _hash(terms) != prior.terms_hash:
         raise Refused('offer_authorization_terms_need_review')
     _unowned(s, runtime.account_id, prior.fan_id, terms)
@@ -260,6 +285,8 @@ def _successor(s, runtime, owner, prior, coverage, policy):
         raise Refused('an existing offer needs review')
     authority = _grant_authority(s, runtime, coverage, policy)
     authority.update({'predecessor': prior.grant_id, 'neverDispatched': proof, 'explicitRenewal': renewal})
+    if _grant_stamp(prior) is not None:
+        authority['terms'] = _grant_stamp(prior)
     successor = OfEngineOfferGrant(account_id=runtime.account_id, grant_id=str(uuid.uuid4()), fan_id=prior.fan_id,
         binding_id=runtime.binding_id, item_id=prior.item_id, terms_hash=prior.terms_hash,
         coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until if renewal else min(prior.expires_at, coverage.valid_until),
@@ -270,10 +297,77 @@ def _successor(s, runtime, owner, prior, coverage, policy):
     return successor
 
 
-def _real_catalogue_terms(s, account, item_id, *, lock=True):
+def terms_successor(s, runtime, owner, prior, policy, *, variant=None):
+    """A new grant for the same fan and product after the approved terms changed (new revision or discount variant).
+
+    Allowed only while the prior card is provably unsent: no intent at all, or the exact terminal-cancellation proof of
+    `_never_dispatched` (no wire start, no provider message, no receipt, no attempt evidence, no unresolved admission). An
+    accepted, unknown, dispatching or wire-started card is never replaced: the existing-card path applies and nothing is repriced.
+    The predecessor is kept; the successor carries issuance+1, its predecessor and the old/new revision and hashes; the unique
+    successor constraint makes a racing second preparer see the same row.
+    """
+    from db.models import OfConversationState
+    from onlyfans_runtime.catalogue_terms import live_terms
+    if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id or prior.binding_id != runtime.binding_id
+            or prior.fan_id != owner.fan_id or not _sales_permits(owner, prior.item_id)):
+        raise Refused('offer_successor_not_eligible')
+    if prior.expires_at <= utcnow():
+        raise Refused('offer_successor_not_eligible')     # an expired grant is renewed only by explicit stopped renewal (_successor)
+    existing = s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == runtime.account_id,
+        OfEngineOfferGrant.predecessor_grant_id == prior.grant_id))
+    if existing is not None:
+        return existing
+    stamp = _grant_stamp(prior) or {}
+    variant = variant or stamp.get('variant') or 'standard'
+    if variant not in ('standard', 'discount'):
+        raise Refused('offer_successor_variant_invalid')
+    state = s.get(OfConversationState, (runtime.account_id, prior.fan_id))
+    proof = _never_dispatched(s, runtime, prior, policy, state) if prior.used_intent_id else None
+    live = live_terms(s, runtime.account_id, prior.item_id, lock=True)
+    if live is None:
+        raise Refused('offer_successor_terms_unavailable')
+    price = live.discount_price_cents if variant == 'discount' else live.standard_price_cents
+    if price is None:
+        raise Refused('offer_successor_variant_unavailable')
+    if variant == 'discount':
+        from .price_intent import discount_blocked
+        if proof is None and prior.used_intent_id is None and discount_blocked(s, runtime.account_id, prior.fan_id, prior.item_id):
+            raise Refused('offer_successor_discount_blocked')
+    resolve = _real_catalogue_terms if policy.transport_kind == 'fansapi' else catalog_terms
+    terms = resolve(s, runtime.account_id, prior.item_id, price_cents=price)
+    digest = _hash(terms)
+    if digest == prior.terms_hash:
+        raise Refused('offer_successor_not_required')
+    _unowned(s, runtime.account_id, prior.fan_id, terms)
+    from onlyfans_runtime.quote import request_exists
+    if request_exists(s, runtime.account_id, prior.fan_id, terms):
+        raise Refused('an existing offer needs review')
+    new = _terms_stamp(terms)
+    authority = {'kind': 'terms_successor', 'predecessor': prior.grant_id, 'oldTermsHash': prior.terms_hash,
+                 'newTermsHash': digest, 'oldRevision': stamp.get('revision'), 'newRevision': new['revision'],
+                 'oldVariant': stamp.get('variant'), 'newVariant': new['variant'], 'terms': new, 'neverDispatched': proof}
+    successor = OfEngineOfferGrant(account_id=runtime.account_id, grant_id=str(uuid.uuid4()), fan_id=prior.fan_id,
+        binding_id=runtime.binding_id, item_id=prior.item_id, terms_hash=digest, coverage_ref=prior.coverage_ref,
+        expires_at=prior.expires_at, issuance=prior.issuance + 1, predecessor_grant_id=prior.grant_id,
+        issuance_reason='discount_variant' if variant == 'discount' else 'terms_revision',
+        authorization_json=json.dumps(authority, sort_keys=True, separators=(',', ':')), created_at=utcnow())
+    try:
+        with s.begin_nested():
+            s.add(successor)
+            s.flush()
+    except IntegrityError:
+        existing = s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == runtime.account_id,
+            OfEngineOfferGrant.predecessor_grant_id == prior.grant_id))
+        if existing is None:
+            raise Refused('offer preparation conflict needs review') from None
+        return existing
+    return successor
+
+
+def _real_catalogue_terms(s, account, item_id, *, lock=True, price_cents=None):
     """Shared preparation/availability/send provenance checks; read-only when lock=False."""
     from db.models import VaultItem
-    terms = catalog_terms(s, account, item_id, lock=lock)
+    terms = catalog_terms(s, account, item_id, lock=lock, price_cents=price_cents)
     for saved in terms['files']:
         media = s.get(VaultItem, (account, saved['media_id']))
         if media is None or media.removed_at is not None or media.content_hash_kind != 'vault-metadata-v1':
@@ -301,8 +395,9 @@ def verified_terms(s, runtime, owner, grant, *, intent_id=None, lock=True):
         from .journey import backfill_complete
         if not backfill_complete(s, runtime.account_id, owner.fan_id):
             raise Refused('offers wait for a finished backfill of this fan')
-    terms = (_real_catalogue_terms(s, runtime.account_id, grant.item_id, lock=lock)
-             if policy.transport_kind == 'fansapi' else catalog_terms(s, runtime.account_id, grant.item_id, lock=lock))
+    terms = (_real_catalogue_terms(s, runtime.account_id, grant.item_id, lock=lock, price_cents=_grant_price(grant))
+             if policy.transport_kind == 'fansapi' else
+             catalog_terms(s, runtime.account_id, grant.item_id, lock=lock, price_cents=_grant_price(grant)))
     if _hash(terms) != grant.terms_hash:
         raise Refused('approved offer terms changed')
     _unowned(s, runtime.account_id, owner.fan_id, terms)
@@ -332,7 +427,7 @@ def approve_catalogue_offer(store, tenant, account, fan_id, item_id, coverage):
         return _approve_catalogue_offer(s, runtime, fan_id, item_id, coverage)
 
 
-def _approve_catalogue_offer(s, runtime, fan_id, item_id, coverage):
+def _approve_catalogue_offer(s, runtime, fan_id, item_id, coverage, *, price_cents=None):
     """Shared transaction path for explicit setup and standing-policy preparation."""
     account = runtime.account_id
     if (type(coverage) is not RealCatalogueCoverage or coverage.account_id != account or coverage.fan_id != fan_id
@@ -349,18 +444,21 @@ def _approve_catalogue_offer(s, runtime, fan_id, item_id, coverage):
             or policy is None or policy.transport_kind != 'fansapi' or not policy.media_enabled
             or not _sales_permits(owner, item_id)):
         raise Refused('catalogue offer is not authorized')
-    terms = _real_catalogue_terms(s, account, item_id)
+    terms = _real_catalogue_terms(s, account, item_id, price_cents=price_cents)
     _unowned(s, account, fan_id, terms)
     digest = _hash(terms)
     prior = _latest_grant(s, account, fan_id, item_id, digest)
     if prior is None:
         try:
             with s.begin_nested():
+                authority = _grant_authority(s, runtime, coverage, policy)
+                if _terms_stamp(terms) is not None:
+                    authority['terms'] = _terms_stamp(terms)
                 prior = OfEngineOfferGrant(account_id=account, grant_id=str(uuid.uuid4()), fan_id=fan_id,
                     binding_id=runtime.binding_id, item_id=item_id, terms_hash=digest,
                     coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until,
                     issuance=0, issuance_reason='initial',
-                    authorization_json=json.dumps(_grant_authority(s, runtime, coverage, policy), sort_keys=True, separators=(',', ':')),
+                    authorization_json=json.dumps(authority, sort_keys=True, separators=(',', ':')),
                     created_at=utcnow())
                 s.add(prior)
                 s.flush()

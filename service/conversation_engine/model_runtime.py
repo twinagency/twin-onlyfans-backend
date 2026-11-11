@@ -181,6 +181,12 @@ class ModelRuntime:
             same = row.snapshot_sha256 == turn.snapshot_sha256
             if row.status in ('reserved', 'calling'):
                 raise ModelBusy('a model call is already in flight for this request')
+            if (row.status == 'settled' and row.outcome in IDENTITY_UNSETTLED
+                    and row.lease_expires_at is not None and row.lease_expires_at > now):
+                # Settlement and identity verification are separate short transactions. A peer which selected this
+                # request before settlement must not hand it over while the owner still has its existing lease.
+                # Never reuse the pending answer or reserve another call; after expiry the identity hold still applies.
+                raise ModelBusy('model identity verification is still leased to the active call')
             if cfg.upstream_provider and row.response_text is not None and same and row.outcome in (None, 'ok', 'identity_unverified') + IDENTITY_UNSETTLED:
                 turn.handover('model_identity_unverified', {'outcome': row.outcome or 'not_recorded'})
                 raise Refused('model identity is unverified; request handed to a human')

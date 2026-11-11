@@ -59,6 +59,53 @@ def request_item(w, source, monkeypatch):
     return found[0]
 
 
+def test_retry_peer_preserves_active_identity_verification_lease(make_world, monkeypatch):
+    """Peer selected before settlement must not hand over an owner's pending identity transaction."""
+    from concurrent.futures import ThreadPoolExecutor
+    w = make_world([429, 'ok'])
+    post(w, 92901)
+    w.ticks(1)
+    w.advance(31)
+    peer = w.new_pilot()
+    owner_ledger = w.pilot.worker.engine.model.ledger
+    peer_ledger = peer.worker.engine.model.ledger
+    selected, pending, peer_done = threading.Event(), threading.Event(), threading.Event()
+    real_rows, real_note = peer_ledger.rows, owner_ledger.note_identity
+
+    def read_after_owner_settles(*args, **kwargs):
+        selected.set()  # scheduler + engine selected the still-open request before the owner starts
+        assert pending.wait(30), 'owner did not reach persisted identity_pending'
+        return real_rows(*args, **kwargs)
+
+    def pause_identity(*args, **kwargs):
+        real_note(*args, **kwargs)
+        pending.set()  # settled response exists, identity verdict is not yet persisted
+        assert peer_done.wait(30), 'peer did not finish its leased-call observation'
+
+    monkeypatch.setattr(peer_ledger, 'rows', read_after_owner_settles)
+    monkeypatch.setattr(owner_ledger, 'note_identity', pause_identity)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        observer = pool.submit(peer.tick)
+        assert selected.wait(30), 'peer did not select due retry'
+        owner = pool.submit(w.pilot.tick)
+        try:
+            observer.result(timeout=30)
+            assert w.request(92901) == ('open', 'prepare_reply', None)
+            calls = w.calls()
+            assert len(calls) == 2 and calls[-1].outcome == 'identity_pending'
+            assert calls[-1].lease_expires_at > w.clock()
+            assert w.w.fans.posts == []
+        finally:
+            peer_done.set()
+        owner.result(timeout=30)
+    w.ticks(3)
+    assert w.provider.calls == [429, 'ok']
+    assert w.request(92901)[0] == 'completed'
+    assert len(w.w.fans.posts) == 1 and w.out_messages() == 1
+    assert w.w.fans.posts[0]['body']['text'] == 'hey you'
+    assert [c.outcome for c in w.calls()] == ['http_429', 'verified_ok']
+
+
 @pytest.mark.parametrize('delay', ['7200', '9' * 60, 'http-date'])
 def test_long_provider_delay_is_operator_work_never_an_early_retry(make_world, monkeypatch, delay):
     value = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=7200), usegmt=True) if delay == 'http-date' else delay

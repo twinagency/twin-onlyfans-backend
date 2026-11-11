@@ -33,7 +33,8 @@ def test_nondefault_cooldown_is_scheduled_until_actual_handover(make_world, monk
     assert w.request(94001)[0] == 'open'
     before = (call.call_id, call.status, call.outcome, call.retry_not_before, call.failure_detail_json)
     shown = request_item(w, 94001, monkeypatch)
-    assert shown['recoveryState'] == 'scheduled_retry' and not shown['operatorAlert']
+    assert shown['recoveryState'] == 'scheduled_retry' and shown['operatorAlert']
+    assert shown['recoveryReason'] == 'long_retry_wait'
     assert shown['recoveryNextStep'] == 'wait_until_retry_due'
     assert shown['nextRetryAt'] == call.retry_not_before.isoformat() + 'Z'
     assert _work_counts(w.pilot)['modelRetryDelayed'] == 1
@@ -81,3 +82,40 @@ def test_legacy_missing_deadline_is_explicitly_unknown_without_changing_recovery
     w.ticks(3)
     assert w.provider.calls == [429, 'ok']
     assert w.request(94002)[0] == 'completed' and len(w.w.fans.posts) == 1
+
+
+@pytest.mark.parametrize('delay', ['7200', '9' * 100])
+def test_crash_before_handover_keeps_long_wait_visible_without_stopping_other_fan(
+        make_world, monkeypatch, delay):
+    from test_plan_c_r0_acceptance_pg import FAN2
+    w = make_world([(429, {'Retry-After': delay})])
+    ledger = w.pilot.worker.engine.model.ledger
+    release = ledger.release
+
+    def crash_after_release(*args, **kwargs):
+        release(*args, **kwargs)
+        raise RuntimeError('injected crash after durable release')
+
+    with monkeypatch.context() as m:
+        m.setattr(ledger, 'release', crash_after_release)
+        post(w, 94003)
+        with pytest.raises(RuntimeError, match='injected crash after durable release'):
+            w.ticks(1)
+    assert w.request(94003)[0] == 'open'
+    shown = request_item(w, 94003, monkeypatch)
+    assert shown['recoveryState'] == 'scheduled_retry' and shown['operatorAlert']
+    assert shown['recoveryReason'] == 'long_retry_wait'
+    assert shown['recoveryNextStep'] == 'wait_until_retry_due'
+    assert w.provider.calls == [429] and w.w.fans.posts == []
+    post(w, 94004, fan=FAN2)
+    w.ticks(4)
+    assert w.request(94004)[0] == 'completed' and len(w.w.fans.posts) == 1
+    assert w.request(94003)[0] == 'open' and w.provider.calls == [429, 'ok']
+    if delay == '7200':
+        w.advance(7201)
+        w.ticks(3)
+        assert w.request(94003)[0] == 'handover_pending'
+        shown = request_item(w, 94003, monkeypatch)
+        assert shown['recoveryState'] == 'deferred_operator' and shown['operatorAlert']
+        assert shown['recoveryReason'] == 'model_retry_deferred'
+        assert w.provider.calls == [429, 'ok'] and len(w.w.fans.posts) == 1

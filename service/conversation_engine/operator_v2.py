@@ -473,7 +473,7 @@ def request_recovery(s, runtime, request, *, now=None):
     The request ID is the deduplication key. Deadlines and call evidence are durable; process restart cannot hide
     an alert or turn a scheduled wait into a retry permission. Intentional holds are never labelled overdue work.
     """
-    from .model_client import released_failure, retryable_release, http_refusal, MAX_AUTOMATIC_RETRY_SECONDS
+    from .model_client import released_failure, retryable_release, http_refusal
     now = now or utcnow()
     calls = list(s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == request.account_id,
         OfEngineModelCall.request_id == request.request_id, OfEngineModelCall.binding_id == runtime.binding_id)
@@ -485,7 +485,8 @@ def request_recovery(s, runtime, request, *, now=None):
     def hold(kind, step):
         return {**result, 'recoveryState': kind, 'recoveryNextStep': step,
                 'operatorAlert': kind in {'overdue_eligible', 'terminal_model_failure', 'deferred_operator',
-                                          'unknown_model_outcome', 'unknown_delivery', 'identity_hold'}}
+                                          'unknown_model_outcome', 'unknown_delivery', 'identity_hold',
+                                          'retry_timing_unknown'}}
     if any(c.outcome in (*IDENTITY_UNSETTLED, 'identity_unverified') for c in calls):
         return hold('identity_hold', 'review_model_identity')
     if any(c.status == 'unknown' for c in calls):
@@ -522,14 +523,16 @@ def request_recovery(s, runtime, request, *, now=None):
     if any(released_failure(c.status, c.outcome, c.wire_started_at) == 'permanent' for c in calls):
         return hold('terminal_model_failure', 'review_provider_configuration')
     retries = [c for c in calls if released_failure(c.status, c.outcome, c.wire_started_at) == 'retryable']
-    due = max((c.retry_not_before or c.updated_at + timedelta(seconds=30) for c in retries), default=None)
-    # Legacy rows have no provider deadline; their existing 30-second default remains the minimum. Runtime also
-    # rechecks its configured cooldown before spending; this display cannot authorize work.
+    if any(c.retry_not_before is None for c in retries):
+        # A legacy row has no saved deadline and this reader has no effective ModelConfig.
+        # Its runtime still owns recovery; do not invent a cooldown or mark the request overdue.
+        return hold('retry_timing_unknown', 'review_retry_timing')
+    due = max((c.retry_not_before for c in retries), default=None)
+    # A durable handover above establishes human work. Delay length alone cannot: the runtime
+    # permits a configured cooldown longer than its default automatic window. This is the
+    # earliest scheduler reconsideration time, not permission or a promise of another model call.
     if due is not None:
         result['nextRetryAt'] = _iso(due)
-        if any(c.retry_not_before and c.retry_not_before - c.updated_at > timedelta(seconds=MAX_AUTOMATIC_RETRY_SECONDS)
-               for c in retries):
-            return hold('deferred_operator', 'review_provider_retry_delay')
         if due > now:
             return hold('scheduled_retry', 'wait_until_retry_due')
     overdue = now - (due or request.updated_at) >= timedelta(minutes=5)

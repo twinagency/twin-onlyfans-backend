@@ -364,6 +364,75 @@ def terms_successor(s, runtime, owner, prior, policy, *, variant=None):
     return successor
 
 
+def prepare_commercial_offer(store, tenant, account, fan_id, message_id, *, coverage_ref, valid_until):
+    """Standing-permission preparation for a commercial account: the product comes from the fan-scoped shortlist, the amount from
+    application rules, the grant from the same authority as every other card. No per-fan grant is injected.
+
+    `coverage_ref`/`valid_until` are the account-level approved-catalogue evidence supplied by the scope contract (Step 2 hands it
+    over from commercial.v1; the offline suites pass the same shape the pilot uses). Returns None for a non-commercial account.
+    """
+    from .catalogue import search_context
+    from .commercial_scope import commercial_scope
+    from .offers import match
+    from .price_intent import variant_for
+    from onlyfans_runtime.catalogue_terms import live_terms
+    _id(fan_id); _id(message_id)
+    if (type(coverage_ref) is not str or len(coverage_ref) > 128 or not isinstance(valid_until, datetime)
+            or valid_until.tzinfo is not None or valid_until <= utcnow()):
+        raise Refused('catalogue coverage is incomplete')
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        if not commercial_scope(s, runtime):
+            return None
+        owner = s.get(OfEngineOwner, (account, fan_id))
+        policy = s.get(OfDeliveryPolicy, account, with_for_update=True)
+        message = s.get(Message, (account, fan_id, message_id))
+        if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id or policy is None
+                or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.media_enabled
+                or not coverage_ref.startswith(_COVERAGE_PREFIX[policy.transport_kind])
+                or message is None or message.direction != 'in' or message.is_unsent):
+            return {'state': 'unavailable', 'reason': 'offer_not_authorized'}
+        view = search_context(s, runtime, fan_id, message)
+        item_id = next((int(i['itemId']) for i in view.get('items', []) if _sales_permits(owner, int(i['itemId']))), None)
+        if view['state'] != 'matches' or item_id is None:
+            return {'state': 'none', 'reason': view['state']}
+        cards = match(s, runtime, fan_id, message.body, include_cards=True).get('cards', [])
+        if any(card['itemId'] == str(item_id) and card['sendState'] in ('queued', 'dispatching', 'accepted', 'unknown') for card in cards):
+            return {'state': 'existing_card', 'itemId': str(item_id)}
+        variant = variant_for(s, runtime, fan_id, item_id, message.body)
+        live = live_terms(s, account, item_id)
+        price = live.discount_price_cents if variant == 'discount' else live.standard_price_cents
+        resolve = _real_catalogue_terms if policy.transport_kind == 'fansapi' else catalog_terms
+        try:
+            terms = resolve(s, account, item_id, price_cents=price)
+            _unowned(s, account, fan_id, terms)
+            digest = _hash(terms)
+            prior = s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == account,
+                OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.item_id == item_id)
+                .order_by(OfEngineOfferGrant.created_at.desc(), OfEngineOfferGrant.issuance.desc()).limit(1))
+            if prior is None:
+                stamp = _terms_stamp(terms)
+                grant = OfEngineOfferGrant(account_id=account, grant_id=str(uuid.uuid4()), fan_id=fan_id,
+                    binding_id=runtime.binding_id, item_id=item_id, terms_hash=digest, coverage_ref=coverage_ref,
+                    expires_at=valid_until, issuance=0, issuance_reason='initial',
+                    authorization_json=json.dumps({'kind': 'commercial_initial', 'coverageRef': coverage_ref, 'terms': stamp},
+                                                  sort_keys=True, separators=(',', ':')), created_at=utcnow())
+                s.add(grant)
+                s.flush()
+            elif prior.terms_hash == digest and prior.used_intent_id is None and prior.expires_at > utcnow():
+                grant = prior
+            elif prior.terms_hash == digest:
+                return {'state': 'held', 'reason': 'offer_authorization_needs_review', 'itemId': str(item_id)}
+            else:
+                grant = terms_successor(s, runtime, owner, prior, policy, variant=variant)
+            verified_terms(s, runtime, owner, grant)
+        except Refused as exc:
+            if str(exc) in {'catalogue media already owned', 'bundle overlaps owned media'}:
+                return {'state': 'owned', 'itemId': str(item_id)}
+            return {'state': 'held', 'reason': str(exc)[:64], 'itemId': str(item_id)}
+        return {'state': 'prepared', 'grantId': grant.grant_id, 'itemId': str(item_id), 'variant': variant, 'priceCents': price}
+
+
 def _real_catalogue_terms(s, account, item_id, *, lock=True, price_cents=None):
     """Shared preparation/availability/send provenance checks; read-only when lock=False."""
     from db.models import VaultItem

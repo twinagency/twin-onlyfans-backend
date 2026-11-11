@@ -82,8 +82,10 @@ def bulk_commercial(engine, *, count, binding_id, account=ACCOUNT, first_media=1
                 tip_unlock_cents,is_free_teaser,tags,enabled,pricing_mode,created_at,updated_at)
             SELECT :a,'image','Studio set '||g,'Studio photograph number '||g||'.','['||(:m+g)||']','[]',1200,0,false,'[]',true,'fixed',now(),now()
             FROM generate_series(0,:n-1) g"""), {'a': account, 'm': first_media, 'n': count})
-        ids = [r[0] for r in c.execute(text(
-            "SELECT id FROM catalog_items WHERE account_id=:a AND media_ids ~ '^\\[1[0-9]{5}\\]$' ORDER BY id"), {'a': account})]
+        ids = [r[0] for r in c.execute(text("""SELECT id FROM catalog_items WHERE account_id=:a AND
+            CASE WHEN media_ids ~ '^\\[[0-9]+\\]$' THEN substring(media_ids from 2 for length(media_ids)-2)::bigint END
+            BETWEEN :lo AND :hi ORDER BY substring(media_ids from 2 for length(media_ids)-2)::bigint"""),
+            {'a': account, 'lo': first_media, 'hi': first_media + count - 1})]
         for index, label in (special or {}).items():
             c.execute(text('UPDATE catalog_items SET label=:l, description_for_ai=:d WHERE id=:i'),
                       {'l': label, 'd': f'{label}, a distinctive approved photograph.', 'i': ids[index]})

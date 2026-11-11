@@ -174,6 +174,9 @@ def _verified_purchases(s, runtime, fan_id):
     from db.models import CatalogItem
     from onlyfans_runtime.media_delivery import catalog_terms
     from ownership import owned_media_in_session
+    from .commercial_scope import commercial_scope
+    if commercial_scope(s, runtime):
+        return _commercial_purchases(s, runtime, fan_id)
     try:
         owned = set(owned_media_in_session(s, runtime.account_id, fan_id, limit=10000))
         policy = s.get(OfDeliveryPolicy, runtime.account_id)
@@ -207,6 +210,30 @@ def _verified_purchases(s, runtime, fan_id):
         if media and media <= owned:
             out.append({'itemId': str(item.id), 'label': item.label or item.description_for_ai})
     return out
+
+
+def _commercial_purchases(s, runtime, fan_id):
+    """Commercial accounts: every live product whose paid assets are all verifiably owned, from one set-based query.
+
+    None (records unavailable) whenever ownership is unknown; no 200-row cap. An absurd result (> 5000) is reported as
+    unavailable rather than silently truncated.
+    """
+    from sqlalchemy import text
+    from .ownership_gate import owned_state
+    owned, unknown = owned_state(s, runtime.account_id, fan_id)
+    if unknown:
+        return None
+    if not owned:
+        return []
+    rows = s.execute(text("""SELECT c.id, coalesce(c.label, c.description_for_ai) FROM of_catalogue_terms t
+        JOIN catalog_items c ON c.id = t.item_id AND c.account_id = t.account_id
+        WHERE t.account_id = :a AND t.status = 'approved' AND c.enabled AND c.script_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM of_catalogue_terms_member m WHERE m.account_id = t.account_id AND m.item_id = t.item_id
+                          AND m.revision = t.revision AND m.role = 'paid' AND NOT (m.media_id = ANY(CAST(:owned AS bigint[]))))
+        ORDER BY c.id LIMIT 5001"""), {'a': runtime.account_id, 'owned': sorted(owned)}).all()
+    if len(rows) > 5000:
+        return None
+    return [{'itemId': str(item_id), 'label': label} for item_id, label in rows]
 
 
 class SyntheticModel:

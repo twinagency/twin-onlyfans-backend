@@ -63,8 +63,9 @@ def test_a_bundle_of_six_media_is_one_product_with_six_media(database):
     bundle = add_item(database[1], label='Beach bundle', media=list(range(200001, 200007)), price=2400,
                       description='Six approved beach photographs.')
     approve(store, bundle, standard=2400)
+    proof = syn_coverage(store)
     with Session(database[1]) as s, s.begin():
-        result = search_scoped(s, runtime(store, s), FAN, 'beach bundle', syn_coverage(store))
+        result = search_scoped(s, runtime(store, s), FAN, 'beach bundle', proof)
     assert result['state'] == 'matches' and result['productCount'] == 1 and result['mediaCount'] == 6
     item = result['items'][0]
     assert item['productKind'] == 'bundle_photo' and item['counts'] == {'media': 6, 'pictures': 6, 'videos': 0, 'previews': 0}
@@ -75,8 +76,9 @@ def test_a_bundle_of_six_media_is_one_product_with_six_media(database):
 def test_a_page_cap_reports_incomplete_and_never_confirms_none(database):
     store, authority, engine, model, red, blue = engine_setup(database)
     bulk_commercial(database[1], count=300, binding_id=runtime_of(store), hold_at=set(range(300)))
+    proof = syn_coverage(store)
     with Session(database[1]) as s, s.begin():
-        result = search_scoped(s, runtime(store, s), FAN, 'studio', syn_coverage(store))
+        result = search_scoped(s, runtime(store, s), FAN, 'studio', proof)
     assert result['state'] != 'confirmed_none' and result['items'] == []
     assert result['coverage'] == 'incomplete' and result['truncated'] is True
     store.close()
@@ -415,11 +417,13 @@ def test_d_a_bundle_with_one_owned_paid_asset_is_excluded_but_a_sibling_single_i
     from conversation_engine.ownership_gate import ownership_gate
     from onlyfans_runtime.media_delivery import catalog_terms
     store, one, two, trio = ownership_world(database)
+    proof = syn_coverage(store)
     with Session(database[1]) as s, s.begin():
-        assert labels(search_scoped(s, runtime(store, s), FAN, 'alpha', syn_coverage(store))) == ['Alpha one', 'Alpha trio bundle', 'Alpha two']
+        assert labels(search_scoped(s, runtime(store, s), FAN, 'alpha', proof)) == ['Alpha one', 'Alpha trio bundle', 'Alpha two']
     buy(database[1], 32)
+    proof = syn_coverage(store)
     with Session(database[1]) as s, s.begin():
-        result = search_scoped(s, runtime(store, s), FAN, 'alpha', syn_coverage(store))
+        result = search_scoped(s, runtime(store, s), FAN, 'alpha', proof)
         assert labels(result) == ['Alpha one']                      # the owned single and the bundle containing it are gone
         ownership_gate(s, ACCOUNT, FAN, catalog_terms(s, ACCOUNT, one, lock=False))
         for owned in (two, trio):
@@ -445,12 +449,13 @@ def test_d_unknown_ownership_offers_nothing_and_is_never_read_as_unowned(databas
     else:
         with Session(database[1]) as s, s.begin():
             s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=7001, direction='out', body='locked',
-                          media_ids='[]', media_count=2, price_cents=1500, is_paid=True))
+                          media_ids='[]', media_count=2, price_cents=1500, is_paid=True, created_at=utcnow()))
+    proof = syn_coverage(store)
     with Session(database[1]) as s, s.begin():
         terms = catalog_terms(s, ACCOUNT, one, lock=False)
         with pytest.raises(Refused, match='ownership|review'):
             ownership_gate(s, ACCOUNT, FAN, terms)
-        result = search_scoped(s, runtime(store, s), FAN, 'alpha', syn_coverage(store))
+        result = search_scoped(s, runtime(store, s), FAN, 'alpha', proof)
     assert result['state'] == 'unavailable' and result['items'] == [] and result['reason'] == 'ownership_unknown'
     store.close()
 

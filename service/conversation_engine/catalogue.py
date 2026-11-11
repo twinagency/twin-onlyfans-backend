@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 import re
 import uuid
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from db.models import CatalogItem, VaultItem, Message
 from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy
@@ -68,7 +68,32 @@ class VaultCatalogueCoverage:
 _COVERAGE = {'synthetic': (SyntheticCatalogueCoverage, 'synthetic:'), 'fansapi': (VaultCatalogueCoverage, 'vault:')}
 
 
+def _catalogue_version_v2(s, runtime):
+    """Coverage hash for a commercial account: aggregated in the database, so no row is transferred and no size makes it None.
+
+    Covers every catalogue row's identity/update/enable state with its live terms revision, the alias set bound to this binding
+    and the vault state of every approved member. Old (v1) coverage objects hash differently, so they read as stale (safe).
+    """
+    items = s.execute(text("""SELECT count(*), md5(coalesce(string_agg(c.id::text || '|' || c.updated_at::text || '|' || c.enabled::text
+        || '|' || coalesce(t.revision::text, '-') || '|' || coalesce(t.snapshot_sha256, '-'), ',' ORDER BY c.id), ''))
+        FROM catalog_items c LEFT JOIN of_catalogue_terms t ON t.account_id = c.account_id AND t.item_id = c.id AND t.status = 'approved'
+        WHERE c.account_id = :a AND c.script_id IS NULL"""), {'a': runtime.account_id}).one()
+    aliases = s.execute(text("""SELECT count(*), md5(coalesce(string_agg(alias_id || '|' || item_id::text || '|' || normalized || '|' || content_hash,
+        ',' ORDER BY alias_id), '')) FROM of_engine_catalogue_alias WHERE account_id = :a AND binding_id = :b"""),
+        {'a': runtime.account_id, 'b': runtime.binding_id}).one()
+    files = s.execute(text("""SELECT count(*), md5(coalesce(string_agg(v.media_id::text || '|' || coalesce(v.content_hash, '') || '|' || coalesce(v.content_hash_kind, '')
+        || '|' || v.kind || '|' || coalesce(v.removed_at::text, ''), ',' ORDER BY v.media_id), ''))
+        FROM vault_items v WHERE v.account_id = :a AND v.media_id IN (SELECT m.media_id FROM of_catalogue_terms_member m
+        JOIN of_catalogue_terms t ON t.account_id = m.account_id AND t.item_id = m.item_id AND t.revision = m.revision
+        WHERE t.account_id = :a AND t.status = 'approved')"""), {'a': runtime.account_id}).one()
+    value = {'v': 'commercial-catalogue.v2', 'binding': runtime.binding_id, 'items': list(items), 'aliases': list(aliases), 'files': list(files)}
+    return sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode()).hexdigest()
+
+
 def _catalogue_version(s, runtime):
+    from .commercial_scope import commercial_scope
+    if commercial_scope(s, runtime):
+        return _catalogue_version_v2(s, runtime)
     rows = s.execute(select(CatalogItem.id, CatalogItem.label, CatalogItem.description_for_ai,
         CatalogItem.kind, CatalogItem.media_ids, CatalogItem.preview_media_ids, CatalogItem.price_cents,
         CatalogItem.enabled, CatalogItem.script_id, CatalogItem.updated_at, CatalogItem.tags)
@@ -196,6 +221,11 @@ def search_scoped(s, runtime, fan_id, query, coverage=None):
         if coverage.valid_until <= utcnow() or _catalogue_version(s, runtime) != coverage.snapshot_hash:
             return {'state':'stale', 'items':[], 'coverage':'stale'}
         coverage_state = 'complete' if coverage.complete else 'incomplete'
+    from .commercial_scope import commercial_scope
+    if commercial_scope(s, runtime):
+        # Commercial accounts: scoped, indexed, windowed eligibility instead of the legacy 200-row whole-catalogue view.
+        from .catalogue_select import shortlist
+        return shortlist(s, runtime, fan_id, tokens, coverage_state)
     rows = list(s.scalars(select(CatalogItem).where(CatalogItem.account_id == account,
         CatalogItem.enabled.is_(True), CatalogItem.script_id.is_(None))
         .order_by(CatalogItem.id).limit(_MAX_ITEMS + 1)))

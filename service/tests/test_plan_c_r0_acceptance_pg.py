@@ -485,3 +485,40 @@ finally:
     assert after['posts'][0]['body']['text'] == 'hey you'
     assert w.request(92021)[0] == 'completed' and [c.seq for c in w.calls()] == [0, 1]
     assert w.calls()[0].retry_not_before == original.retry_not_before
+
+
+def test_real_delivery_gap_can_elapse_during_work_without_calling_pacing_sleep(world):
+    """A nonempty sleep list is not the pacing contract: real elapsed control/DB work can satisfy the gap."""
+    import hashlib, hmac, time
+    from conversation_engine import approval
+    from conversation_engine.engine import SyntheticProposal
+    from test_engine_real_worker_pg import SECRET, inbound
+    world.fans.hooks.clear()  # remove the generic fixture's SQL pacing reset; this proof uses the real gap
+    sleeps = []
+    world.worker.sleep = lambda seconds: (sleeps.append(seconds), time.sleep(seconds))
+    world.reply(lambda snapshot: SyntheticProposal('hey you', parts=('how was your day',)))
+    raw = json.dumps(inbound(92022, 'hello there', fan=FAN)).encode()
+    staged = world.worker.handle(TENANT, ACCOUNT, raw_body=raw,
+        signature=hmac.new(SECRET, raw, hashlib.sha256).hexdigest(), secret=SECRET, event_key='r0-elapsed-gap')
+    assert staged['outcome'] == 'awaiting_approval'
+    draft = staged['approval']
+    approval.approve(world.store, TENANT, ACCOUNT, draft['requestId'], draft['generation'],
+                     expected_version=draft['version'], actor='test-operator')
+    sequence = world.engine.sequence(TENANT, ACCOUNT, staged['decisionId'])
+    assert len(sequence) == 2
+    original = world.worker._part_state
+    delayed = []
+    def control_work(tenant, account, part):
+        result = original(tenant, account, part)
+        if part == sequence[1] and not delayed:
+            delayed.append(part)
+            time.sleep(1.2)  # real elapsed work after the predecessor settles; no fake clock or policy write
+        return result
+    world.worker._part_state = control_work
+    result = world.worker.send_approved(TENANT, ACCOUNT, staged['decisionId'])
+    assert result['outcome'] == 'accepted' and len(world.fans.posts) == 2 and sleeps == []
+    assert [p['body']['text'] for p in world.fans.posts] == ['hey you', 'how was your day']
+    with Session(world.database[1]) as s:
+        sends = list(s.scalars(select(OfTextIntent).order_by(OfTextIntent.wire_started_at)))
+        assert len(sends) == 2 and all(i.status == 'accepted' for i in sends)
+        assert sends[1].wire_started_at - sends[0].wire_started_at >= timedelta(seconds=1)

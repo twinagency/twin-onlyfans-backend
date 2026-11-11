@@ -290,19 +290,15 @@ def _product_current(s, account, product):
 
 
 def current(s, runtime, *, lock=False):
-    query = select(OfEnginePilotScope).where(OfEnginePilotScope.scope_id == 1)
-    row = s.scalar(query.with_for_update() if lock else query)
-    if row is None or row.account_id != runtime.account_id:
+    """This account's legacy or commercial scope. A preparation row (or none) is "no pilot", exactly as before."""
+    from . import scope_contract as contracts
+    row = contracts.row_for(s, runtime, lock=lock)
+    if row is None:
         return None, None
-    if row.binding_id != runtime.binding_id:
-        raise Refused('pilot creator binding changed')
-    try:
-        config = validate(json.loads(row.config_json))
-    except (TypeError, ValueError, Refused):
-        raise Refused('pilot configuration is invalid') from None
-    if _fingerprint(config) != row.fingerprint or _encoded(config) != row.config_json:
-        raise Refused('pilot configuration fingerprint changed')
-    return row, config
+    kind = contracts.claim(row)
+    if kind not in (contracts.LEGACY, contracts.COMMERCIAL):
+        return None, None
+    return row, contracts.validated(row, runtime, kind)
 
 
 def require(s, runtime, *, active=False, lock=False):
@@ -547,8 +543,14 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
         prior = _prior(s, account, command_key, request_hash)
         if prior is not None:
             return {**prior, 'replayed':True}
-        row = s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.scope_id == 1).with_for_update())
-        if row is not None and (row.account_id != account or row.binding_id != runtime.binding_id):
+        row = s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id == account).with_for_update())
+        if row is None:
+            if s.scalar(select(OfEnginePilotScope.scope_id).where(OfEnginePilotScope.scope_id == 1).with_for_update()) is not None:
+                raise Refused('the pilot is bound to another creator')
+        elif row.scope_id != 1:
+            # Preparation and commercial authority are never rewritten by the legacy pilot command (decision D1).
+            raise Refused('promote the preparation scope through the commercial command first')
+        elif row.binding_id != runtime.binding_id:
             raise Refused('the pilot is bound to another creator')
         if row is not None:
             _, old = current(s, runtime)
@@ -744,9 +746,12 @@ def describe(store, tenant, account, *, actor=None, require_read=False):
             authorize(config, actor, 'read')
         if row is None:
             return {'accountId':account, 'status':'unconfigured', 'revision':0, 'config':None}
-        return {'accountId':account, 'status':row.status, 'revision':row.revision, 'fingerprint':row.fingerprint,
+        shown = {'accountId':account, 'status':row.status, 'revision':row.revision, 'fingerprint':row.fingerprint,
                 'activeSince':row.active_since.isoformat() + 'Z' if row.active_since else None, 'config':config, 'providerRequestsUsed':row.provider_requests_used,
                 'providerCreditsReserved':row.provider_credits_reserved}
+        if config.get('contract_version') == 'commercial.v1':
+            shown['contractVersion'] = 'commercial.v1'
+        return shown
 
 
 def reserve_provider_request(store, tenant, account, *, expected_revision):

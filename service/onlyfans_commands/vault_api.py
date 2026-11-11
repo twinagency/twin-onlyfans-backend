@@ -232,6 +232,34 @@ async def message_media(request: Request, account_id: str, fan_id: str, message_
         return refuse("message_media_unavailable", 503, "That message attachment could not be read.")
 
 
+@router.get("/accounts/{account_id}/vault/category-price/{folder_id}")
+async def category_price_get(request:Request,account_id:str,folder_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        if request.query_params:raise InvalidVault("Category prices do not use query parameters.")
+        from onlyfans_runtime.vault_editing import get_category_price
+        result=await asyncio.to_thread(get_category_price,*context,account_id,folder_id)
+        return response({"ok":True,"accountId":account_id,"categoryPrice":result})
+    except Exception as exc:return failure(exc)
+
+
+@router.post("/accounts/{account_id}/vault/category-price/{folder_id}")
+async def category_price_set(request:Request,account_id:str,folder_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        if request.query_params:raise InvalidVault("Category prices do not use query parameters.")
+        value=await body(request,{"priceCents","expectedFingerprint","commandKey","actor"})
+        if isinstance(value,JSONResponse):return value
+        from onlyfans_runtime.vault_editing import set_category_price
+        result=await asyncio.to_thread(set_category_price,*context,account_id,folder_id,
+            price_cents=value["priceCents"],expected_fingerprint=value["expectedFingerprint"],
+            command_key=value["commandKey"],actor=value["actor"])
+        return response({"ok":True,"applied":True,"accountId":account_id,"commandKey":value["commandKey"],**result})
+    except Exception as exc:return failure(exc)
+
+
 @router.get("/accounts/{account_id}/vault/category-review/{folder_id}")
 async def category_review(request: Request, account_id: str, folder_id: str):
     context = authenticate(request, account_id)
@@ -241,8 +269,8 @@ async def category_review(request: Request, account_id: str, folder_id: str):
             raise InvalidVault("Choose the exact media to review.")
         from onlyfans_runtime.vault_editing import get_category_review
         result = await asyncio.to_thread(get_category_review,*context,account_id,folder_id,
-                                        request.query_params["mediaIds"].split(","))
-        return response({"ok":True,"accountId":account_id,"reviewedState":result})
+                                        request.query_params["mediaIds"].split(","),include_assets=True)
+        return response({"ok":True,"accountId":account_id,**result})
     except Exception as exc:return failure(exc)
 
 

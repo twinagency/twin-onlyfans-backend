@@ -29,6 +29,11 @@ def prepared(database, monkeypatch):
     from onlyfans_runtime.vault_editing import get_category_review
     value["reviewedState"]=get_category_review(store,TENANT,account,fid,["11","12"])
     value["rightsConfirmed"]=True
+    from onlyfans_runtime.vault_editing import get_category_price,set_category_price
+    current=get_category_price(store,TENANT,account,fid)
+    set_category_price(store,TENANT,account,fid,price_cents=1200,expected_fingerprint=current["fingerprint"],
+        command_key="0"*64,actor=ACTOR)
+    value["categoryPriceRevision"]=1
     yield store,account,value,calls
     store.close()
 
@@ -298,3 +303,35 @@ def test_current_readiness_cannot_be_bypassed_by_saved_classification(prepared):
         row=s.get(VaultItem,(account,11))
         raw=json.loads(row.raw_json);raw["isReady"]=False;row.raw_json=json.dumps(raw)
     with pytest.raises(Refused,match="readiness"):enable(prepared,item)
+
+
+def test_category_price_is_persistent_audited_and_stale_commands_are_refused(prepared):
+    from onlyfans_runtime.vault_editing import get_category_price,set_category_price
+    from db.onlyfans_vault_edit_models import OfVaultEdit
+    store,account,category,_=prepared;fid=category["folderId"]
+    before=get_category_price(store,TENANT,account,fid)
+    result=set_category_price(store,TENANT,account,fid,price_cents=1500,expected_fingerprint=before["fingerprint"],
+        command_key="1"*64,actor=ACTOR)
+    assert set_category_price(store,TENANT,account,fid,price_cents=1500,expected_fingerprint=before["fingerprint"],
+        command_key="1"*64,actor=ACTOR)==result
+    current=get_category_price(store,TENANT,account,fid)
+    assert current["priceCents"]==1500 and current["revision"]==2 and current["appliesTo"]=="single_asset"
+    with pytest.raises(Refused,match="price changed"):
+        set_category_price(store,TENANT,account,fid,price_cents=1800,expected_fingerprint=before["fingerprint"],
+            command_key="2"*64,actor=ACTOR)
+    with pytest.raises(Refused,match="price changed"):run(prepared)
+    with Session(store.engine) as s:
+        record=s.get(OfVaultEdit,(account,"1"*64))
+        assert record.actor==ACTOR and record.operation=="category_price"
+        assert json.loads(record.after_json)["priceCents"]==1500
+
+
+def test_category_template_price_does_not_reprice_existing_approved_products(prepared):
+    from onlyfans_runtime.vault_editing import get_category_price,set_category_price
+    from onlyfans_runtime.media_delivery import catalog_terms
+    store,account,category,_=prepared
+    item=int(run(prepared)["items"][0]["itemId"]);enable(prepared,item)
+    before=get_category_price(store,TENANT,account,category["folderId"])
+    set_category_price(store,TENANT,account,category["folderId"],price_cents=1800,
+        expected_fingerprint=before["fingerprint"],command_key="2"*64,actor=ACTOR)
+    with Session(store.engine) as s:assert catalog_terms(s,account,item)["price_cents"]==1200

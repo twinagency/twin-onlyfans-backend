@@ -80,7 +80,7 @@ def _page_size(account):
         raise Refused('invalid vault page size configuration') from None
 
 
-def parse_vault_page(raw, *, owner_id, page_size=PAGE_SIZE):
+def parse_vault_page(raw, *, owner_id, page_size=PAGE_SIZE, allow_identical_duplicates=False):
     """Strict supported subset of the existing GET vault/media dialect.
 
     Missing isReady is not invented as True. Unsupported kinds remain visible
@@ -97,14 +97,15 @@ def parse_vault_page(raw, *, owner_id, page_size=PAGE_SIZE):
         rows, more = value["list"], value["hasMore"]
         if type(rows) is not list or type(more) is not bool or len(rows) > page_size or more and len(rows) != page_size:
             raise ValueError()
-        seen = set()
+        seen = {}
         for row in rows:
             if type(row) is not dict:
                 raise ValueError()
             mid = _id(row.get("id"))
-            if mid in seen or row.get("type") not in {"photo", "video", "audio", "gif"}:
+            if (mid in seen and (not allow_identical_duplicates or seen[mid]!=row)
+                    or row.get("type") not in {"photo","video","audio","gif"}):
                 raise ValueError()
-            seen.add(mid)
+            seen[mid]=row
             _stamp(row.get("createdAt"))
             if row.get("updatedAt") is not None:
                 _stamp(row["updatedAt"])
@@ -153,6 +154,20 @@ def _connection(session, runtime):
     return row
 
 
+def _content_connection(session, runtime):
+    """Select the configured provider family. No native credential fallback."""
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    from db.onlyfans_engine_models import OfFansConnection
+    policy=session.get(OfDeliveryPolicy,runtime.account_id)
+    if policy is not None and policy.transport_kind=="fansapi":
+        row=session.scalar(select(OfFansConnection).where(
+            OfFansConnection.account_id==runtime.account_id,
+            OfFansConnection.binding_id==runtime.binding_id,OfFansConnection.status=="active"))
+        if row is None:raise Refused("verified connection unavailable")
+        return row
+    return _connection(session,runtime)
+
+
 def deferred_error(problem):
     """Specific, bounded defer reason: provider_read_deferred:<cause>[:<lease owner lane>]. Never provider text."""
     from .ledger import deferred_reason_code
@@ -172,9 +187,12 @@ def job_view(row):
         "retryAt": date(row.lease_until) if str(row.last_error or "").startswith("provider_read_deferred") else None,
         "pageOffset": row.page_offset}
     if window is not None:
-        view["scope"] = window_policy.scope()
+        view["scope"] = ({"selection":"newest_combined",**window["policy"]}
+            if window["policy"]["version"]==2 else window_policy.scope())
         view["refreshMode"] = window["mode"]
-        view["kindOffsets"] = {kind: window[kind]["offset"] for kind in window_policy.CAPS}
+        if window["policy"]["version"]==2:
+            view["selectedCount"]=len(window["selected"])
+        else:view["kindOffsets"] = {kind: window[kind]["offset"] for kind in window_policy.CAPS}
     return view
 
 
@@ -182,6 +200,14 @@ def request_sync(store, tenant, account, *, expected_connection_revision, comman
     _identity(command_key, actor)
     if type(expected_connection_revision) is not int or not 1 <= expected_connection_revision < 2**31:
         raise InvalidVault("A current verified connection revision is required.")
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    with Session(store.engine) as session,session.begin():
+        store._runtime(session,tenant,account)
+        policy=session.get(OfDeliveryPolicy,account)
+        if policy is not None and policy.transport_kind=="fansapi":
+            from fans_api_adapter.vault_sync import request_sync as request_fans_sync
+            return request_fans_sync(store,tenant,account,expected_connection_revision=expected_connection_revision,
+                command_key=command_key,actor=actor,session=session)
     request = {"expectedConnectionRevision": expected_connection_revision}
     if window_policy.enabled(): request["windowPolicy"] = window_policy.POLICY
     fingerprint = digest(request)
@@ -235,7 +261,14 @@ def request_sync(store, tenant, account, *, expected_connection_revision, comman
 
 
 def _provenance(row, observation, job, connection, binding, *, current_revision=True):
+    if job is not None and job.provider_kind=="fansapi":
+        from db.onlyfans_engine_models import OfFansConnection
+        return (type(connection) is OfFansConnection and observation is not None
+            and connection.status=="active" and job.binding_id==connection.binding_id==binding
+            and job.connection_revision==connection.epoch and job.provider_account==connection.provider_account_id
+            and str(job.owner_id)==connection.provider_creator_id and observation.raw_hash==digest(row.raw_json))
     return (observation is not None and job is not None and connection is not None
+        and getattr(connection,"status",None)=="verified"
         and job.binding_id == binding and connection.binding_id == binding
         and job.owner_id == connection.owner_id
         and (not current_revision or job.connection_revision == connection.revision)
@@ -256,8 +289,9 @@ def _ready(row, observation, job, connection, binding):
     # Same binding and owner, unchanged raw item: a credential-only connection
     # revision (model key save, activation) does not invalidate vault identity,
     # matching vault_previews. The connection itself must still be verified.
+    fansapi = job is not None and job.provider_kind=="fansapi"
     if (not _provenance(row, observation, job, connection, binding, current_revision=False)
-        or connection.status != "verified" or connection.expires_at <= utcnow()):
+        or not fansapi and (connection.status != "verified" or connection.expires_at <= utcnow())):
         return False, "unverified_owner"
     try:
         raw = json.loads(row.raw_json)
@@ -269,9 +303,21 @@ def _ready(row, observation, job, connection, binding):
         return False, "removed"
     if "isReady" not in raw:
         return False, "readiness_unknown"
-    if raw.get("isReady") is not True or raw.get("isProcessing") is True or raw.get("canView") is False:
+    if raw.get("isReady") is not True or raw.get("isProcessing") is True or raw.get("canView") is False or raw.get("hasError") is True:
         return False, "not_ready"
     return True, None
+
+
+def content_ready(session,runtime,row,connection):
+    observation=session.get(OfVaultObservation,(runtime.account_id,row.media_id))
+    job=session.get(OfVaultSyncJob,(runtime.account_id,observation.job_id)) if observation else None
+    ready,reason=_ready(row,observation,job,connection,runtime.binding_id)
+    if ready and job.provider_kind=="fansapi":
+        if not session.scalar(select(VaultItem.media_id).where(
+                VaultItem.account_id==runtime.account_id,VaultItem.media_id==row.media_id,
+                window_policy.commercial_window())):
+            return False,"outside_commercial_selection"
+    return ready,reason
 
 
 def _library_summary(session, account, all_assets, filtered_assets):
@@ -303,7 +349,8 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
     search = query.strip().lower()
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
-        connection = s.get(OfProviderConnection, account)
+        try:connection = _content_connection(s, runtime)
+        except Refused:connection = None
         if connection is not None and connection.binding_id != runtime.binding_id:
             raise Refused("scope unavailable")
         query = select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id > 0)
@@ -333,7 +380,7 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         for row in rows[:limit]:
             observation = s.get(OfVaultObservation, (account, row.media_id))
             job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
-            ready, reason = _ready(row, observation, job, connection, runtime.binding_id)
+            ready, reason = content_ready(s,runtime,row,connection)
             description = effective_value(row, "description")
             if type(description) is not str or len(description.encode()) > 2000:
                 description = None
@@ -347,7 +394,7 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         latest = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
             OfVaultSyncJob.binding_id == runtime.binding_id).order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
         return {"items": result, "nextCursor": str(rows[limit - 1].media_id) if len(rows) > limit else None,
-            "sync": job_view(latest) if latest else None, "connectionRevision": connection.revision if connection else None,
+            "sync": job_view(latest) if latest else None, "connectionRevision": (getattr(connection,"revision",None) or getattr(connection,"epoch",None)) if connection else None,
             **({"summary": summary} if include_summary else {})}
 
 
@@ -418,7 +465,7 @@ def create_category_drafts(store, tenant, account, *, category, command_key, act
     _identity(command_key, actor)
     if actor.startswith('worker-import:'):
         raise Refused('agency pricing permission required')
-    keys = {'folderId', 'priceCents', 'classificationConfirmed', 'rightsConfirmed', 'reviewedState', 'products'}
+    keys = {'folderId', 'priceCents', 'classificationConfirmed', 'rightsConfirmed', 'reviewedState', 'categoryPriceRevision', 'products'}
     if type(category) is not dict or set(category) != keys:
         raise InvalidVault('Provide one category and its explicit agency price.')
     folder_id = category['folderId']
@@ -455,11 +502,15 @@ def create_category_drafts(store, tenant, account, *, category, command_key, act
         if folder is None:
             raise Refused('vault folder unavailable')
         from .vault_editing import category_review_state
+        if (type(category['categoryPriceRevision']) is not int or
+                folder.price_revision!=category['categoryPriceRevision'] or
+                folder.pricing_binding_id!=runtime.binding_id or folder.single_price_cents!=category['priceCents']):
+            raise Refused("category price changed or is not agency approved")
         all_media = {int(mid) for product in products for mid in product['mediaIds']}
         reviewed = category_review_state(session, account, folder_id, sorted(all_media))
         if category['reviewedState'] != reviewed:
             raise Refused('reviewed category or asset changed')
-        connection = _connection(session, runtime)
+        connection = _content_connection(session, runtime)
         members = set(session.scalars(select(VaultFolderItem.media_id).where(
             VaultFolderItem.account_id == account, VaultFolderItem.folder_id == folder_id,
             VaultFolderItem.media_id.in_(all_media)).with_for_update(read=True)))
@@ -502,7 +553,7 @@ def create_catalog_single(s, runtime, connection, *, media, previews, label, des
         row = s.scalar(select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id == mid).with_for_update(read=True))
         observation = s.get(OfVaultObservation, (account, mid))
         job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
-        if row is None or not _ready(row, observation, job, connection, runtime.binding_id)[0]:
+        if row is None or not content_ready(s,runtime,row,connection)[0]:
             raise Refused("vault media unavailable")
         assets.append(row)
     paid = [row for row in assets if row.media_id not in previews]
@@ -589,7 +640,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             candidate = s.execute(select(OfVaultSyncJob.account_id, OfVaultSyncJob.job_id).join(
                 OfCreatorBinding, OfCreatorBinding.id == OfVaultSyncJob.binding_id).where(
                 OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
-                OfCreatorBinding.channel == "onlyfans", or_(OfVaultSyncJob.status == "pending",
+                OfCreatorBinding.channel == "onlyfans", OfVaultSyncJob.provider_kind == "native", or_(OfVaultSyncJob.status == "pending",
                     and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)))
                 .order_by(_priority_order(), OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
         if candidate is None:
@@ -785,10 +836,14 @@ def _removal_candidate(session, tenant):
     items. Nothing is returned while any scan of the account is active.
     """
     import time
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
     accounts = session.scalars(select(OfVaultSyncJob.account_id).join(
         OfCreatorBinding, OfCreatorBinding.id == OfVaultSyncJob.binding_id).where(
         OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
-        OfCreatorBinding.channel == "onlyfans", OfVaultSyncJob.status == "complete").distinct()
+        OfCreatorBinding.channel == "onlyfans", OfVaultSyncJob.status == "complete",
+        OfVaultSyncJob.provider_kind=="native",
+        OfVaultSyncJob.account_id.not_in(select(OfDeliveryPolicy.account_id).where(
+            OfDeliveryPolicy.transport_kind=="fansapi"))).distinct()
         .order_by(OfVaultSyncJob.account_id)).all()
     for account in accounts:
         latest = session.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account)

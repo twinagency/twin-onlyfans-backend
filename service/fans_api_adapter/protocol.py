@@ -236,7 +236,7 @@ class FansApiClient:
         if not self._identity_verified: raise ValueError('verified provider identity required')
         if type(limit) is not int or not 10 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 10_000_000:
             raise ValueError('invalid vault page')
-        status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/media/vault?' + urlencode({'limit':limit, 'offset':offset}))
+        status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/media/vault?' + urlencode({'limit':limit, 'offset':offset, 'field':'recent', 'sort':'desc'}))
         data = body.get('data') if type(body) is dict else None
         if (status != 200 or type(data) is not dict or type(data.get('list')) is not list
                 or type(data.get('hasMore')) is not bool or len(data['list']) > limit

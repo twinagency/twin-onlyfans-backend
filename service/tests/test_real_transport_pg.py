@@ -259,7 +259,7 @@ def _item(i, **kw):
     base.update(kw); return base
 
 
-def test_vault_sync_skips_unready_drm_error_and_pages(database):
+def test_vault_sync_retains_metadata_and_history_with_shared_readiness(database):
     items = [_item(100 + i) for i in range(10)] + [
         _item(200, isReady=False), _item(201, hasError=True), _item(202, canView=False),
         _item(203, type='video', files={'thumb': {'url': 'https://cdn.example/t.jpg'}, 'full': {'url': None}}),
@@ -267,17 +267,25 @@ def test_vault_sync_skips_unready_drm_error_and_pages(database):
     fake = FakeFans(vault=items)
     try:
         store, authority, engine, transport, _ = build(database, fake)
-        result = sync_vault(store, TENANT, ACCOUNT, transport.client, page_size=10)
+        import httpx
+        wire=fake.transport()
+        def loopback(request):
+            response=wire.handle_request(request);raw=response.read()
+            result=httpx.Response(response.status_code,headers=response.headers,stream=httpx.ByteStream(raw))
+            response.close();return result
+        client=build_client(RealFansConfig("fixture-token",ACCT,"https://api.fansapi.com",5),
+            creator_id=CREATOR,epoch=1,transport=httpx.MockTransport(loopback))
+        result = sync_vault(store, TENANT, ACCOUNT, client, page_size=10)
         assert result['complete'] and result['pages'] == 2
-        assert result['skipped'] == {'not_ready': 1, 'error': 1, 'cannot_view': 1, 'drm': 1, 'unsupported_kind': 1}
+        assert result['skipped'] == {'not_ready': 1, 'error': 1, 'cannot_view': 1, 'unsupported_kind': 1}
         with Session(database[1]) as s:
             ids = {v.media_id for v in s.scalars(select(VaultItem)) if v.removed_at is None}
-        assert ids == set(range(100, 110)) | {204}
+        assert ids == set(range(100, 110)) | {200,201,202,203,204}
         assert sync_vault_lists(transport.client)[0]['name'] == 'L'
         fake.vault = fake.vault[:5]
-        assert sync_vault(store, TENANT, ACCOUNT, transport.client, page_size=10)['complete']
+        assert sync_vault(store, TENANT, ACCOUNT, client, page_size=10)['complete']
         with Session(database[1]) as s:
-            assert {v.media_id for v in s.scalars(select(VaultItem)) if v.removed_at is None} == set(range(100, 105))
+            assert {v.media_id for v in s.scalars(select(VaultItem)) if v.removed_at is None} == set(range(100,110)) | {200,201,202,203,204}
     finally:
         fake.close()
 

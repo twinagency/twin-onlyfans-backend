@@ -932,11 +932,19 @@ class VaultFolder(Base):
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     of_list_id: Mapped[int | None] = mapped_column(BigInteger)
+    single_price_cents = mapped_column(Integer,nullable=True,info={"onlyfans_since":"0131_manual_category_prices"})
+    price_revision = mapped_column(Integer,nullable=False,default=0,server_default="0",info={"onlyfans_since":"0131_manual_category_prices"})
+    pricing_binding_id = mapped_column(String,nullable=True,info={"onlyfans_since":"0131_manual_category_prices"})
+    pricing_actor = mapped_column(String(128),nullable=True,info={"onlyfans_since":"0131_manual_category_prices"})
+    pricing_updated_at = mapped_column(DateTime,nullable=True,info={"onlyfans_since":"0131_manual_category_prices"})
     created_by: Mapped[str] = mapped_column(String, nullable=False, default="operator")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = _ts_now()
 
-    __table_args__ = (Index("ix_vault_folders_account", "account_id", "deleted_at"),)
+    __table_args__ = (Index("ix_vault_folders_account", "account_id", "deleted_at"),
+        CheckConstraint("(single_price_cents IS NULL AND price_revision=0 AND pricing_binding_id IS NULL AND pricing_actor IS NULL AND pricing_updated_at IS NULL) OR "
+            "(single_price_cents IS NOT NULL AND single_price_cents BETWEEN 300 AND 20000 AND price_revision>0 AND pricing_binding_id IS NOT NULL AND pricing_actor IS NOT NULL AND pricing_updated_at IS NOT NULL)",
+            name="manual_price",info={"onlyfans_since":"0131_manual_category_prices"}))
 
 
 class VaultFolderItem(Base):

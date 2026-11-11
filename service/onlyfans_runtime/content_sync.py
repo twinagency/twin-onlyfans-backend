@@ -334,7 +334,9 @@ def open_conflict(session, account, item_id):
 
 def _media_states(s, account, runtime, connection, media):
     """Per-media readiness at the current verified connection: 'ok' | 'unusable' | 'unverified'."""
-    from .vault_management import _ready
+    from .vault_management import content_ready,_content_connection
+    try:connection=_content_connection(s,runtime)
+    except Refused:connection=None
     states = {}
     for mid in media:
         row = s.get(VaultItem, (account, mid))
@@ -343,7 +345,7 @@ def _media_states(s, account, runtime, connection, media):
             continue
         observation = s.get(OfVaultObservation, (account, mid))
         job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
-        ok, why = _ready(row, observation, job, connection, runtime.binding_id)
+        ok, why = content_ready(s,runtime,row,connection)
         # Only an authoritative removal is unusable; stale ownership, processing
         # or unknown readiness (expired session, incomplete page) is not deletion.
         states[mid] = "ok" if ok else "unusable" if why == "removed" else "unverified"

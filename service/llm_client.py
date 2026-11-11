@@ -51,6 +51,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING
 from typing import Any
@@ -58,6 +59,9 @@ from typing import Any
 import httpx
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+# Set only by the verified, metadata-only caption child. Never a fan reply permit.
+_vault_caption_account: ContextVar[str | None] = ContextVar("vault_caption_account",default=None)
 
 import tenant_keys
 from db.engine import get_session
@@ -1030,7 +1034,12 @@ async def chat(
     """
     import os
     if "ONLYFANS_PROCESS_ROLE" in os.environ:
-        raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
+        caption=(os.environ.get("ONLYFANS_PROCESS_ROLE")=="worker" and
+            _vault_caption_account.get() is not None and _vault_caption_account.get()==account_id
+            and purpose=="describe_media" and fan_id is None
+            and model in {"openrouter/qwen3-vl-30b","qwen3-vl-235b"})
+        if not caption:
+            raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
     mdl, prov = _resolve(model)
     # P2-I7: the trusted Telegram policy gate. The full decision - trusted
     # billing account, enabled purpose, configured model and allowed provider -

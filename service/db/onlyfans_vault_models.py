@@ -10,6 +10,8 @@ class OfVaultSyncJob(Base):
     __tablename__ = "of_vault_sync_job"
     __table_args__ = (
         UniqueConstraint("account_id", "command_key", name="uq_of_vault_sync_command"),
+        CheckConstraint("(provider_kind='native' AND provider_account IS NULL) OR (provider_kind='fansapi' AND provider_account IS NOT NULL)",
+            name="provider",info={"onlyfans_since":"0130_commercial_vault_provenance"}),
         CheckConstraint("status IN ('pending','running','complete','failed','superseded')", name="status"),
         CheckConstraint("connection_revision > 0 AND owner_id > 0 AND pages_read >= 0 AND max_pages = 200 AND items_seen >= 0 AND items_seen <= pages_read * 24 AND page_offset = items_seen", name="bounds"),
         CheckConstraint("(status = 'running') = (lease_token IS NOT NULL AND lease_until IS NOT NULL)", name="lease"),
@@ -23,6 +25,9 @@ class OfVaultSyncJob(Base):
     command_key = Column(String(64), nullable=False)
     request_hash = Column(String(64), nullable=False)
     actor = Column(String(128), nullable=False)
+    provider_kind = Column(String(16), nullable=False, default="native", server_default="native",
+        info={"onlyfans_since":"0130_commercial_vault_provenance"})
+    provider_account = Column(String(255), info={"onlyfans_since":"0130_commercial_vault_provenance"})
     connection_revision = Column(Integer, nullable=False)
     owner_id = Column(BigInteger, nullable=False)
     max_pages = Column(Integer, nullable=False)

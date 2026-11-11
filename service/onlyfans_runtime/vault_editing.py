@@ -18,7 +18,8 @@ from .vault_management import InvalidVault,_identity,media_reference,digest
 
 def asset_fingerprint(row):
     return digest({key:getattr(row,key) for key in ("account_id","media_id","kind","content_hash","content_hash_kind",
-        "description","tags","operator_overrides_json","locked_fields_json","ai_fields_json","removed_at")})
+        "description","tags","operator_overrides_json","locked_fields_json","ai_fields_json","removed_at",
+        "duration_seconds","width","height")})
 
 
 def asset_view(row):
@@ -68,19 +69,24 @@ def folder_view(s,row):
         "fingerprint":digest([row.account_id,row.id,row.name,row.deleted_at,ids])}
 
 
+def _commercial_folder(session,account,folder_id):
+    folder = _folder(session, account, folder_reference(str(folder_id)))
+    from vault_auto_folders import OWNER_PREFIX
+    uncertain = {"miscellaneous", "misc", "unknown", "uncategorized", "uncategorised",
+                 "unclassified", "unsure", "unsorted"}
+    if (folder.name.strip().casefold() in uncertain or
+            folder.created_by in {OWNER_PREFIX+"pending", OWNER_PREFIX+"uncategorised", OWNER_PREFIX+"miscellaneous"}):
+        raise Refused("uncertain category needs classification before pricing")
+    return folder
+
+
 def category_review_state(session, account, folder_id, media_ids):
     """Selected versions; unrelated membership changes do not invalidate review.
 
     Fingerprints bind evidence/corrections, not factual accuracy or permission.
     Explicit agency attestations are retained in the existing product audit.
     """
-    folder = _folder(session, account, folder_reference(str(folder_id)))
-    from vault_auto_folders import OWNER_PREFIX
-    uncertain = {"miscellaneous", "misc", "unknown", "uncategorized", "uncategorised",
-                 "unclassified", "unsure", "unsorted"}
-    if (folder.name.strip().casefold() in uncertain or
-            folder.created_by in {OWNER_PREFIX+"pending", OWNER_PREFIX+"uncategorised"}):
-        raise Refused("uncertain category needs classification before pricing")
+    folder=_commercial_folder(session,account,folder_id)
     ids = sorted(media_reference(str(mid)) for mid in media_ids)
     if not ids or len(ids)>500 or len(set(ids))!=len(ids):
         raise InvalidVault("Select distinct reviewed asset references.")
@@ -95,10 +101,56 @@ def category_review_state(session, account, folder_id, media_ids):
         "assets":{str(mid):asset_view(_asset(session,account,mid))["fingerprint"] for mid in ids}}
 
 
-def get_category_review(store,tenant,account,folder_id,media_ids):
+def category_price_view(folder,runtime):
+    current=folder.pricing_binding_id==runtime.binding_id
+    return {"folderId":str(folder.id),"name":folder.name,"revision":folder.price_revision,
+        "priceCents":folder.single_price_cents if current else None,"currency":"USD","appliesTo":"single_asset",
+        "fingerprint":digest([folder.account_id,folder.id,folder.name,folder.deleted_at,folder.created_by,
+            folder.price_revision,folder.single_price_cents,folder.pricing_binding_id,runtime.binding_id])}
+
+
+def get_category_price(store,tenant,account,folder_id):
+    with Session(store.engine) as s,s.begin():
+        runtime=store._runtime(s,tenant,account)
+        return category_price_view(_folder(s,account,folder_reference(str(folder_id))),runtime)
+
+
+def set_category_price(store,tenant,account,folder_id,*,price_cents,expected_fingerprint,command_key,actor):
+    _identity(command_key,actor);_fingerprint(expected_fingerprint)
+    if actor.startswith("worker-import:"):raise Refused("agency pricing permission required")
+    if type(price_cents) is not int or not 300<=price_cents<=20000:
+        raise InvalidVault("Set an explicit single-asset price of 300-20000 USD cents.")
+    fid=folder_reference(str(folder_id))
+    request_hash=digest(["category_price",fid,price_cents,expected_fingerprint])
+    with Session(store.engine) as s,s.begin():
+        runtime=store._runtime(s,tenant,account)
+        prior=_prior(s,runtime,command_key,request_hash,actor)
+        if prior is not None:return prior
+        folder=_commercial_folder(s,account,fid);before=category_price_view(folder,runtime)
+        if before["fingerprint"]!=expected_fingerprint:raise Refused("category price changed")
+        if before["priceCents"]==price_cents:raise InvalidVault("No category price change was needed.")
+        folder.single_price_cents=price_cents;folder.price_revision+=1
+        folder.pricing_binding_id=runtime.binding_id;folder.pricing_actor=actor;folder.pricing_updated_at=utcnow()
+        after=category_price_view(folder,runtime)
+        return _record(s,runtime,command_key,request_hash,actor,"category_price",fid,before,after)
+
+
+def get_category_review(store,tenant,account,folder_id,media_ids,*,include_assets=False):
     with Session(store.engine) as session,session.begin():
         store._runtime(session,tenant,account)
-        return category_review_state(session,account,folder_id,media_ids)
+        state=category_review_state(session,account,folder_id,media_ids)
+        if not include_assets:return state
+        folder=_commercial_folder(session,account,folder_id)
+        assets=[]
+        for mid in state["assets"]:
+            row=_asset(session,account,int(mid))
+            from vault_describe_state import fields_of
+            fields=fields_of(row);note=fields.get("_sampling_note")
+            note=note if type(note) is str and len(note.encode())<=1000 else None
+            classification=fields.get("_commercial_classification_v1")
+            assets.append({**asset_view(row),"kind":row.kind,"durationSeconds":row.duration_seconds,
+                "analysisNote":note,"classificationUncertain":not isinstance(classification,dict) or classification.get("status")!="proposed"})
+        return {"reviewedState":state,"categoryName":folder.name,"assets":assets}
 
 
 def assert_category_review(session,runtime,item):
@@ -117,13 +169,13 @@ def assert_category_review(session,runtime,item):
                                   json.loads(item.media_ids))
     if current!=reviewed:raise Refused("reviewed category or asset changed")
     from db.onlyfans_vault_models import OfVaultObservation,OfVaultSyncJob
-    from .vault_management import _connection,_ready
-    connection=_connection(session,runtime)
+    from .vault_management import _content_connection,content_ready
+    connection=_content_connection(session,runtime)
     for mid in json.loads(item.media_ids):
         row=session.get(VaultItem,(runtime.account_id,mid))
         observation=session.get(OfVaultObservation,(runtime.account_id,mid))
         job=session.get(OfVaultSyncJob,(runtime.account_id,observation.job_id)) if observation else None
-        if row is None or not _ready(row,observation,job,connection,runtime.binding_id)[0]:
+        if row is None or not content_ready(session,runtime,row,connection)[0]:
             raise Refused("reviewed media readiness unavailable")
 
 

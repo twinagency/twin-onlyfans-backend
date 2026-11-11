@@ -42,9 +42,17 @@ def start(now, mode='window'):
 def load(raw):
     if raw is None:
         return None
-    if type(raw) is not str or len(raw) > 16384:
+    if type(raw) is not str or len(raw) > 65536:
         raise ValueError('invalid vault window progress')
     value = json.loads(raw)
+    if type(value) is dict and value.get("policy")=={"version":2,"combined":1000,"order":"created_at_desc_id_desc"}:
+        ids=value.get("selected")
+        if (value.get("mode")!="window" or type(ids) is not list or len(ids)>1000 or
+                any(type(mid) is not str or not mid.isascii() or not mid.isdecimal() or
+                    not 0<int(mid)<2**63 or str(int(mid))!=mid for mid in ids) or len(set(ids))!=len(ids)):
+            raise ValueError("invalid combined vault selection")
+        if value.get("lastTimestamp") is not None:datetime.fromisoformat(value["lastTimestamp"])
+        return value
     if type(value) is not dict or value.get('policy') != POLICY or value.get('mode') not in ('window', 'head'):
         raise ValueError('invalid vault window policy')
     validate_lane(value)
@@ -121,16 +129,41 @@ def advance(value, read, rows, more, known, page_hash, now, page_size):
     return value
 
 
+def commercial_window():
+    """Latest completed account/binding/epoch selection; no history rows are removed."""
+    from sqlalchemy import select,cast,func,BigInteger
+    from sqlalchemy.dialects.postgresql import JSONB
+    from db.models import VaultItem
+    from db.onlyfans_vault_models import OfVaultSyncJob
+    from db.onlyfans_models import OfRuntime
+    from db.onlyfans_engine_models import OfFansConnection
+    selected=(select(OfVaultSyncJob.window_json).join(OfRuntime,
+        OfRuntime.account_id==OfVaultSyncJob.account_id).join(OfFansConnection,
+        (OfFansConnection.account_id==OfVaultSyncJob.account_id)&
+        (OfFansConnection.epoch==OfVaultSyncJob.connection_revision))
+        .where(OfVaultSyncJob.account_id==VaultItem.account_id,OfVaultSyncJob.provider_kind=="fansapi",
+            OfVaultSyncJob.status=="complete",OfVaultSyncJob.binding_id==OfRuntime.binding_id,
+            OfFansConnection.binding_id==OfRuntime.binding_id,OfFansConnection.status=="active",
+            OfVaultSyncJob.provider_account==OfFansConnection.provider_account_id)
+        .order_by(OfVaultSyncJob.completed_at.desc(),OfVaultSyncJob.job_id.desc()).limit(1)
+        .correlate(VaultItem).scalar_subquery())
+    ids=select(cast(func.jsonb_array_elements_text(cast(selected,JSONB)["selected"]),BigInteger)).correlate(VaultItem)
+    return VaultItem.media_id.in_(ids)
+
+
 def automatic_window():
     """Only bound automatic work. Approved product eligibility is unchanged."""
     from sqlalchemy import and_, or_, select, true
     from sqlalchemy.orm import aliased
     from db.models import VaultItem
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    fansapi=select(OfDeliveryPolicy.account_id).where(OfDeliveryPolicy.account_id==VaultItem.account_id,
+        OfDeliveryPolicy.transport_kind=="fansapi").correlate(VaultItem).exists()
     if not enabled():
-        return true()
+        return or_(~fansapi,commercial_window())
     item = aliased(VaultItem)
-    return or_(*[and_(VaultItem.kind == kind, VaultItem.media_id.in_(
+    return or_(and_(fansapi,commercial_window()),and_(~fansapi,or_(*[and_(VaultItem.kind == kind, VaultItem.media_id.in_(
         select(item.media_id).where(item.account_id == VaultItem.account_id,
             item.kind == kind, item.removed_at.is_(None))
         .order_by(item.created_at.desc(), item.media_id.desc()).limit(cap).correlate(VaultItem)))
-        for kind, cap in CAPS.items()])
+        for kind, cap in CAPS.items()])))

@@ -78,7 +78,7 @@ def categories(item):
     return sorted(result) or ["uncategorised"]
 
 
-def assign_sync(session, account_id, media_id):
+def assign_sync(session, account_id, media_id, *, commercial=False):
     """Assign once in the caller's transaction. Account lock serializes folders.
 
     Existing operator folders are never adopted by matching their display name.
@@ -98,6 +98,7 @@ def assign_sync(session, account_id, media_id):
         return {"status": "invalid_metadata"}
     if not isinstance(fields, dict):
         return {"status": "invalid_metadata"}
+    commercial=commercial or isinstance(fields.get("_commercial_classification_v1"),dict)
     if fields.get(CURRENT_MARKER) is True:
         return {"status": "already_categorised"}
     has_metadata = bool(effective_value(item, "description") or effective_value(item, "video_description")
@@ -107,6 +108,20 @@ def assign_sync(session, account_id, media_id):
     if pending and fields.get(PENDING_MARKER) is True:
         return {"status": "awaiting_metadata"}
     wanted = ["pending"] if pending else categories(item)
+    if commercial:
+        from vault_describe_state import stamp_of
+        confidence=effective_value(item,"confidence")
+        bound=fields.get("_content_stamp")==stamp_of(item) and stamp_of(item) is not None
+        reason=("analysis_pending" if pending else
+                "classification_confidence_unknown" if type(confidence) is not int or not 0<=confidence<=100 else
+                "low_confidence" if confidence<70 else "analysis_version_unbound" if not bound else
+                "no_evidenced_category" if wanted==["uncategorised"] else "metadata_evidence")
+        uncertain=reason!="metadata_evidence"
+        fields["_commercial_classification_v1"]={
+            "status":"uncertain" if uncertain else "proposed","reason":reason,
+            "content_stamp":stamp_of(item),"categories":["miscellaneous"] if uncertain else wanted,
+            "sale_approved":False}
+        if uncertain:wanted=["miscellaneous"]
     # V1 already classified these categories. A migration must not re-add a
     # membership an operator removed, or recreate their archived folders.
     if not pending and fields.get(MARKER) is True:
@@ -121,7 +136,7 @@ def assign_sync(session, account_id, media_id):
             if count >= 200:
                 raise ValueError("Internal folder limit reached")
             folder = VaultFolder(account_id=account_id, created_by=actor,
-                name="Unsorted" if key == "pending" else FOLDERS[key][0] if key in FOLDERS else "Uncategorised")
+                name="Miscellaneous" if key=="miscellaneous" else "Unsorted" if key == "pending" else FOLDERS[key][0] if key in FOLDERS else "Uncategorised")
             session.add(folder)
             session.flush()
         if folder.deleted_at is not None:
@@ -138,7 +153,7 @@ def assign_sync(session, account_id, media_id):
     else:
         if fields.pop(PENDING_MARKER, False):
             pending_folders = select(VaultFolder.id).where(VaultFolder.account_id == account_id,
-                VaultFolder.created_by == OWNER_PREFIX + "pending")
+                VaultFolder.created_by.in_([OWNER_PREFIX+"pending",OWNER_PREFIX+"miscellaneous"] if commercial and "miscellaneous" not in wanted else [OWNER_PREFIX+"pending"]))
             session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
                 VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_(pending_folders)))
         fields.update({MARKER: True, CURRENT_MARKER: True})

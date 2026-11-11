@@ -184,11 +184,11 @@ async def run(args):
                     # to this one serial, metadata-only child and purpose.
                     if account_key is not None and kwargs.get('model') != caption_vault.DEFAULT_MODEL:
                         raise Refused('caption fallback provider unavailable')
-                    os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
+                    token=llm_client._vault_caption_account.set(args.account)
                     try:
                         return await legacy_chat(**kwargs)
                     finally:
-                        os.environ["ONLYFANS_PROCESS_ROLE"] = "worker"
+                        llm_client._vault_caption_account.reset(token)
 
                 llm_client.chat = caption_chat
                 from onlyfans_runtime.provider_read_budget import acquire, current, release

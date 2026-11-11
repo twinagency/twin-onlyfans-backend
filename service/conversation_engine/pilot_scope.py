@@ -636,7 +636,7 @@ def _fans_removable(s, runtime, removed):
 def _configure_commercial(s, runtime, row, config, *, expected_revision, command_key, actor, reason, request_hash):
     """The named operator's edit of a promoted scope's audience, profile, model, limits and mode. Never touches identity."""
     from . import scope_contract as contracts
-    from .commercial_scope import check_catalogue
+    from .commercial_lifecycle import check_catalogue
     account = runtime.account_id
     _, old = current(s, runtime)
     authorize(old, actor, 'configure')
@@ -761,7 +761,7 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
             if config['qualification']['mode'] == 'fixture' and os.environ.get('TWIN_PLAN_C_FIXTURE_ONLY') != '1':
                 raise Refused('fixture scope cannot activate outside an isolated test')
             if commercial:
-                from .commercial_scope import assert_launchable
+                from .commercial_lifecycle import assert_launchable
                 assert_launchable(s, runtime, row, config)
             policy = s.get(OfDeliveryPolicy, account)
             connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,

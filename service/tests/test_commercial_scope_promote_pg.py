@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from conversation_engine import commercial_scope as cs, pilot_scope, preparation as prep, scope_contract as sc
+from conversation_engine import commercial_lifecycle as cs, pilot_scope, preparation as prep, scope_contract as sc
 from db.models import VaultItem
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection

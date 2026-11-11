@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from conversation_engine import approval, commercial_scope as cs, commerce, journey, operator_v2, pilot_scope
+from conversation_engine import approval, commercial_lifecycle as cs, commerce, journey, operator_v2, pilot_scope
 from conversation_engine import scope_contract as sc, writer_context
 from db.models import Message, OfConversationState
 from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection, OfFansWebhook

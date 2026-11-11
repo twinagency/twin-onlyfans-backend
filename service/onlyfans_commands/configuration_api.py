@@ -194,7 +194,7 @@ async def commercial_read(request:Request,account_id:str):
     context=authenticate(request,account_id)
     if isinstance(context,JSONResponse):return context
     store,tenant=context
-    from conversation_engine.commercial_scope import view
+    from conversation_engine.commercial_lifecycle import view
     try:data=await asyncio.to_thread(view,store,tenant,account_id)
     except Refused:return refuse("not_available",404,"That commercial scope is unavailable.")
     except Exception:return refuse("commercial_unavailable",503,"Commercial scope status could not be read.")
@@ -205,7 +205,7 @@ async def commercial_write(request:Request,account_id:str):
     context=authenticate(request,account_id)
     if isinstance(context,JSONResponse):return context
     store,tenant=context
-    from conversation_engine.commercial_scope import promote,stop
+    from conversation_engine.commercial_lifecycle import promote,stop
     try:
         if request.headers.get("content-type","").split(";")[0].strip().lower()!="application/json":raise ValueError()
         raw=bytearray()

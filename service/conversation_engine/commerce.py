@@ -84,6 +84,10 @@ def _unowned(s, account, fan_id, terms):
         owned |= provider_unlocked_media(s, runtime, fan_id)
     if set(terms['media_ids']) & set(owned):
         raise Refused('bundle overlaps owned media')
+    if terms.get('commercial') is not None:
+        # Commercial products also refuse on unknown ownership (unmapped paid evidence); the legacy pilot checks above are unchanged.
+        from .ownership_gate import ownership_gate
+        ownership_gate(s, account, fan_id, terms)
 
 
 @dataclass(frozen=True)

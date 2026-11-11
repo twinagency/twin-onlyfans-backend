@@ -260,7 +260,7 @@ class TextAuthority:
                               transport_kind=None, daily_limit_units=None, scope_stop=False):
         """Shared policy owner; caller holds the runtime lock and transaction.
 
-        scope_stop is only for commercial_scope.stop_scope_in_session: closing the policy as part of a scope stop
+        scope_stop is only for commercial_lifecycle.stop_scope_in_session: closing the policy as part of a scope stop
         (agency stop, emergency stop) is a safety reduction like the provider safety stop, never an operator edit."""
         account_id = runtime.account_id
         if (daily_limit_units is not None and (type(daily_limit_units) is not int or not 1 <= daily_limit_units <= 20000)):

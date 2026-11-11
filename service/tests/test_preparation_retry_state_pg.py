@@ -18,7 +18,7 @@ from test_commercial_preparation_pg import setup, factory, identity, page, confi
 from conversation_engine import preparation as prep
 from db.onlyfans_engine_models import OfEnginePilotScope
 from db.onlyfans_vault_models import OfVaultSyncJob
-from db.schema import check_schema, HEAD
+from db.schema import check_schema, HEAD, _config
 from onlyfans_runtime.store import Store, Refused, utcnow
 from fans_api_adapter.protocol import parse_retry_after
 
@@ -433,7 +433,11 @@ def test_stop_during_inflight_failure_does_not_overwrite_new_authority(database)
 def test_attempt_column_does_not_weaken_the_scope_guard_and_0133_is_in_the_chain(database):
     store, account, cfg = setup(database)
     try:
-        assert HEAD == "0135_commercial_catalogue_terms"  # Step 3 head; 0133 remains an ancestor, its columns are still checked
+        # Step 1 moves the head to 0136_history_coverage (down_revision 0133 on this branch); 0133 must stay an ancestor.
+        assert HEAD == "0136_history_coverage"
+        from alembic.script import ScriptDirectory
+        with database[1].connect() as c:
+            assert "0133_preparation_retry_state" in {r.revision for r in ScriptDirectory.from_config(_config(c)).iterate_revisions(HEAD, "base")}
         with database[1].connect() as c:
             check_schema(c)
         prep.PreparationRequestGuard(store, TENANT, account, 1)("GET", "https://api.fansapi.com/api/accounts", True)

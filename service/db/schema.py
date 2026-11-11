@@ -87,7 +87,8 @@ ACCOUNT_PREPARATION = "0132_account_preparation"
 PREPARATION_RETRY_STATE = "0133_preparation_retry_state"
 COMMERCIAL_SCOPE = "0134_commercial_scope_contract"
 CATALOGUE_TERMS = "0135_commercial_catalogue_terms"
-HEAD = CATALOGUE_TERMS
+HISTORY_COVERAGE = "0136_history_coverage"  # integration: step 1, parented on 0135
+HEAD = HISTORY_COVERAGE
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -130,6 +131,7 @@ REVISION_RANK[ACCOUNT_PREPARATION] = 132
 REVISION_RANK[PREPARATION_RETRY_STATE] = 133
 REVISION_RANK[COMMERCIAL_SCOPE] = 134
 REVISION_RANK[CATALOGUE_TERMS] = 135
+REVISION_RANK[HISTORY_COVERAGE] = 136
 
 
 class SchemaMismatch(RuntimeError):
@@ -145,6 +147,7 @@ def _metadata():
     from . import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models, onlyfans_vault_edit_models  # noqa: F401
     from . import onlyfans_media_models  # noqa: F401
     from . import onlyfans_offer_import_models  # noqa: F401
+    from . import onlyfans_history_models  # noqa: F401
     from . import onlyfans_launch_models  # noqa: F401
     from . import onlyfans_content_sync_progress_models  # noqa: F401
     from onlyfans_runtime import launch_operations_models  # noqa: F401
@@ -452,6 +455,24 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             failures.append("missing pilot webhook digest protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing pilot webhook digest row security")
+    if expected_rank >= 136:
+        # History coverage evidence: DELETE is refused everywhere and message facts are frozen.
+        for table, function, tgtype, digest in [
+            ("of_fans_import_source", "of_fans_history_retained", 11, "7548a9040c20ce9568e45428f0160dc399b7aab90f389949c24e727633a33c7b"),
+            ("of_fans_history_cursor", "of_fans_history_retained", 11, "7548a9040c20ce9568e45428f0160dc399b7aab90f389949c24e727633a33c7b"),
+            ("of_fans_import_gap", "of_fans_history_retained", 11, "7548a9040c20ce9568e45428f0160dc399b7aab90f389949c24e727633a33c7b"),
+            ("of_fans_read_meter", "of_fans_history_retained", 11, "7548a9040c20ce9568e45428f0160dc399b7aab90f389949c24e727633a33c7b"),
+            ("of_fans_message_fact", "of_fans_message_fact_guard", 27, "8005bbfbb208aa209eed4cefd6ab06c843485598ed17a6725bde6de865d16d8c"),
+        ]:
+            guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+                FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+                WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+                {"table": table, "trigger": table + "_retained"}).all()
+            if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != tgtype or guard[0][2] != function
+                    or guard[0][4] != "plpgsql" or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != digest):
+                failures.append(f"missing history coverage protection {table}")
+            if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+                failures.append(f"missing history coverage row security {table}")
     if expected_rank >= 125:
         table, trigger = "of_engine_pilot_scope", "of_engine_pilot_scope_guard"
         guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text

@@ -438,3 +438,48 @@ def test_stop_while_retry_is_in_flight_prevents_any_send(make_world):
     w.ticks(3)
     assert w.provider.calls == [429, 'ok'] and w.w.fans.posts == []
     assert w.calls()[-1].outcome == 'identity_verified'  # usage/identity retained, stale draft never authorized
+
+
+@pytest.mark.parametrize('retry_after', [None, '120'])
+def test_fresh_os_process_uses_the_same_persisted_deadline(make_world, retry_after):
+    import os, subprocess, sys
+    w = make_world([429 if retry_after is None else (429, {'Retry-After': retry_after})])
+    post(w, 92021)
+    w.ticks(1)
+    [original] = w.calls()
+    child = '''
+import json, os, sys
+from datetime import datetime
+from onlyfans_runtime.store import Store
+from model_transport.pilot_supervised import build_supervised_pilot
+from test_plan_c_model_retry_due_pg import Provider
+from test_engine_real_worker_pg import MockFans
+p = json.load(sys.stdin)
+store, model, fans = Store(p['database']), Provider([]), MockFans()
+try:
+    pilot = build_supervised_pilot(store, p['config'], model_transport=model.transport, fans_transport=fans.transport)
+    clock = lambda: datetime.fromisoformat(p['now'])
+    pilot.worker.engine.model._clock = pilot.worker.engine.model.ledger.clock = clock
+    for _ in range(4): pilot.tick()
+    print('R0_RESTART_RESULT ' + json.dumps({'pid': os.getpid(), 'calls': model.calls, 'posts': fans.posts}))
+finally:
+    store.close()
+'''
+    env = {**os.environ, 'DATABASE_URL': w.w.database[0], 'ONLYFANS_PROCESS_ROLE': 'worker',
+           'TWIN_FASTT_CONFIG_ISOLATED': '1'}
+    def run(at):
+        p = subprocess.run([sys.executable, '-c', child], env=env, input=json.dumps({
+            'database': w.w.database[0], 'config': w.rig.env, 'now': at.isoformat()}),
+            capture_output=True, text=True, timeout=60)
+        assert p.returncode == 0, p.stderr[-2000:]
+        [result] = [json.loads(line.removeprefix('R0_RESTART_RESULT ')) for line in p.stdout.splitlines()
+                    if line.startswith('R0_RESTART_RESULT ')]
+        assert result['pid'] != os.getpid()
+        return result
+    before = run(original.retry_not_before - timedelta(seconds=1))
+    assert before['calls'] == [] and before['posts'] == []
+    after = run(original.retry_not_before + timedelta(seconds=1))
+    assert after['calls'] == ['ok'] and len(after['posts']) == 1
+    assert after['posts'][0]['body']['text'] == 'hey you'
+    assert w.request(92021)[0] == 'completed' and [c.seq for c in w.calls()] == [0, 1]
+    assert w.calls()[0].retry_not_before == original.retry_not_before

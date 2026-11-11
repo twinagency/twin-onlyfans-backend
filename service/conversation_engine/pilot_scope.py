@@ -536,7 +536,9 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
     _command(command_key, actor, reason)
     if type(expected_revision) is not int or expected_revision < 0:
         raise Refused('invalid pilot revision')
-    config = validate(config)
+    from . import scope_contract as contracts
+    commercial = contracts.is_commercial(config)
+    config = contracts.validate_commercial(config) if commercial else validate(config)
     request_hash = _fingerprint(['configure', account, config, expected_revision, actor, reason])
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
@@ -548,10 +550,17 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
             if s.scalar(select(OfEnginePilotScope.scope_id).where(OfEnginePilotScope.scope_id == 1).with_for_update()) is not None:
                 raise Refused('the pilot is bound to another creator')
         elif row.scope_id != 1:
-            # Preparation and commercial authority are never rewritten by the legacy pilot command (decision D1).
-            raise Refused('promote the preparation scope through the commercial command first')
+            # A preparation row is promoted, never configured; a commercial row takes only commercial configuration.
+            if contracts.claim(row) != contracts.COMMERCIAL:
+                raise Refused('promote the preparation scope through the commercial command first')
+            if not commercial:
+                raise Refused('a commercial scope takes only commercial.v1 configuration')
+            return _configure_commercial(s, runtime, row, config, expected_revision=expected_revision, command_key=command_key,
+                                         actor=actor, reason=reason, request_hash=request_hash)
         elif row.binding_id != runtime.binding_id:
             raise Refused('the pilot is bound to another creator')
+        if commercial:
+            raise Refused('a commercial scope exists only by promoting a preparation scope')
         if row is not None:
             _, old = current(s, runtime)
             authorize(old, actor, 'configure')
@@ -606,6 +615,56 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
         result = {'accountId':account, 'revision':row.revision, 'status':row.status, 'fingerprint':row.fingerprint}
         _audit(s, runtime, command_key, actor, reason, request_hash, before, result)
         return {**result, 'replayed':False}
+
+
+def _fans_removable(s, runtime, removed):
+    if not removed:
+        return
+    from db.onlyfans_delivery_models import OfTextIntent
+    from db.onlyfans_engine_models import OfEngineIndependentAdmission
+    unresolved = s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == runtime.account_id,
+        OfTextIntent.binding_id == runtime.binding_id, OfTextIntent.fan_id.in_(removed),
+        OfTextIntent.status.in_(('dispatching', 'unknown'))).limit(1))
+    independent = s.scalar(select(OfEngineIndependentAdmission.attempt_id).where(
+        OfEngineIndependentAdmission.account_id == runtime.account_id, OfEngineIndependentAdmission.fan_id.in_(removed),
+        OfEngineIndependentAdmission.status.in_(('dispatching', 'unknown'))).limit(1))
+    if unresolved is not None or independent is not None:
+        raise Refused('resolve retained fan delivery before removing the fan')
+
+
+def _configure_commercial(s, runtime, row, config, *, expected_revision, command_key, actor, reason, request_hash):
+    """The named operator's edit of a promoted scope's audience, profile, model, limits and mode. Never touches identity."""
+    from . import scope_contract as contracts
+    from .commercial_scope import check_catalogue
+    account = runtime.account_id
+    _, old = current(s, runtime)
+    authorize(old, actor, 'configure')
+    if row.revision != expected_revision:
+        raise Refused('pilot revision conflict')
+    if row.status == 'active':
+        raise Refused('stop the pilot before reconfiguring it')
+    if any(config[name] != old[name] for name in contracts.IDENTITY_KEYS):
+        raise Refused('commercial identity and lineage are retained')
+    policy = s.get(OfDeliveryPolicy, account)
+    if policy is None or policy.enabled is not False or policy.transport_kind != 'fansapi':
+        raise Refused('disable the fansapi policy before configuring the pilot')
+    if config['delivery_mode'] == 'text_only' and policy.media_enabled:
+        raise Refused('disable media before configuring text-only pilot')
+    _fans_removable(s, runtime, set(old['fans']) - set(config['fans']))
+    check_catalogue(runtime, config)
+    if (row.provider_requests_used > config['limits']['provider_requests']
+            or row.provider_credits_reserved > config['limits']['provider_credit_budget']):
+        raise Refused('new limits cannot erase existing reservations')
+    now = utcnow()
+    before = {'revision': row.revision, 'status': row.status, 'fingerprint': row.fingerprint,
+              'catalogueBefore': old.get('catalogue'), 'catalogueAfter': config.get('catalogue')}
+    encoded, digest = _encoded(config), _fingerprint(config)
+    if row.config_json != encoded or row.status != 'configured':
+        row.revision += 1
+        row.status, row.active_since, row.config_json, row.fingerprint, row.updated_at = 'configured', None, encoded, digest, now
+    result = {'accountId': account, 'revision': row.revision, 'status': row.status, 'fingerprint': row.fingerprint}
+    _audit(s, runtime, command_key, actor, reason, request_hash, before, result)
+    return {**result, 'replayed': False}
 
 
 def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
@@ -694,14 +753,19 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
         authorize(config, actor, 'activate' if status == 'active' else 'stop')
         if row.revision != expected_revision:
             raise Refused('pilot revision conflict')
+        from . import scope_contract as contracts
+        commercial = contracts.is_commercial(config)
         activation_evidence = None
         if status == 'active':
             if config['qualification']['mode'] == 'fixture' and os.environ.get('TWIN_PLAN_C_FIXTURE_ONLY') != '1':
                 raise Refused('fixture scope cannot activate outside an isolated test')
+            if commercial:
+                from .commercial_scope import assert_launchable
+                assert_launchable(s, runtime, row, config)
             policy = s.get(OfDeliveryPolicy, account)
             connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
                                                                   OfFansConnection.status == 'active'))
-            if ((config.get('delivery_mode') != 'text_only' and not _product_current(s, account, config['product']))
+            if ((not commercial and config.get('delivery_mode') != 'text_only' and not _product_current(s, account, config['product']))
                     or connection is None or connection.binding_id != runtime.binding_id):
                 raise Refused('pilot activation prerequisites are not met')
             if config.get('delivery_mode') == 'text_only':
@@ -713,7 +777,7 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
                     or row.provider_credits_reserved + config['limits']['provider_credits_per_request']
                     > config['limits']['provider_credit_budget']):
                 raise Refused('pilot provider budget is exhausted')
-        if status == 'stopped' and config.get('delivery_mode') == 'text_only':
+        if status == 'stopped' and (config.get('delivery_mode') == 'text_only' or commercial):
             from onlyfans_runtime.launch_operations import stop_runtime_in_session
             from onlyfans_runtime.text_delivery import TextAuthority
             policy = s.scalar(select(OfDeliveryPolicy).where(

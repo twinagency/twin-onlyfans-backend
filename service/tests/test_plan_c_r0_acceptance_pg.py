@@ -19,7 +19,7 @@ from conversation_engine import operator_v2
 from db.models import OfConversationState
 from db.onlyfans_case_models import OfOperatorCase
 from db.onlyfans_delivery_models import OfTextIntent
-from db.onlyfans_engine_models import OfEngineDecision, OfEngineModelCall, OfEngineRequest
+from db.onlyfans_engine_models import OfEngineDecision, OfEngineModelCall, OfEngineOwner, OfEngineRequest
 from onlyfans_runtime.store import Refused, utcnow
 from test_plan_c_model_retry_due_pg import (make_world, database, world, configured_draft, stopped_text,
                                            post, ACCOUNT, TENANT, FAN, FAN2, ACTOR, key)
@@ -272,6 +272,11 @@ def test_same_fan_under_other_creator_cannot_be_retried_or_exposed(make_world, m
     other_store = seed(*w.w.database, account='acc-r0-other', tenant='tenant-r0-other', fan=FAN)
     other_rid = str(uuid.uuid4())
     with Session(w.w.database[1]) as s, s.begin():
+        owner = s.get(OfEngineOwner, (ACCOUNT, FAN))
+        owner_values = {c.name: getattr(owner, c.name) for c in OfEngineOwner.__table__.columns}
+        owner_values.update(account_id='acc-r0-other', binding_id='binding-acc-r0-other')
+        s.add(OfEngineOwner(**owner_values))
+        s.flush()
         s.add(OfEngineRequest(account_id='acc-r0-other', request_id=other_rid, fan_id=FAN,
             binding_id='binding-acc-r0-other', source_message_id=92015, status='open', owner='engine',
             next_step='prepare_reply', revision=0, created_at=utcnow(), updated_at=utcnow()))
@@ -338,3 +343,93 @@ def test_credentials_or_private_content_in_allowlisted_identifiers_are_omitted()
         'type': 'sk-secretabcdef', 'message': private, 'metadata': {'provider_name': private, 'raw': private}}})
     raw = json.dumps(_failure_detail(response, secret='fixture-secret', messages=({'content': private},)))
     assert private not in raw and 'fixture-secret' not in raw and 'sk-secret' not in raw
+
+
+def test_oversized_stream_is_bounded_before_error_parsing_and_persistence(make_world):
+    emitted = []
+    class ErrorStream(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(1000):
+                emitted.append(32768)
+                yield b'private-error-body' * 2048
+    w = make_world([])
+    def response(request):
+        w.provider.calls.append(429)
+        return httpx.Response(429, headers={'Retry-After': '45'}, stream=ErrorStream())
+    w.provider.transport.handler = response
+    post(w, 92017)
+    w.ticks(1)
+    [call] = w.calls()
+    assert call.status == 'released' and call.outcome == 'http_429'
+    assert len(emitted) <= 3 and len(call.failure_detail_json.encode()) <= 2000
+    assert 'private' not in call.failure_detail_json
+
+
+def test_mixed_versions_fail_closed_and_rollback_never_drops_retry_evidence(make_world):
+    import os, subprocess, sys
+    from pathlib import Path
+    from db.schema import _config, check_schema, upgrade, SchemaMismatch
+    from alembic import command
+    w = make_world([429])
+    post(w, 92018)
+    w.ticks(1)
+    before = [(c.call_id, c.status, c.outcome, c.retry_not_before, c.failure_detail_json) for c in w.calls()]
+    baseline = Path('/opt/r0-baseline/service')
+    assert baseline.exists(), 'This check runs only on the exact immutable candidate image with its baseline reader'
+    env = {**os.environ, 'PYTHONPATH': str(baseline), 'R0_TEST_DB': w.w.database[0]}
+    result = subprocess.run([sys.executable, '-c',
+        'import os; from sqlalchemy import create_engine; from db.schema import check_schema; '
+        'e=create_engine(os.environ["R0_TEST_DB"]); c=e.connect(); check_schema(c)'],
+        cwd='/tmp', env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0 and 'Database revision is not supported by this process' in result.stderr
+    with pytest.raises(RuntimeError, match='Preserve model retry evidence'):
+        with w.w.database[1].begin() as c: command.downgrade(_config(c), '0129_reconnect_receipt')
+    assert [(c.call_id, c.status, c.outcome, c.retry_not_before, c.failure_detail_json) for c in w.calls()] == before
+
+
+def test_exhausted_real_ledger_budget_prevents_retry_and_retains_unrelated_unknown_cost(make_world, monkeypatch):
+    w = make_world([429])
+    post(w, 92019)
+    w.ticks(1)
+    original = w.calls()[0]
+    rid = str(uuid.uuid4())
+    with Session(w.w.database[1]) as s, s.begin():
+        if s.get(OfEngineOwner, (ACCOUNT, FAN2)) is None:
+            owner = s.get(OfEngineOwner, (ACCOUNT, FAN))
+            owner_values = {c.name: getattr(owner, c.name) for c in OfEngineOwner.__table__.columns}
+            owner_values['fan_id'] = FAN2
+            s.add(OfEngineOwner(**owner_values))
+            s.flush()
+        s.add(OfEngineRequest(account_id=ACCOUNT, request_id=rid, fan_id=FAN2, binding_id=original.binding_id,
+            source_message_id=999991, status='open', owner='engine', next_step='prepare_reply', revision=0,
+            created_at=utcnow(), updated_at=utcnow()))
+        s.flush()
+        held = clone_call(s, original, request_id=rid, fan_id=FAN2, seq=0, status='unknown', outcome='timeout',
+            reserved_microusd=w.pilot.worker.engine.model.config.daily_cap_microusd)
+        held_id = held.call_id
+    w.advance(600)
+    w.ticks(3)
+    assert w.provider.calls == [429] and w.w.fans.posts == []
+    assert request_item(w, 92019, monkeypatch)['operatorAlert']
+    with Session(w.w.database[1]) as s:
+        held = s.get(OfEngineModelCall, (ACCOUNT, held_id))
+        assert held.status == 'unknown' and held.actual_microusd is None
+        assert held.reserved_microusd == w.pilot.worker.engine.model.config.daily_cap_microusd
+
+
+def test_stop_while_retry_is_in_flight_prevents_any_send(make_world):
+    w = make_world([429])
+    post(w, 92020)
+    w.ticks(1)
+    original = w.provider.transport.handler
+    def stop_after_model(request):
+        response = original(request)
+        with Session(w.w.database[1]) as s: revision = s.get(OfConversationState, (ACCOUNT, FAN)).revision
+        w.w.store.control(TENANT, ACCOUNT, FAN, mode='paused', expected_revision=revision, command_key='r0-stop-send',
+            actor=ACTOR, reason='synthetic stop during authorized model call', action='pause_automation')
+        return response
+    w.provider.transport.handler = stop_after_model
+    w.advance(31)
+    w.ticks(3)
+    assert w.provider.calls == [429, 'ok'] and w.w.fans.posts == []
+    assert w.calls()[-1].outcome == 'identity_verified'  # usage/identity retained, stale draft never authorized

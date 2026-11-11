@@ -281,7 +281,18 @@ class OpenRouterClient:
         try:
             with httpx.Client(transport=self._transport, timeout=httpx.Timeout(request.timeout_seconds),
                               follow_redirects=False, trust_env=False) as client:
-                response = client.post(self._url, content=json.dumps(body).encode('utf-8'), headers=headers)
+                with client.stream('POST', self._url, content=json.dumps(body).encode('utf-8'), headers=headers) as wire:
+                    if wire.status_code == 200:
+                        content = wire.read()  # existing success-response contract
+                    else:
+                        # Stop reading a hostile/oversized error body. Only this bounded buffer reaches the parser.
+                        content = bytearray()
+                        for chunk in wire.iter_bytes(chunk_size=_MAX_ERROR_BODY + 1):
+                            content.extend(chunk[:_MAX_ERROR_BODY + 1 - len(content)])
+                            if len(content) > _MAX_ERROR_BODY:
+                                break
+                        content = bytes(content)
+                    response = httpx.Response(wire.status_code, headers=wire.headers, content=content)
         except _NOT_SENT:
             raise ModelNotSent('request was not sent') from None
         except httpx.HTTPError:

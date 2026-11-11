@@ -2,7 +2,7 @@
 from alembic import op
 import sqlalchemy as sa
 revision="0130_commercial_vault_provenance"
-down_revision="0129_reconnect_receipt"
+down_revision="0129b_model_retry_due"  # re-parented 2026-11-11 onto the R0 trial-compatible revision
 branch_labels=depends_on=None
 
 def upgrade():

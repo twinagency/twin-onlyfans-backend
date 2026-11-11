@@ -24,8 +24,11 @@ def _work_counts(pilot):
     from conversation_engine.pilot_ingress import _unreviewed
     from db.onlyfans_delivery_models import OfTextIntent
     from db.onlyfans_fans_intake_models import OfFansProjection
-    from db.onlyfans_engine_models import OfFansConnection, OfEnginePilotWebhookDigest, OfEngineRequest
+    from datetime import timedelta
+    from db.onlyfans_engine_models import OfEngineModelCall, OfFansConnection, OfEnginePilotWebhookDigest, OfEngineRequest
+    from onlyfans_runtime.store import utcnow
     store = getattr(pilot, 'store', None) or pilot.worker.engine.store
+    now = utcnow()
     with Session(store.engine) as s:
         runtime = store._runtime(s, pilot.tenant, pilot.account, lock=False)
         scope, config = require(s, runtime)
@@ -42,7 +45,19 @@ def _work_counts(pilot):
                 OfFansProjection.account_id==OfFansConnection.account_id,OfFansProjection.epoch==OfFansConnection.epoch)).where(
                 OfFansProjection.account_id==pilot.account,OfFansConnection.binding_id==runtime.binding_id,
                 OfFansProjection.status.in_(('pending','held')))),
-            'malformedHolds':count(unresolved_webhook_digests(runtime))}
+            'malformedHolds':count(unresolved_webhook_digests(runtime)),
+            # Conversation progress, not loop health: a request waiting for its model retry due time, and an open
+            # request still not planned after five minutes (the stranded-request symptom). Reported, never a stop.
+            'modelRetryDelayed':count(select(OfEngineModelCall.request_id).distinct().join(OfEngineRequest, and_(
+                OfEngineRequest.account_id==OfEngineModelCall.account_id,
+                OfEngineRequest.request_id==OfEngineModelCall.request_id)).where(
+                OfEngineModelCall.account_id==pilot.account,OfEngineRequest.binding_id==runtime.binding_id,
+                OfEngineRequest.status=='open',OfEngineModelCall.status=='released',
+                OfEngineModelCall.retry_not_before>now)),
+            'staleUnplannedRequests':count(select(OfEngineRequest.request_id).where(
+                OfEngineRequest.account_id==pilot.account,OfEngineRequest.binding_id==runtime.binding_id,
+                OfEngineRequest.status=='open',OfEngineRequest.next_step=='prepare_reply',
+                OfEngineRequest.updated_at<now-timedelta(minutes=5)))}
         # Scope of the holds, kept apart from loop health: an account-wide hold (unknown/malformed/conflicting
         # evidence) denies sending; a hold on one fan only removes that fan from the eligible set.
         account_wide, digest_fans = digest_hold_scope(s, runtime)

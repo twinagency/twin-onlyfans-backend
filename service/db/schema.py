@@ -80,6 +80,7 @@ PLAN_C_INGRESS = '0126_plan_c_ingress'
 OFFER_GRANT_LINEAGE = '0127_offer_grant_lineage'
 MODEL_BILLING_EVIDENCE = '0128_model_billing_evidence'
 RECONNECT_RECEIPT = '0129_reconnect_receipt'
+MODEL_RETRY_DUE = '0129b_model_retry_due'  # R0, shared with the 0129 trial line; 0130 builds on it
 COMMERCIAL_VAULT = "0130_commercial_vault_provenance"
 CATEGORY_PRICES = "0131_manual_category_prices"
 ACCOUNT_PREPARATION = "0132_account_preparation"
@@ -120,6 +121,7 @@ REVISION_RANK[PLAN_C_INGRESS] = 126
 REVISION_RANK[OFFER_GRANT_LINEAGE] = 127
 REVISION_RANK[MODEL_BILLING_EVIDENCE] = 128
 REVISION_RANK[RECONNECT_RECEIPT] = 129
+REVISION_RANK[MODEL_RETRY_DUE] = 129
 REVISION_RANK[COMMERCIAL_VAULT] = 130
 REVISION_RANK[CATEGORY_PRICES] = 131
 REVISION_RANK[ACCOUNT_PREPARATION] = 132
@@ -403,7 +405,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             {"table": table, "trigger": trigger}).all()
         if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
                 or guard[0][2] != trigger or guard[0][4] != "plpgsql"
-                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("5630b811cd298311ff01ddcc0314a176be308b5d56873c50ebd780d0bdd433d8" if expected_rank >= 128 else "7f1c0f9beb768281cbd6fa8b66279f0d24f9b486890d8913de2ce690b3556a73" if expected_rank >= 125 else "9cac12064b4377f866c0b5d5022292418e8895e9e5e271c03628e528d4ac134e")):
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("ab95da609ffe3d4915fd52aab42c61a99cd56649bac3e345ee34b41b61508cf5" if MODEL_RETRY_DUE in ancestors else "5630b811cd298311ff01ddcc0314a176be308b5d56873c50ebd780d0bdd433d8" if expected_rank >= 128 else "7f1c0f9beb768281cbd6fa8b66279f0d24f9b486890d8913de2ce690b3556a73" if expected_rank >= 125 else "9cac12064b4377f866c0b5d5022292418e8895e9e5e271c03628e528d4ac134e")):
             failures.append("missing engine model call protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine model call row security")

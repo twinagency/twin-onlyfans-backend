@@ -32,6 +32,74 @@ class KeyUnavailable(Exception):
     pass
 
 
+# ---- non-200 evidence ----------------------------------------------------------------
+# Bounded and sanitized: never the key, the prompt or a raw body. Only short scalar fields survive.
+_MAX_ERROR_BODY = 65_536
+_SAFE = re.compile(r'[^A-Za-z0-9 ._:/@()\[\],;=+\-\'"?!%#]')
+_SECRET = re.compile(r'(sk-[A-Za-z0-9_-]{6,}|Bearer\s+\S+|[A-Za-z0-9_-]{32,})')
+
+
+def _clean(value, limit, *, redact=False):
+    if type(value) is int and not isinstance(value, bool):
+        return value if -10**9 < value < 10**9 else None
+    if type(value) is not str or not value:
+        return None
+    if redact:
+        value = _SECRET.sub('[redacted]', value)
+    return _SAFE.sub('', value)[:limit] or None
+
+
+def _retry_after(value, *, now=None):
+    """Retry-After as whole seconds (delta or HTTP-date), clamped to 0..3600; None when absent or unreadable."""
+    if type(value) is not str or not value.strip() or len(value) > 64:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return min(int(value), 3600)
+    from email.utils import parsedate_to_datetime
+    from datetime import datetime, timezone
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    seconds = (when - (now or datetime.now(timezone.utc))).total_seconds()
+    return max(0, min(int(seconds + 0.999), 3600))
+
+
+def _failure_detail(response):
+    headers = response.headers
+    detail = {'status': response.status_code}
+    for name, key in (('x-request-id', 'requestId'), ('retry-after', 'retryAfter'), ('x-ratelimit-limit', 'rateLimitLimit'),
+                      ('x-ratelimit-remaining', 'rateLimitRemaining'), ('x-ratelimit-reset', 'rateLimitReset')):
+        value = _clean(headers.get(name), 64)
+        if value is not None:
+            detail[key] = value
+    content = response.content if len(response.content) <= _MAX_ERROR_BODY else b''
+    try:
+        body = json.loads(content) if content else None
+    except (ValueError, UnicodeError, RecursionError):
+        body = None
+    error = body.get('error') if type(body) is dict else None
+    if type(error) is dict:
+        for key, limit in (('code', 32), ('type', 64), ('message', 300)):
+            value = _clean(error.get(key), limit, redact=key == 'message')
+            if value is not None:
+                detail['error' + key.capitalize()] = value
+        meta = error.get('metadata') if type(error.get('metadata')) is dict else {}
+        provider = _clean(meta.get('provider_name'), 64)
+        if provider is not None:
+            detail['providerName'] = provider
+    elif type(error) is str:
+        value = _clean(error, 300, redact=True)
+        if value is not None:
+            detail['errorMessage'] = value
+    return detail
+
+
 def load_key(*, key_file='', key_env='', environ=None):
     """Return the API key from a 0600 regular file owned by this user, or from the env var named `key_env`."""
     environ = os.environ if environ is None else environ
@@ -204,7 +272,8 @@ class OpenRouterClient:
         except httpx.HTTPError:
             raise ModelOutcomeUnknown('the request may have reached the provider') from None
         if response.status_code != 200:
-            raise ModelHTTPStatus(response.status_code)
+            raise ModelHTTPStatus(response.status_code, detail=_failure_detail(response),
+                                  retry_after=_retry_after(response.headers.get('retry-after')))
         try:
             data = response.json()
         except ValueError:

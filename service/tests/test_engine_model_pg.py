@@ -1042,7 +1042,10 @@ def test_primary_unavailable_then_fallback_rejected_is_human_work_with_no_third_
 def test_failures_that_are_not_availability_never_fall_back(database, failure):
     store, authority, engine, runtime, client, _ = with_model(database, [failure, ok('fallback')], cfg=config(**FALLBACK))
     incoming(store, 1, 'hello')
-    with pytest.raises(ModelUnavailable):
+    # R0 2026-11-11: a provider HTTP refusal (4xx) is now visible human work instead of a silently open request;
+    # an unclassified client error keeps its unknown outcome and the request stays open, as before.
+    expected = (Refused, 'handed to a human') if isinstance(failure, ModelHTTPStatus) else (ModelUnavailable, None)
+    with pytest.raises(expected[0], match=expected[1]):
         engine.plan(TENANT, ACCOUNT, FAN, 1)
     assert [r.model for r in client.requests] == ['m/primary']
     store.close()

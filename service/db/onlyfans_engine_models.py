@@ -416,6 +416,10 @@ class OfEngineModelCall(Base):
     updated_at = Column(DateTime, nullable=False)
     wire_started_at = Column(DateTime)
     settled_at = Column(DateTime)
+    # A retryable availability refusal (not_sent / HTTP 408, 429, 5xx) is due again at this time; NULL otherwise.
+    retry_not_before = Column(DateTime, info={'onlyfans_since': '0129b_model_retry_due'})
+    # Bounded sanitized evidence of a provider refusal (status, codes, provider name, short message, rate headers).
+    failure_detail_json = Column(Text, info={'onlyfans_since': '0129b_model_retry_due'})
 
 
 APPROVAL_INFO = {'onlyfans_since': '0124_engine_approval'}

@@ -342,13 +342,22 @@ class SupervisedPilot:
                 OfEngineDecision.request_id == request.request_id,
                 OfEngineDecision.binding_id == runtime.binding_id,
                 OfEngineDecision.part_index == 0, OfEngineDecision.status == 'ready').exists()
+            # A released not_sent / HTTP-status call is a proven zero-cost end: nothing is in flight and no usage is
+            # unknown. Its request is eligible again once due (`retry_not_before`, set by the ledger for retryable
+            # availability refusals); the runtime then retries within its attempt limit, or hands a non-retryable
+            # refusal to a human. Unknown, in-flight and identity-unsettled calls stay held exactly as before.
+            ledger = getattr(getattr(getattr(self.worker, 'engine', None), 'model', None), 'ledger', None)
+            due_now = ledger.clock() if ledger is not None else utcnow()
+            proven_refusal = or_(OfEngineModelCall.outcome == 'not_sent',
+                                 OfEngineModelCall.outcome.op('~')('^http_[0-9]{3}$'))
             uncertain = select(OfEngineModelCall.call_id).where(
                 OfEngineModelCall.account_id == request.account_id,
                 OfEngineModelCall.request_id == request.request_id,
                 or_(OfEngineModelCall.status.in_(('reserved','calling','unknown')),
-                    and_(OfEngineModelCall.status == 'released',
+                    and_(OfEngineModelCall.status == 'released', ~func.coalesce(proven_refusal, False),
                          or_(OfEngineModelCall.outcome.is_(None), OfEngineModelCall.outcome != 'lease_expired',
                              OfEngineModelCall.wire_started_at.is_not(None))),
+                    and_(OfEngineModelCall.status == 'released', OfEngineModelCall.retry_not_before > due_now),
                     OfEngineModelCall.outcome.in_((*IDENTITY_UNSETTLED,'identity_unverified')))).exists()
             query = (select(OfIngress, request).outerjoin(request, and_(
                 request.account_id == OfIngress.account_id, request.fan_id == OfIngress.fan_id,

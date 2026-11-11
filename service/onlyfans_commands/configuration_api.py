@@ -148,3 +148,42 @@ async def moxy_configure(request:Request,account_id:str):
     except (InvalidConfiguration,ValueError,KeyError,TypeError):
         return refuse('invalid_configuration',400,'Review the source-backed Moxy configuration.')
     except Exception:return refuse('outcome_unconfirmed',500,'Refresh before retrying this Moxy change.')
+
+
+@router.get("/accounts/{account_id}/preparation")
+async def preparation_read(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from conversation_engine.preparation import view
+    try:data=await asyncio.to_thread(view,store,tenant,account_id)
+    except Refused:return refuse("not_available",404,"That preparation account is unavailable.")
+    except Exception:return refuse("preparation_unavailable",503,"Preparation status could not be read.")
+    return response({"ok":True,"accountId":account_id,"preparation":data})
+
+@router.post("/accounts/{account_id}/preparation")
+async def preparation_write(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from conversation_engine.preparation import configure,stop
+    try:
+        if request.headers.get("content-type","").split(";")[0].strip().lower()!="application/json":raise ValueError()
+        raw=bytearray()
+        async for part in request.stream():
+            if len(raw)+len(part)>16384:return refuse("request_too_large",413,"Preparation request is too large.")
+            raw.extend(part)
+        body=json.loads(raw,object_pairs_hook=unique_keys)
+        common={"action","expectedRevision","commandKey","actor","reason"}
+        if type(body) is not dict or body.get("action") not in ("configure","stop") or set(body)!=(common|({"config"} if body["action"]=="configure" else set())):raise ValueError()
+    except (ValueError,TypeError,UnicodeError,RecursionError):
+        return refuse("invalid_request",400,"Invalid preparation request.")
+    try:
+        options={k:body[k] for k in ("actor","reason")}
+        options.update(expected_revision=body["expectedRevision"],command_key=body["commandKey"])
+        data=await asyncio.to_thread(configure,store,tenant,account_id,body["config"],**options) if body["action"]=="configure" else await asyncio.to_thread(stop,store,tenant,account_id,**options)
+    except Refused as exc:
+        if str(exc)=="scope unavailable":return refuse("not_available",404,"That preparation account is unavailable.")
+        return refuse("preparation_conflict",409,"Preparation was refused. Refresh and check the disabled connector, identity and budget.")
+    except Exception:return refuse("outcome_unconfirmed",500,"The outcome is unconfirmed. Retry the same preparation request.")
+    return response({"ok":True,"accountId":account_id,"commandKey":body["commandKey"],"preparation":data})

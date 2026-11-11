@@ -85,23 +85,68 @@ class FansWebhookAdapter:
             policy = s.get(OfDeliveryPolicy, account)
             if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS:
                 raise Refused('provider binding is limited to the synthetic lab')
-            active = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
-                                                              OfFansConnection.status == 'active').with_for_update())
-            if active and (active.provider_account_id, active.provider_creator_id, active.binding_id) == (
-                    provider_account_id, provider_creator_id, runtime.binding_id):
-                return active.epoch
-            if active:
-                unresolved = s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account,
-                    OfTextIntent.status.in_(('dispatching', 'unknown'))).limit(1))
-                if unresolved:
-                    raise Refused('reconcile unresolved sends before reconnecting')
-                active.status = 'retired'
-                s.flush()
-            epochs = s.scalars(select(OfFansConnection.epoch).where(OfFansConnection.account_id == account)).all()
-            epoch = max(epochs, default=0) + 1
-            s.add(OfFansConnection(account_id=account, epoch=epoch, binding_id=runtime.binding_id,
-                provider_account_id=provider_account_id, provider_creator_id=provider_creator_id,
-                status='active', created_at=utcnow()))
+            return self._bind_connection(s, runtime, provider_account_id, provider_creator_id)
+
+    def _bind_connection(self, s, runtime, provider_account_id, provider_creator_id):
+        """Shared connection owner; caller holds runtime and supplies verified scope."""
+        account = runtime.account_id
+        active = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
+                                                          OfFansConnection.status == 'active').with_for_update())
+        if active and (active.provider_account_id, active.provider_creator_id, active.binding_id) == (
+                provider_account_id, provider_creator_id, runtime.binding_id):
+            return active.epoch
+        if active:
+            unresolved = s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account,
+                OfTextIntent.status.in_(('dispatching', 'unknown'))).limit(1))
+            from db.onlyfans_engine_models import OfEngineIndependentAdmission
+            independent=s.scalar(select(OfEngineIndependentAdmission.attempt_id).where(
+                OfEngineIndependentAdmission.account_id==account,
+                OfEngineIndependentAdmission.status.in_(("dispatching","unknown"))).limit(1))
+            if unresolved is not None or independent is not None:
+                raise Refused('reconcile unresolved sends before reconnecting')
+            active.status = 'retired'
+            s.flush()
+        epochs = s.scalars(select(OfFansConnection.epoch).where(OfFansConnection.account_id == account)).all()
+        epoch = max(epochs, default=0) + 1
+        s.add(OfFansConnection(account_id=account, epoch=epoch, binding_id=runtime.binding_id,
+            provider_account_id=provider_account_id, provider_creator_id=provider_creator_id,
+            status='active', created_at=utcnow()))
+        return epoch
+
+    def bind_verified(self, tenant, account, client, *, guard):
+        """Identity-read proof under disabled preparation, never a caller assertion."""
+        from .protocol import FansApiClient
+        from conversation_engine.preparation import PreparationRequestGuard,fingerprint,encoded
+        from db.onlyfans_fans_intake_models import OfFansLink
+        from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+        if (type(client) is not FansApiClient or not client._identity_verified
+                or type(guard) is not PreparationRequestGuard or client._request_guard is not guard
+                or guard.store is not self.store or (guard.tenant,guard.account)!=(tenant,account)):
+            raise Refused("verified preparation client required")
+        with Session(self.engine) as s,s.begin():
+            runtime,scope,config=guard.ensure_current(s)
+            if (client.account,client.creator_id)!=(config["provider_account"],config["creator_id"]):
+                raise Refused("preparation identity mismatch")
+            epoch=self._bind_connection(s,runtime,client.account,client.creator_id)
+            if epoch!=client.epoch:raise Refused("preparation connection changed during proof")
+            link=s.get(OfFansLink,(account,client.creator_id))
+            if link is None:
+                link=OfFansLink(account_id=account,creator_id=client.creator_id,provider_account_id=client.account,
+                    state="connected",send_blocked=True,block_reason="preparation_only",
+                    session_refreshes=0,reconnect_count=0,updated_at=utcnow())
+                s.add(link)
+            else:
+                if link.provider_account_id!=client.account:link.reconnect_count+=1
+                link.provider_account_id=client.account;link.state="connected";link.send_blocked=True
+                if link.block_reason is None:link.block_reason="preparation_only"
+                link.updated_at=utcnow()
+            key=fingerprint(["preparation-connect",runtime.binding_id,scope.revision,epoch,client.account,client.creator_id])
+            if s.get(OfLaunchCommand,(account,key)) is None:
+                result={"epoch":epoch,"provider_account":client.account,"creator_id":client.creator_id,"identityVerified":True}
+                s.add(OfLaunchCommand(account_id=account,command_key=key,binding_id=runtime.binding_id,
+                    kind="preparation_connect",request_hash=key,actor="worker-import:"+fingerprint([tenant,account]),
+                    reason="Budgeted provider identity read verified preparation connection",
+                    before_json="{}",result_json=encoded(result),created_at=utcnow()))
             return epoch
 
     def accept(self, raw_body, signature, secret, event_key, *, expected_tenant=None, expected_account=None, expected_epoch=None, expected_creator_id=None):

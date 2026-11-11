@@ -203,7 +203,10 @@ class Store:
         mode = s.scalar(select(OfDeliveryPolicy.delivery_mode).where(
             OfDeliveryPolicy.account_id == account_id))
         shared = str(mode or "gap").strip().lower() == "concurrent"
-        return Store._runtime(s, tenant_id, account_id, shared=shared)
+        runtime = Store._runtime(s, tenant_id, account_id, shared=shared)
+        from conversation_engine.preparation import assert_send_allowed
+        assert_send_allowed(s, runtime)
+        return runtime
 
     @staticmethod
     def _read_connection(s, runtime, revision):

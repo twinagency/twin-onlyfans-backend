@@ -1,9 +1,8 @@
-"""Vault sync: Fans API vault -> canonical vault_items records (and a catalogue helper).
+"""FansAPI metadata import through the existing vault job/observation owners.
 
-Reading the vault sends nothing. Items that are not ready, cannot be viewed, carry an
-error, or are DRM videos (files.full.url is null) are never made sellable; if one was
-sellable before, it is marked removed so catalogue terms refuse it. A pass that reaches
-hasMore=false also marks items it did not see as removed.
+Latest selection does not erase older ownership, corrections or delivery history.
+Missing URLs and DRM are retained honestly; provider readiness, classification,
+operator approval, exact prices and ownership remain separate eligibility checks.
 """
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -128,8 +127,9 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
         raise Refused("verified bounded FansAPI vault client required")
     if not is_mock_wire(client._http):
         from conversation_engine.pilot_scope import ProviderRequestGuard
+        from conversation_engine.preparation import PreparationRequestGuard
         guard=client._request_guard
-        if (type(guard) is not ProviderRequestGuard or guard.store is not store or
+        if (type(guard) not in (ProviderRequestGuard,PreparationRequestGuard) or guard.store is not store or
                 (guard.tenant,guard.account)!=(tenant,account)):
             raise Refused("budgeted account-scoped provider reads required")
     pages,upserted,skipped=0,0,{}
@@ -137,6 +137,14 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
     for _ in range(max_pages):
         with Session(store.engine) as s,s.begin():
             runtime=store._runtime(s,tenant,account)
+            from conversation_engine.preparation import current as preparation_current,PreparationRequestGuard
+            prep,_=preparation_current(s,runtime)
+            if prep is not None:
+                guard=client._request_guard
+                if (type(guard) is not PreparationRequestGuard or guard.store is not store
+                        or (guard.tenant,guard.account)!=(tenant,account)):
+                    raise Refused("budgeted preparation guard required")
+                guard.ensure_current(s)
             connection=_bound_connection(s,runtime,client)
             now=utcnow()
             job=s.get(OfVaultSyncJob,(account,job_id)) if job_id else None
@@ -176,6 +184,11 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
             if job.status=="running" and job.lease_until>now:
                 return {"complete":False,"pages":pages,"upserted":upserted,"skipped":skipped,
                         "error":"vault_job_busy","jobId":job_id}
+            if job.pages_read>=job.max_pages:
+                job.status="failed";job.last_error="vault_total_page_limit";job.completed_at=now
+                job.lease_token=job.lease_until=None;job.updated_at=now
+                return {"complete":False,"pages":pages,"upserted":upserted,"skipped":skipped,
+                        "error":"vault_total_page_limit","jobId":job_id}
             token=str(uuid.uuid4());offset=job.page_offset
             job.status="running";job.lease_token=token;job.lease_until=now+timedelta(seconds=60)
         # No transaction spans provider I/O. The existing client applies read budgets.
@@ -195,6 +208,13 @@ def sync_vault(store,tenant,account,client,*,page_size=24,max_pages=200,command_
             if job.status!="running" or job.lease_token!=token:
                 raise Refused("vault job lease changed")
             window=json.loads(job.window_json);now=utcnow()
+            if type(client._request_guard) is PreparationRequestGuard:
+                try:client._request_guard.ensure_current(s)
+                except Refused:
+                    job.status="pending";job.lease_token=job.lease_until=None
+                    job.last_error="preparation_authorization_changed";job.updated_at=now
+                    return {"complete":False,"pages":pages,"upserted":upserted,"skipped":skipped,
+                            "error":job.last_error,"jobId":job_id}
             if failure:
                 # Keep the same durable cursor for a bounded retry or restart.
                 job.status="pending";job.lease_token=job.lease_until=None

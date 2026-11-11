@@ -270,6 +270,9 @@ class TextAuthority:
                 or media_enabled is not None and type(media_enabled) is not bool
                 or transport_kind is not None and transport_kind not in {"synthetic", "native", "fansapi"}):
             raise Refused("invalid delivery policy")
+        from conversation_engine.preparation import assert_send_allowed
+        if enabled or media_enabled is True:
+            assert_send_allowed(s, runtime)
         from conversation_engine.pilot_scope import current as current_pilot, authorize
         pilot, config = current_pilot(s, runtime)
         if pilot is not None:

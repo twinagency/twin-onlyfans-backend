@@ -234,12 +234,16 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="One bounded credential refresh and four-account cycle")
+    parser.add_argument("--preparation-only", action="store_true",
+                        help="Budgeted FansAPI identity and vault metadata reads; replies, sales and models excluded")
     parser.add_argument("--refresh-seconds", type=float, default=15,
                         help="Minimum refresh window in seconds; a cohort completes its bounded pass first")
     parser.add_argument("--verify-post-cursor-account", help="Only verify the scoped account's paid-post cursor using two read pages")
     parser.add_argument("--command-key", help="Exact durable command identity for paid-post cursor verification")
     parser.add_argument("--actor", help="Existing revocable operator identity for paid-post cursor verification")
     args = parser.parse_args(argv)
+    if args.preparation_only and (args.verify_post_cursor_account is not None or args.command_key is not None or args.actor is not None):
+        parser.error("Preparation cannot be combined with cursor verification or command overrides")
     if args.verify_post_cursor_account is not None:
         from onlyfans_read.agency_scope import actor_allowed
         if (args.once or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", args.verify_post_cursor_account)
@@ -255,7 +259,7 @@ def main(argv=None):
         parser.error("An explicit ONLYFANS_WORKER_TENANT is required")
     if not math.isfinite(args.refresh_seconds) or not 1 <= args.refresh_seconds <= 60:
         parser.error("Refresh interval must be 1–60 seconds")
-    if not re.fullmatch(r"[a-fA-F0-9]{64}", os.environ.get("ONLYFANS_CONNECTION_KEY", "")):
+    if not args.preparation_only and not re.fullmatch(r"[a-fA-F0-9]{64}", os.environ.get("ONLYFANS_CONNECTION_KEY", "")):
         parser.error("An explicit 32-byte ONLYFANS_CONNECTION_KEY in hexadecimal is required")
     from sqlalchemy.engine import make_url
     try:
@@ -287,6 +291,18 @@ def main(argv=None):
         except Exception:
             _emit({"schemaVersion":"of-worker.v1", "state":"startup_unavailable"})
             return 1
+        if args.preparation_only:
+            from conversation_engine.preparation import run_preparation_once
+            while not stop.is_set():
+                try:
+                    results=run_preparation_once(store,tenant,stop_event=stop)
+                    _emit({"schemaVersion":"of-preparation.v1","state":"observed","accounts":results})
+                except Exception:
+                    _emit({"schemaVersion":"of-preparation.v1","state":"unavailable"})
+                    if args.once:return 1
+                if args.once:return 0
+                stop.wait(args.refresh_seconds)
+            return 0
         if args.verify_post_cursor_account is not None:
             # This mode never enters ordinary intake, planning, uploads or
             # dispatch, even if their feature flags are configured. The owner

@@ -73,7 +73,7 @@ def test_scope_schema_is_current_and_requires_complete_configuration(configured_
     world, env, _, seen = configured_draft
     with world.database[1].begin() as conn:
         check_schema(conn)
-        assert HEAD == '0129_reconnect_receipt'
+        assert HEAD == '0132_account_preparation'
     cfg = config_for(world, env)
     for patch in ({'fans':[]}, {'operator':{'actor':OTHER, 'name':'', 'permissions':[]}},
                   {'product':{**cfg['product'], 'price_cents':1}}, {'limits':{**cfg['limits'], 'provider_requests':0}}):
@@ -152,3 +152,19 @@ def test_active_scope_rejects_an_existing_unguarded_worker(configured_draft):
         FansApiRealTransport(world.store, TENANT, ACCOUNT, world.transport.client,
                              allowed_chats=frozenset({str(FAN)}), enabled=True)
     assert world.fans.posts == []
+
+
+def test_0131_populated_pilot_upgrade_retains_legacy_authority_and_reservations(configured_draft):
+    from alembic import command
+    from db.schema import _config,upgrade
+    world,env,_,_=configured_draft
+    install(world,config_for(world,env))
+    with world.database[1].begin() as c:
+        command.downgrade(_config(c),"0131_manual_category_prices")
+        c.execute(text("UPDATE of_engine_pilot_scope SET provider_requests_used=3,provider_credits_reserved=6"))
+        before=dict(c.execute(text("SELECT * FROM of_engine_pilot_scope WHERE scope_id=1")).mappings().one())
+        upgrade(c)
+        after=dict(c.execute(text("SELECT * FROM of_engine_pilot_scope WHERE scope_id=1")).mappings().one())
+        assert before==after
+        check_schema(c)
+    assert pilot_scope.describe(world.store,TENANT,ACCOUNT)["status"]=="configured"

@@ -474,7 +474,7 @@ class OfEnginePilotScope(Base):
     """
     __tablename__ = 'of_engine_pilot_scope'
     __table_args__ = (
-        CheckConstraint('scope_id = 1', name='singleton'),
+        CheckConstraint('scope_id >= 1', name='singleton'),
         CheckConstraint("status IN ('configured','active','stopped')", name='status'),
         CheckConstraint("(status = 'active') = (active_since IS NOT NULL)", name='active_since'),
         CheckConstraint('revision > 0 AND provider_requests_used >= 0 AND provider_credits_reserved >= 0', name='numbers'),

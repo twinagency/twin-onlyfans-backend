@@ -373,13 +373,16 @@ def test_not_sent_and_http_refusals_release_the_reservation_and_attempts_stay_bo
     assert [(r.status, r.outcome) for r in got] == [('released', 'not_sent')]
     assert runtime.ledger.committed(day=got[0].cost_day) == 0
     clock.offset = timedelta(seconds=45)
-    with pytest.raises(ModelUnavailable):
-        engine.plan(TENANT, ACCOUNT, FAN, 1)  # second (and last) allowed attempt: refused with 429
+    with pytest.raises(Refused, match='model call limit reached; request handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # second failure terminates visibly, without waiting for another tick
     assert [(r.status, r.outcome) for r in rows(database)] == [('released', 'not_sent'), ('released', 'http_429')]
     clock.offset = timedelta(seconds=120)
-    with pytest.raises(Refused, match='handed to a human'):
+    with pytest.raises(Refused, match='request is with a human'):
         engine.plan(TENANT, ACCOUNT, FAN, 1)  # total attempts are bounded: no third call, a human gets the request
     assert len(client.requests) == 2 and len(rows(database)) == 2
+    [(category, _, _, reason, evidence)] = _cases(database)
+    assert category == 'model_handover' and reason == 'model_call_limit'
+    assert evidence['outcomes'] == ['not_sent', 'http_429']
     with Session(database[1]) as s:
         assert s.scalar(select(OfEngineRequest)).status == 'handover_pending'
     store.close()

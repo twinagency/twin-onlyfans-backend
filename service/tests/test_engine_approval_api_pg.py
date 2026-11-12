@@ -396,7 +396,9 @@ def assert_refused_and_unchanged(api, d, response, before):
 
 
 FALSE_PHOTO_LEADS = ['Enjoy this video.', 'A little video clip for you.', 'Your video is attached.', 'Here are three videos for you.',
-                     'Enjoy this ten-minute photo set.', 'It is USD 5.00 for this set.']
+                     'Enjoy this ten-minute photo set.', 'It is USD 5.00 for this set.',
+                     'Here is your video, ready?', 'Short and sweet, a hot clip, ready?', 'It is USD 5.00 for this set, deal?',
+                     'I made a video last night. Here it is.']     # a tag question / a pointer to the card never excuses a false claim
 
 
 @pytest.mark.parametrize('lead', FALSE_PHOTO_LEADS)
@@ -418,6 +420,20 @@ def test_operator_edit_route_refuses_a_false_product_claim_about_the_attached_ca
     [offer] = [p for p in new['parts'] if p['action'] == 'offer']
     assert offer['body'].startswith('Enjoy these two photos.') and offer['price_cents'] == 1500 and offer['media_ids'] == d['parts'][0]['media_ids']
     assert [r.status for r in approvals(api)] == ['invalidated', 'awaiting'] and api.fans.posts == []
+
+
+@pytest.mark.parametrize('lead', ['I watched a movie last night. Enjoy these two photos.', 'Enjoy these two photos. Would you like a video next time?',
+                                  'Enjoy these two photos, ready?'])
+def test_operator_edit_route_accepts_unrelated_conversation_and_truthful_wording_with_a_question(api, lead):
+    """The refusals above are the false claim and nothing else: the same route persists an edit whose only extra words are the
+    writer's unrelated activity, a genuine question or a tag question after a TRUE description."""
+    photo_only_offer(api)
+    [d] = drafts(api)
+    accepted = post(api, draft_path(d, 'edit'), edit_body(d, 80, [lead]))
+    assert accepted.status_code == 200, accepted.text
+    [new] = drafts(api)
+    assert new['draftVersion'] == 2 and new['status'] == 'awaiting' and new['generation'] == d['generation'] + 1
+    assert [p for p in new['parts'] if p['action'] == 'offer'][0]['body'].startswith(lead) and api.fans.posts == []
 
 
 def test_operator_edit_route_checks_a_mixed_card_against_its_own_kinds_and_counts(api):

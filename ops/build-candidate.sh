@@ -259,7 +259,10 @@ run_group() {   # name, then pytest args
   local name=$1; shift
   local log=$BUILD_RECORD/suite-$name.log rc=0 run_user=1000:1000
   local caps=()
-  [ "$name" != ops ] || { run_user=0:0; caps=(--cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE); }
+  # ops tests build a root-owned 0600 marker (CHOWN/FOWNER/DAC_OVERRIDE) and then fork into the unprivileged worker
+  # identity (setgroups/setgid/setuid -> SETUID/SETGID) to prove what THAT identity can read or write. Only this
+  # test container gets them: nothing is added for production workers and every other group stays 1000:1000, no caps.
+  [ "$name" != ops ] || { run_user=0:0; caps=(--cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID); }
   { echo "IMAGE=$IMAGE_ID"; echo "COMMIT=$FULL"; echo "GROUP=$name"; echo "OVERLAY=none (no -v mounts of source, tests, ops, baseline, packages or pg tools)"; echo "ARGS=$*"; } > "$log"
   set +e
   timeout "$SUITE_TIMEOUT" docker run --rm --name "$RUN_T" --pull never --cpus 1 --memory 1g --pids-limit 256 --cap-drop ALL "${caps[@]}" \

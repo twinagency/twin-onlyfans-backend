@@ -88,7 +88,8 @@ PREPARATION_RETRY_STATE = "0133_preparation_retry_state"
 COMMERCIAL_SCOPE = "0134_commercial_scope_contract"
 CATALOGUE_TERMS = "0135_commercial_catalogue_terms"
 HISTORY_COVERAGE = "0136_history_coverage"  # integration: step 1, parented on 0135
-HEAD = HISTORY_COVERAGE
+MODEL_RETRY_DUE_REPAIR = "0137_model_retry_due_repair"  # completes 0129b on databases that skipped it (original 0130..0133 lineage)
+HEAD = MODEL_RETRY_DUE_REPAIR
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -132,6 +133,7 @@ REVISION_RANK[PREPARATION_RETRY_STATE] = 133
 REVISION_RANK[COMMERCIAL_SCOPE] = 134
 REVISION_RANK[CATALOGUE_TERMS] = 135
 REVISION_RANK[HISTORY_COVERAGE] = 136
+REVISION_RANK[MODEL_RETRY_DUE_REPAIR] = 137
 
 
 class SchemaMismatch(RuntimeError):
@@ -190,8 +192,13 @@ def revision(conn: Connection) -> str | None:
     return versions[0]
 
 
-def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
-    """No DDL, repair, stamping or implicit compatibility fallback."""
+def check_schema(conn: Connection, *, expected: str = HEAD, lineage_without: frozenset = frozenset()) -> None:
+    """No DDL, repair, stamping or implicit compatibility fallback.
+
+    `lineage_without` names ancestors of `expected` that a database of the ORIGINAL lineage never ran (only
+    MODEL_RETRY_DUE: it was inserted under 0130 after 0130..0133 existed). Their objects are then neither expected
+    nor tolerated differently: every other check, including the pre-0129b model-call guard digest, stays exact.
+    """
     if conn.dialect.name != "postgresql":
         raise SchemaMismatch("OnlyFans runtime requires PostgreSQL")
     # Outside the dump's public schema: committed BEFORE pg_restore can write
@@ -209,7 +216,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
     # These two valid release lines use overlapping numeric prefixes.
     # Membership must follow Alembic ancestry, not just numeric rank.
     from alembic.script import ScriptDirectory
-    ancestors = {r.revision for r in ScriptDirectory.from_config(_config(conn)).iterate_revisions(expected, "base")}
+    ancestors = {r.revision for r in ScriptDirectory.from_config(_config(conn)).iterate_revisions(expected, "base")} - set(lineage_without)
     def since_rank(item, *, fallback=0):
         since = item.info.get("onlyfans_since")
         return 10**9 if since and since not in ancestors else _since_rank(item, fallback=fallback)
@@ -589,7 +596,17 @@ def upgrade(conn: Connection) -> None:
     current = revision(conn)
     if current not in REVISION_RANK:
         raise SchemaMismatch("Unsupported legacy schema; rehearse a validated import first")
-    check_schema(conn, expected=current)
+    try:
+        check_schema(conn, expected=current)
+    except SchemaMismatch as strict:
+        # A database of the original lineage (0129 -> 0130 -> ... without 0129b) reports a revision whose graph ancestors
+        # include 0129b. It is accepted only if it matches that lineage exactly; 0137 then completes the missing DDL.
+        if REVISION_RANK[current] < REVISION_RANK[COMMERCIAL_VAULT] or current == HEAD:
+            raise
+        try:
+            check_schema(conn, expected=current, lineage_without=frozenset({MODEL_RETRY_DUE}))
+        except SchemaMismatch:
+            raise strict from None  # the strict failure is the honest description
     command.upgrade(_config(conn), HEAD)
     check_schema(conn)
 

@@ -169,13 +169,85 @@ _CONDITIONAL = re.compile(r"\b(?:if|whether|unless|in\s+case|once|until|supposin
 _FUTURE_CUE = re.compile(r"(?:\b(?:will|would|gonna|going\s+to|let\s+me|lemme|to|shall|ill)|'ll)\s*$", re.I)
 
 
+# A question governs the interrogative clause it is in, never the declaration before it. A sentence that ends in '?' is cut at its
+# commas/colons/dashes (outside quotations and numbers) and each piece is classified:
+#   True    an interrogative clause: it opens with a wh-word, an inverted auxiliary or an elided "want/like ..." frame, and so does
+#           everything after it in the sentence ("Would you like a photo, or a video?", "Which one, the photo or the video?");
+#   'soft'  the last piece of a sentence with no interrogative frame ("Here is your video, ready?", "You want a video?"): a tag or a
+#           declarative question. It excuses a media noun only when that noun is not visibly about the attached item;
+#   False   everything before it: a declaration, still asserted ("Here is your video" in "Here is your video, ready?").
+# A piece that restarts with "here ..." / "it is ..." inside an interrogative run is a declaration again.
+_SOFT = 'soft'
+_LEAD_IN = r"(?:(?:so|and|or|but|then|well|ok(?:ay)?|hey|oh|now|also|wait|hmm+)[\s,]+)*"
+_SUBJECT_AFTER_DO = r"(?:you|u|ya|i|we|they|he|she|it|there|anyone|anybody|everyone|everybody|someone|somebody)"
+_INTERROGATIVE_OPENER = re.compile(
+    r"^\W*" + _LEAD_IN + r"(?:(?:who|whom|whose|what|which|when|where|why|how)\b"
+    r"|(?:am|is|are|was|were|can|could|will|would|shall|should|may|might|must)(?:n'?t)?\s+\w"
+    r"|(?:do|does|did|have|has|had)(?:n'?t)?\s+" + _SUBJECT_AFTER_DO + r"\b"
+    r"|(?:want|wanna|like|prefer|fancy|need|care|interested|ready\s+(?:for|to)|up\s+for)\b\s+\w)", re.I)
+_DECLARATIVE_ANCHOR = re.compile(r"^\W*(?:here\b|(?:it|this|that|they|these|those)(?:'s|'re|\s+(?:is|are|was|were))\b)", re.I)
+_VOCATIVE = re.compile(r"^\W*(?:babe|babes|baby|bby|bb|honey|hun|love|sir|handsome|darling|daddy|cutie|boo|dear|sweetie|sweetheart|gorgeous)\W*$", re.I)
+
+
+def _pieces(sentence):
+    """[(start, end)] spans of `sentence` between commas, semicolons, colons and dashes that sit outside a quotation or a number."""
+    spans, begin, quoted = [], 0, False
+    for i, ch in enumerate(sentence):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == '\u201c':
+            quoted = True
+        elif ch == '\u201d':
+            quoted = False
+        elif quoted:
+            continue
+        before, after = sentence[i - 1:i], sentence[i + 1:i + 2]
+        cut = ((ch in ',;:' and not (before.isdigit() and after.isdigit()))
+               or ch in '\u2014\u2013' or (ch == '-' and before == ' ' and after == ' '))
+        if cut:
+            spans.append((begin, i))
+            begin = i + 1
+    spans.append((begin, len(sentence)))
+    return [(a, b) for a, b in spans if sentence[a:b].strip(' \t?!.')]
+
+
+def _question_clauses(sentence):
+    """[(clause_text, True | 'soft' | False)] for one sentence that ends in '?'."""
+    spans = _pieces(sentence)
+    if len(spans) > 1 and _VOCATIVE.match(sentence[spans[-1][0]:spans[-1][1]]):
+        spans = spans[:-2] + [(spans[-2][0], spans[-1][1])]       # "Photo or video, babe?": the vocative is not a tag
+    flags, inside = [], False
+    for index, (a, b) in enumerate(spans):
+        piece = sentence[a:b]
+        if _INTERROGATIVE_OPENER.match(piece):
+            inside = True
+        elif inside and _DECLARATIVE_ANCHOR.match(piece):
+            inside = False
+        flags.append(True if inside else (_SOFT if index == len(spans) - 1 else False))
+    out = []                                                    # adjacent pieces with the same flag read as one clause
+    for (a, b), flag in zip(spans, flags):
+        if out and out[-1][2] == flag:
+            out[-1] = (out[-1][0], b, flag)
+        else:
+            out.append((a, b, flag))
+    return [(sentence[a:b].strip(), flag) for a, b, flag in out if sentence[a:b].strip()]
+
+
 def _clauses(text):
-    """[(clause_text, is_question)]. Split on sentence ends and hard breaks; ',' and 'but/and' stay (negation is clause-local to the match)."""
+    """[(clause_text, is_question)]. Split on sentence ends and hard breaks; ',' and 'but/and' stay (negation is clause-local to the match).
+    A question mark scopes to the interrogative clause it ends (`True`, or `'soft'` for a tag / declarative question), not to a
+    declaration before it in the same sentence: see the note above `_pieces`."""
     out = []
-    for part in re.split(r"(?<=[.!?])\s+|\n+", text):
+    # A sentence also ends after a closing quotation that ends in . ! ? ("You said "Ready?" Here is ..."): an attribution or a quote
+    # governs the quoted sentence, not what the writer says next.
+    for part in re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"\u201d])\s+|\n+", text):
         part = part.strip()
-        if part:
-            out.append((part, part.rstrip().endswith('?')))
+        if not part:
+            continue
+        if part.endswith('?'):
+            out.extend(_question_clauses(part))
+        else:
+            out.append((part, False))
     return out
 
 
@@ -295,7 +367,7 @@ def content_quantity_claims(text):
                 continue
             if re.search(r"\b(?:minutes?|mins?|seconds?|secs?|hours?|hrs?|days?|weeks?|months?|years?)\b", match.group(0), re.I):
                 continue   # a duration ("a 10 minute video") is not a count of items
-            if _negated(clause, match.start()):
+            if _negated(clause, match.start()) or _unrelated_activity(clause, match.start()):
                 continue
             yield number, _kind_of(noun)
 
@@ -417,16 +489,59 @@ def _directed(clause, start, end):
 _PREMODIFIER_DURATION = re.compile(r"(?:^|[^\w.])" + _NUM + r"[\s-]*(" + _TIME_UNIT + r")(?:[\s-]*long)?(?:\s+[a-z-]+){0,2}\s*$", re.I)
 
 
+# The writer's own unrelated activity: an explicit non-recipient subject and an everyday past or progressive verb right before the
+# noun phrase ("I watched a movie last night", "my sister took a picture of the sunset", "I am watching a movie"). Such a noun
+# is not a statement about the attached card. It is evidence of UNRELATED conversation, never an allow-list of presentation
+# wording: a presentation verb ("I sent / am sending a video"), a recipient or demonstrative ("for you", "this", "here") anywhere
+# near the noun, or a bare pointer to it in the next clause ("Here it is.", "Enjoy it.") makes it a statement about the card again.
+_NOT_PAST_ED = r"(?:need|feed|speed|seed|bleed|breed|proceed|exceed|succeed|indeed|weed|heed|deed|reed|greed|shred|bed|red|sled|wed|fed|led|hundred|sacred|wicked|naked)"
+_NARRATIVE_VERB = (r"(?!" + _NOT_PAST_ED + r"\b)\w{2,}ed|took|made|saw|shot|got|bought|found|had|wrote|ate|drank|went|came|read|heard|did|ran|met|won|lost|"
+                   r"kept|left|told|thought|knew|felt|sat|stood|swam|drove|rode|began|spent|paid|woke|slept|dreamt|"
+                   r"(?:am|is|are|was|were|'m|'s|'re)\s+\w{2,}ing")
+_PRESENTATION_VERB = re.compile(r"^(?:(?:am|is|are|was|were|'m|'s|'re)\s+)?(?:send\w*|sent|shar\w+|attach\w*|giv\w+|gave|post\w*|upload\w*|drop\w*|deliver\w*|"
+                                r"show\w*|enclos\w*|bring\w*|brought|hand\w*|offer\w*|present\w*|forward\w*|text\w*|dm\w*|messag\w*|email\w*|pack\w*|wrap\w*|prepar\w*)$", re.I)
+_OWN_ACTIVITY = re.compile(r"\b(?:i|we|he|she|they|(?:my|our|his|her|their)\s+[\w-]+)\s+(?:(?:just|also|only|never|already|really|then|even|still|recently)\s+)?"
+                           r"(" + _NARRATIVE_VERB + r")\b((?:\s+[\w'-]+){0,5})\s*$", re.I)
+_OWN_HABIT = re.compile(r"\b(?:i|we|they|(?:my|our|his|her|their)\s+[\w-]+)\s+(?:(?:really|also|just|always|often|never|still)\s+)?"
+                        r"(?:lov\w*|lik\w*|enjoy\w*|hat\w*|prefer\w*|adore\w*|watch\w*|film\w*|mak\w*|tak\w*|shoot\w*|record\w*|edit\w*|stream\w*|binge\w*|collect\w*)\b"
+                        r"((?:\s+[\w'-]+){0,3})\s*$", re.I)
+_POINTS_AT_CARD = re.compile(r"\b(?:you|u|your|yours|here|this|that|these|those|attached|enclosed)\b", re.I)
+_BARE_POINTER = re.compile(r"^\W*(?:(?:and|so)\s+)?(?:here(?:'s|\s+is|\s+are)?\s+(?:it|they|them|that|those|these)\b"
+                           r"|(?:it|they)(?:'s|'re|\s+is|\s+are)\s+(?:right\s+)?(?:here|attached|enclosed|yours|for\s+you)\b"
+                           r"|(?:enjoy|watch|open|view|see|check\s+out|look\s+at)\s+(?:it|them)\b)", re.I)
+
+
+def _unrelated_activity(clause, start):
+    """True when the noun phrase beginning at `start` is the object of the writer's own everyday activity in this clause."""
+    head = re.split(r"[,;:\u2014\u2013]|\b(?:but|and|so)\b", clause[:start])[-1]
+    tail = re.split(r"[,;:\u2014\u2013]|\b(?:but|and|so)\b", clause[start:])[0]
+    if re.search(r"\b(?:you|u|your|yours|here)\b", tail, re.I):
+        return False
+    found = _OWN_ACTIVITY.search(head)
+    if found and not _PRESENTATION_VERB.match(found.group(1).strip()) and not _POINTS_AT_CARD.search(found.group(2)):
+        return True
+    # Habits and tastes ("I love watching movies", "we film videos every week"): a generic noun, never "the video" or "it".
+    habit = _OWN_HABIT.search(head)
+    return bool(habit and not _POINTS_AT_CARD.search(habit.group(1)) and not re.search(r"\b(?:the|it|them|him|her|his|their|our|my)\b", habit.group(1), re.I))
+
+
 def _product_mentions(text, bound):
     """(kind, seconds | None) for every asserted mention of a product media noun that describes the item in question.
     `seconds` is a duration stated in the same noun phrase ("a ten-minute video")."""
-    for clause, question in _clauses(text.replace('\u2019', "'")):
+    clauses = _clauses(text.replace('\u2019', "'"))
+    for index, (clause, question) in enumerate(clauses):
         for match in _MEDIA_NOUN.finditer(clause):
+            directed = _directed(clause, match.start(), match.end())
+            # A tag / declarative question ('soft') excuses a noun only when it is not visibly about the attached item.
+            interrogative = question is True or (bool(question) and not directed)
             # On a card every mention is about the card, so a demonstrative re-anchors a negated phrase; in a plain reply a
             # demonstrative is usually the fan's own reference ("I cannot discuss that video"), so ordinary negation applies.
-            if _NON_PRODUCT_COMPOUND.match(clause[match.end():]) or not _asserted(clause, question, match.start(), anchored=bound):
+            if _NON_PRODUCT_COMPOUND.match(clause[match.end():]) or not _asserted(clause, interrogative, match.start(), anchored=bound):
                 continue
-            if not bound and not _directed(clause, match.start(), match.end()):
+            if not bound and not directed:
+                continue
+            if bound and not directed and _unrelated_activity(clause, match.start()) \
+                    and not (index + 1 < len(clauses) and _BARE_POINTER.match(clauses[index + 1][0])):
                 continue
             premodifier = _PREMODIFIER_DURATION.search(clause[:match.start()])
             yield _kind_of(match.group(1)), (_seconds(premodifier) if premodifier else None)

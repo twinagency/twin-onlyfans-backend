@@ -64,7 +64,8 @@ TRUTHFUL_OR_GENUINE_QUESTION = [
 UNRELATED_CONVERSATION_STAYS_LEGITIMATE = [
     (PHOTOS, 'I watched a movie last night. Enjoy these photos.'), (PHOTOS, 'I watched a movie last night, enjoy these photos.'),
     (PHOTOS, 'We saw a great film at the cinema. Enjoy these photos.'), (PHOTOS, 'My neighbour filmed a video of the sunset. Enjoy these photos.'),
-    (PHOTOS, 'I am watching a movie right now. Enjoy these photos.'), (PHOTOS, 'I watched a ten minute movie last night. Enjoy these photos.'),
+    (PHOTOS, 'I am watching a movie right now. Enjoy these photos.'), (PHOTOS, 'I love watching movies. Enjoy these photos.'),
+    (PHOTOS, 'We shoot videos every week. Enjoy these photos.'), (CLIP, 'I took five photos of my coffee. Enjoy this video.'), (PHOTOS, 'I watched a ten minute movie last night. Enjoy these photos.'),
     (PHOTOS, 'I watched two movies last night. Here are three photos for you.'),
     (PHOTOS, 'I watched a movie last night. Here are three photos for you.'), (PHOTOS, 'I made a video last night. Enjoy these photos.'),
     (CLIP, 'I took a photo of my coffee this morning. Enjoy this video.'), (CLIP, 'I snapped a few pictures at the gym. Enjoy this video.'),
@@ -81,6 +82,7 @@ STILL_A_CLAIM_ABOUT_THE_CARD = [
     (PHOTOS, 'I just sent you a video.'), (PHOTOS, 'I made you a video last night.'),
     (PHOTOS, 'I watched a movie last night. Enjoy this movie.'), (PHOTOS, 'I watched a movie last night and here is your video.'),
     (PHOTOS, 'I filmed a video last night. Enjoy it.'), (PHOTOS, 'I am sending a video.'),
+    (PHOTOS, 'I love the video.'), (PHOTOS, 'I love this video.'), (PHOTOS, 'I love watching movies. Enjoy this movie.'),
     (CLIP, 'Here is the photo I took this morning.'), (CLIP, 'I took a photo this morning. Here it is.'),
     (CLIP, 'I took a photo of my coffee this morning. Enjoy it.'),
     # the false kind / count / duration / price controls still apply next to unrelated conversation

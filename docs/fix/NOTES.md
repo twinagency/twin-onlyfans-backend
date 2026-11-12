@@ -94,3 +94,8 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - rwl 3 rounds (Opus+Flash). Orchestrator-measured: harness 35 passed; `check.sh fast` GREEN wall 39 s (premerge + promoted + live smoke). CI billing-locked (annotation checked) → merged on local proof. Team head was 96609e23 (no rebase). Local target ff 96609e23..91e32acc; no wt on target.
 - Merge gate from now: `scripts/check.sh fast` GREEN (env: CHECK_ENV_FILE, CHECK_DB_URL stack PG :55432 read-only, ONLYFANS_TEST_PG_URL throwaway PG). Merges: 6 (F1 F2 F3 F2b OWN-b F0).
 - F5 r2 Flash MERGE / Opus FIX-THEN-MERGE (F5-21 ordering test, F5-22 comment) → worker.
+
+## Owner 23:4xZ THROUGHPUT + 00:0xZ TRIAGE ON FLASH
+- F0c (#90): 3 env-gated release-rehearsal tests → premerge-known-red (still run by full; run-service-tests.py never reads the list, grep). premerge OK 0 skipped 3 known-red (measured). Unblocks the check.sh fast gate for F5/F4. Flash solo review re-run (1st interrupted).
+- Re-sort: started on Opus, stopped per 00:0xZ; handed to Flash (delegate, worktree, read-only; PG :55650 /tmp/pg-triage). Opus leftovers: PG stopped+removed; /tmp/fix-dedupe detached worktree kept (4 untracked scratch test copies, not backed up → rule: keep).
+- Target check: only our 6 merges since a253c84c; claude/commercial-final-20261113 + commercial-integration-4 do NOT contain target (mb e8e90954) → target unchanged.

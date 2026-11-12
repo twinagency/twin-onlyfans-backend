@@ -64,7 +64,7 @@ suite_files() {
     completion)   echo "tests/test_commercial_qualification_gate.py tests/test_commercial_completion_pg.py tests/test_commercial_stopped_activation_pg.py tests/conversation_engine/test_claims_semantics.py tests/test_openrouter_decoding.py tests/test_plan_c_unknown_send_evidence_pg.py" ;;
     preparation)  echo "tests/test_commercial_preparation_pg.py tests/test_preparation_retry_state_pg.py tests/test_commercial_classification_refresh_pg.py tests/test_history_import_pg.py" ;;
     normal)       echo "tests/test_commercial_normal_control_journey_pg.py tests/test_commercial_terms_http_pg.py tests/test_commercial_shared_provider_pg.py tests/test_commercial_parallel_workers_pg.py tests/test_plan_c_inflight_readiness.py tests/test_commercial_readiness_budget_pg.py" ;;
-    legacy)       echo "tests/test_commercial_progress.py tests/test_commercial_full_path.py tests/test_history_capacity_turns.py" ;;
+    legacy)       echo "tests/test_commercial_progress.py tests/test_commercial_full_path.py tests/test_history_capacity_turns.py tests/test_r2_complete_answers.py tests/test_plan_c_sim_pg.py" ;;
     recovery)     echo "tests/test_commercial_ops_recovery_pg.py tests/test_onlyfans_release_package_pg.py tests/test_onlyfans_recovery_pg.py" ;;
     delivery)     echo "tests/test_onlyfans_text_delivery_pg.py tests/test_concurrent_delivery_pg.py tests/test_plan_c_compressed_retry_pg.py tests/test_plan_c_auth_recovery_pg.py tests/test_plan_c_conflicting_webhook_pg.py" ;;
     ops)          echo "OPS" ;;       # handled specially: pytest in /app/ops/plan-c-supervision

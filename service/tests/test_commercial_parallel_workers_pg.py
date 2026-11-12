@@ -8,6 +8,7 @@ from commercial_worker_fixture import build_world,FAN_A,OPERATOR
 from conversation_engine.writer_context import set_active_profiles
 from db.onlyfans_delivery_models import OfDeliveryPolicy,OfTextIntent
 from onlyfans_runtime.text_delivery import TextAuthority
+from onlyfans_runtime.store import Refused
 from test_onlyfans_foundation_pg import database
 from test_commercial_preparation_pg import TENANT
 
@@ -32,10 +33,16 @@ def test_ten_concurrent_workers_keep_stalled_and_exhausted_accounts_local(databa
   with Session(database[1]) as s:revision=s.get(OfDeliveryPolicy,spent.account).revision
   TextAuthority(spent.store).configure(TENANT,spent.account,expected_revision=revision,enabled=True,media_enabled=True,
       limit_units=1,daily_limit_units=1,throttle_seconds=1,transport_kind="fansapi",actor=OPERATOR,reason="One-unit reviewed fixture budget")
-  spent.converse("hello",FAN_A)
+  spent.say("hello",FAN_A);spent.pilot.tick()
   assert len(spent.fans_mock.posts)==1
+  def ask(w):
+   try:
+    w.say("show me the beach photo",FAN_A)
+    return w.pilot.tick()
+   except Refused as exc:
+    return {"refused":str(exc)}
   with ThreadPoolExecutor(max_workers=10) as pool:
-   jobs=[pool.submit(w.converse,"show me the beach photo",FAN_A) for w in fleet]
+   jobs=[pool.submit(ask,w) for w in fleet]
    try:
     assert entered.wait(90),"stalled account never reached its model"
     for job in jobs[:9]:job.result(timeout=120)

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from commercial_terms_fixture import ACTOR as AGENCY_ACTOR, add_item, add_vault, approve
@@ -157,7 +157,7 @@ class World:
 
     def unthrottle(self):
         with self.database[1].begin() as c:
-            c.exec_driver_sql("UPDATE of_delivery_policy SET next_dispatch_at=CURRENT_TIMESTAMP-INTERVAL '1 second'")
+            c.execute(text("UPDATE of_delivery_policy SET next_dispatch_at=CURRENT_TIMESTAMP-INTERVAL '1 second' WHERE account_id=:a"), {"a":self.account})
 
     # ---------------------------------------------------------------- reads
     def cards(self):

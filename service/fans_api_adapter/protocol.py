@@ -305,7 +305,12 @@ class FansApiClient:
                           evidence=self._send_evidence('rejected', status, body, trace, original_trace, text))
         state = ('not_sent' if outcome is Outcome.NOT_SENT else 'key_mismatch' if outcome is Outcome.KEY_MISMATCH
                  else 'conflict' if outcome is Outcome.CONFLICT else 'unknown')
+        # Pacing and delivery certainty are independent: a 429 asks for a cooldown (cause + Retry-After) while the
+        # send itself stays whatever it was above (unknown). Retry-After never authorizes a resend.
+        throttled = status == 429
         return Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace,
+                      cause='provider_rate_limited' if throttled else None,
+                      retry_after=self.last_retry_after if throttled else None,
                       evidence=self._send_evidence(state, status, body, trace, original_trace, text))
 
     def _send_evidence(self, state, status, body, trace, original_trace, text):

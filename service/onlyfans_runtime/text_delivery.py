@@ -1628,6 +1628,14 @@ class TextAuthority:
             self.materialize(tenant_id, account_id, intent_id)
         return result
 
+    def apply_provider_pacing(self, tenant_id, account_id, *, retry_after=None):
+        """Back this account off after an HTTP 429 whose send outcome stays UNKNOWN.
+
+        Pacing only: it never settles, cancels or releases the attempt, and never permits a replay. The provider's
+        Retry-After is used when present, else the same 10 s default as the legacy raised-throttle path.
+        """
+        self._account_cooldown(tenant_id, account_id, seconds=retry_after if retry_after is not None else 10)
+
     def _account_cooldown(self, tenant_id, account_id, *, seconds):
         """Stop this account's other text sends after a provider-wide refusal."""
         with Session(self.engine) as s, s.begin():

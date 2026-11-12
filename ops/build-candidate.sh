@@ -320,9 +320,9 @@ if [ -z "${DASHBOARD_IMAGE:-}" ] || [ -z "${DASHBOARD_COMMIT:-}" ]; then
   browser_problem="Q14 expected dashboard image/commit not supplied"
 elif ! [[ "$DASHBOARD_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$DASHBOARD_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   browser_problem="Q14 expected dashboard image/commit must be an immutable digest and a full commit"
-elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format {{.Id}} 2>/dev/null || true)" != "$DASHBOARD_IMAGE" ]; then
+elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{.Id}}' 2>/dev/null || true)" != "$DASHBOARD_IMAGE" ]; then
   browser_problem="Q14 expected dashboard image is not in the local image store"
-elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format {{index .Config.Labels org.opencontainers.image.revision}})" != "$DASHBOARD_COMMIT" ]; then
+elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" != "$DASHBOARD_COMMIT" ]; then
   browser_problem="Q14 dashboard image revision label differs from DASHBOARD_COMMIT"
 elif [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
   browser_problem="Q14 exact-artifact browser receipt missing"

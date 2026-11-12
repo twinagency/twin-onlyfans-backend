@@ -197,3 +197,15 @@ def test_every_results_row_is_a_tab_separated_record():
     rows = re.findall(r"^\s*(?:\S.*)?printf (\S.*?) (?:browser|\"\$required\"|\"\$s\"|\"\$name\")", SOURCE, re.M)
     assert rows, "no results-row printf found"
     assert all(r == "'%s\\t%s\\t%s\\t%s\\n'" for r in rows), rows
+
+
+def test_every_docker_format_template_is_quoted_and_labels_are_quoted_keys():
+    """An unquoted {{index .Config.Labels org.x}} makes the shell/Go template evaluate a variable, not the label."""
+    for line in SOURCE.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        for match in re.finditer(r"--format (\S.*?)(?: 2>|\)| >|;|$)", line):
+            template = match.group(1)
+            assert template[0] in "'\"", line
+            if "Labels" in template:
+                assert re.search(r'Labels \\?"[\w.]+\\?"', template), line

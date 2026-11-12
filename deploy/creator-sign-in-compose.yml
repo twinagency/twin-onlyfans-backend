@@ -23,6 +23,7 @@ services:
       ONLYFANS_MANAGED_PROXY_BASE_URL: http://managed-proxy:8791
       ONLYFANS_MANAGED_PROXY_TOKEN: ${ONLYFANS_MANAGED_PROXY_TOKEN:?Set the existing private broker token}
       PORT: 8479
+      HOST: 0.0.0.0   # private compose network only (expose, no ports); server defaults to loopback
     expose: ['8479']
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8479/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

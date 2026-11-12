@@ -42,7 +42,11 @@ async def exercise(path):
 
     metadata = _metadata()
     async with engine.begin() as c:
-        await c.run_sync(metadata.create_all)
+        # This is the retained SQLite NativeEngine integration, not the
+        # PostgreSQL conversation engine. Its unused of_engine_* tables carry
+        # PostgreSQL-only constraints and must not be constructed in SQLite.
+        await c.run_sync(lambda connection: metadata.create_all(connection,
+            tables=[table for table in metadata.sorted_tables if not table.name.startswith('of_engine_')]))
     with sqlite3.connect(path) as c:
         # The real legacy bridge tables are independent of the ORM foundation.
         for statement in fixture.SCHEMA.split(";"):
@@ -490,6 +494,8 @@ def main():
         path = Path(tmp)/"test.db"
         os.environ["TWIN_FASTT_CONFIG_ISOLATED"] = "1"
         os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///"+str(path)
+        os.environ["VAULT_SPOOL_DIR"] = str(Path(tmp)/"spool")
+        os.environ["VAULT_IMAGE_DIR"] = str(Path(tmp)/"images")
         os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
         def deny(*a, **kw): raise AssertionError("network forbidden in isolated fixture")
         with asyncio.Runner() as runner:

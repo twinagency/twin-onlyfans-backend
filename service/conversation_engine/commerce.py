@@ -437,8 +437,9 @@ def prepare_commercial_offer(store, tenant, account, fan_id, message_id, *, cove
         if view['state'] != 'matches' or item_id is None:
             return {'state': 'none', 'reason': view['state']}
         from .catalogue_select import names_a_product
-        if len(permitted) > 1 and names_a_product(view, message.body):
-            # He named something that fits several approved products equally: no card is charged on a guess.
+        if view.get('selectionRequired') or len(permitted) > 1:
+            # The owner requires a particular product selection, including generic requests.
+            # Never let model choice or item ordering choose what card this fan receives.
             return {'state': 'ambiguous', 'itemIds': [str(i) for i in permitted]}
         live_offer = active_engine_offer(s, runtime, owner, fan_id)
         if live_offer is not None and live_offer['itemId'] != item_id:

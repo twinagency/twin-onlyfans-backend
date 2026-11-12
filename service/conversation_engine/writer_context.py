@@ -536,7 +536,10 @@ def request_context_from(snapshot, budget):
               ('CARD', cards, budget.request_chars // 3),
               ('REQUEST', [r for r in requests if r not in active], budget.request_chars),
               ('ACTION', [r for r in actions if r not in unknown], budget.request_chars)]
-    lines, size, omitted, shown_sources = [], 0, False, set()
+    selection = (snapshot.get('catalogue_search') or {}).get('selectionRequired') is True
+    lines = (['PRODUCT SELECTION REQUIRED: Ask which particular photo or video the fan wants to see. '
+              'Do not select or promise a product on their behalf.'] if selection else [])
+    size, omitted, shown_sources = sum(map(len, lines)), False, set()
     total = max(0, budget.request_chars - (150 if cards or references.get('cardsCoverage') == 'incomplete' else 90))
     for kind, records, quota in groups:
         used = 0

@@ -87,8 +87,10 @@ def derive(s, account, fan_id, media_ids):
         OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == "unlock", OfFansEvidence.status != "dismissed",
         OfFansEvidence.message_id.is_not(None))))
     facts = {f.message_id: f for f in s.scalars(select(OfFansMessageFact).where(OfFansMessageFact.account_id == account,
-        OfFansMessageFact.fan_id == fan_id, or_(OfFansMessageFact.is_opened.is_(True), OfFansMessageFact.message_id.in_(unlocks))))}
-    opened = unlocks | {mid for mid, f in facts.items() if f.is_opened is True}
+        OfFansMessageFact.fan_id == fan_id, or_(OfFansMessageFact.is_opened.is_(True), OfFansMessageFact.message_id.in_(unlocks),
+            OfFansMessageFact.preview_ids_json.is_(None), OfFansMessageFact.conflicted.is_(True))))}
+    opened = unlocks | {mid for mid, f in facts.items()
+                        if f.is_opened is True or f.preview_ids_json is None or f.conflicted}
     ours = set(s.scalars(select(OfTextIntent.provider_message_id).where(OfTextIntent.account_id == account,
         OfTextIntent.provider_message_id.in_(opened)))) if opened else set()
     explained = set()

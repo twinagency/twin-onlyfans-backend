@@ -140,6 +140,16 @@ def shortlist(s, runtime, fan_id, tokens, coverage_state):
         state = 'unavailable' if blocked else ('confirmed_none' if coverage_state == 'complete' and exhausted else 'incomplete')
         return {'state': state, 'items': [], 'coverage': coverage_state, 'productCount': 0, 'mediaCount': 0,
                 'truncated': truncated}
+    # A full multiword product label is a particular selection even when
+    # its words also occur in the kind vocabulary (for example "Combo bundle").
+    # A bare "photo"/"video" remains generic, even if just one item is eligible.
+    explicit = []
+    for candidate in verified:
+        label = _words(candidate[1]['item'].get('label'))
+        if len(label) >= 2 and any(tokens[n:n+len(label)] == label for n in range(len(tokens)-len(label)+1)):
+            explicit.append(candidate)
+    if explicit:
+        verified = explicit
     scored = []
     for item_id, terms, facts in verified:
         words = set(_words(terms['item'].get('label'), terms['item'].get('description_for_ai'), terms['item'].get('kind')))
@@ -154,6 +164,7 @@ def shortlist(s, runtime, fan_id, tokens, coverage_state):
               'productCount': 1} for _, item_id, terms, facts in chosen]
     return {'state': 'matches', 'items': items, 'coverage': coverage_state,
             'matchQuality': 'all_terms' if best == len(search_tokens) else 'broadened', 'truncated': truncated,
+            'selectionRequired': (not bool(search_tokens) and not explicit) or len(items) > 1,
             'productCount': len(items), 'mediaCount': sum(i['counts']['media'] for i in items)}
 
 

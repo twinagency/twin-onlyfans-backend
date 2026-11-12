@@ -108,7 +108,7 @@ class World:
             policy = s.get(OfDeliveryPolicy, self.account)
             policy.daily_limit_units = 100
             policy_revision, throttle = policy.revision, policy.throttle_seconds
-        TextAuthority(self.store).configure(TENANT, self.account, expected_revision=policy_revision, enabled=True, limit_units=200,
+        TextAuthority(self.store).configure(TENANT, self.account, expected_revision=policy_revision, enabled=True, limit_units=body['limits']['send_units'],
             throttle_seconds=throttle, media_enabled=True, actor=OPERATOR, reason='Operator opens the delivery policy')
         launched = pilot_scope.set_status(self.store, TENANT, self.account, 'active', expected_revision=revision,
                                           command_key=key(0x7003), actor=OPERATOR, reason='Operator launch decision')
@@ -185,7 +185,13 @@ def writer(world, *, choose=None):
         approved = re.search(r'APPROVED OFFER: id ([0-9a-f-]{36}),', prompt)
         latest = prompt.split('LATEST:\nFAN: ', 1)[1].split('\n\nTHIS TURN:', 1)[0] if 'LATEST:\nFAN: ' in prompt else ''
         asks = re.search(r'\b(show|send|want|buy|unlock|see)\b', latest.lower()) is not None
-        if approved and asks:
+        # A particular selection answering the preceding product clarification
+        # follows the application's already-authorized offer grant.
+        asks = asks or bool(approved and re.search(r'\b(photo|video|bundle|set)\b', latest.lower())
+                            and not latest.rstrip().endswith('?'))
+        if 'PRODUCT SELECTION REQUIRED:' in prompt:
+            proposal = {'body': 'Which particular photo or video would you like to see?'}
+        elif approved and asks:
             proposal = {'body': 'Here you go.', 'action': 'offer', 'offer_grant_id': approved[1], 'pitch': True}
         elif 'where are you from' in latest.lower() and 'Brisbane' in ' '.join(m['content'] for m in data['messages']):
             proposal = {'body': 'I am from Brisbane.'}

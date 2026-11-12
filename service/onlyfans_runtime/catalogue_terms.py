@@ -207,14 +207,17 @@ def _category_audit(s, account, item_id):
     return saved
 
 
-def approve_terms(store, tenant, account, item_id, *, standard_cents, discount_cents=None, command_key, actor):
+def approve_terms(store, tenant, account, item_id, *, standard_cents, discount_cents=None, command_key, actor, expected_revision=None, expected_fingerprint=None):
     """Agency approval of an existing category-created item at its manual price. Approval is not enabling."""
     _id(item_id)
     _identity(command_key, actor)
     _cents(standard_cents)
     if discount_cents is not None:
         _cents(discount_cents, high=standard_cents - 1)
-    request_hash = _digest(['approve_terms', item_id, standard_cents, discount_cents])
+    if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 0):
+        raise Refused('invalid terms revision')
+    request_hash = _digest(['approve_terms', item_id, standard_cents, discount_cents] +
+                           ([] if expected_revision is None else [expected_revision,expected_fingerprint]))
     from sqlalchemy.orm import Session
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
@@ -224,6 +227,12 @@ def approve_terms(store, tenant, account, item_id, *, standard_cents, discount_c
         item = s.scalar(select(CatalogItem).where(CatalogItem.id == item_id, CatalogItem.account_id == account).with_for_update())
         if item is None:
             raise Refused('catalogue item unavailable')
+        from .content_management import fingerprint
+        if expected_fingerprint is not None and fingerprint(item) != expected_fingerprint:
+            raise Refused('product changed since review')
+        latest = latest_terms(s, account, item_id, lock=True)
+        if expected_revision is not None and expected_revision != (latest.revision if latest else 0):
+            raise Refused('terms revision conflict')
         saved = _category_audit(s, account, item_id)
         from .offer_import import provenance
         if provenance(s, account, item_id) is not None:
@@ -281,13 +290,24 @@ def set_discount(store, tenant, account, item_id, *, discount_cents, command_key
         return _ack(row)
 
 
-def withdraw_terms(store, tenant, account, item_id, *, command_key, actor):
+def withdraw_terms(store, tenant, account, item_id, *, command_key, actor, expected_revision=None):
     """Close the live revision (the only other legal change). Idempotent by state: nothing live is already withdrawn."""
     _id(item_id)
     _identity(command_key, actor)
     from sqlalchemy.orm import Session
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant, account)
+        runtime = store._runtime(s, tenant, account)
+        from .launch_operations_models import OfLaunchCommand
+        request_hash = _digest(['withdraw_terms', item_id, expected_revision])
+        prior = s.get(OfLaunchCommand, (account, command_key))
+        if prior is not None:
+            if prior.kind != 'commercial_terms_withdraw' or prior.request_hash != request_hash or prior.actor != actor:
+                raise Refused('terms idempotency conflict')
+            return json.loads(prior.result_json)
+        latest = latest_terms(s, account, item_id, lock=True)
+        if expected_revision is not None and (type(expected_revision) is not int or
+                expected_revision != (latest.revision if latest else 0)):
+            raise Refused('terms revision conflict')
         live = live_terms(s, account, item_id, lock=True)
         if live is None:
             last = s.scalar(select(OfCatalogueTerms).where(OfCatalogueTerms.account_id == account,
@@ -297,7 +317,13 @@ def withdraw_terms(store, tenant, account, item_id, *, command_key, actor):
             return _ack(last)
         live.status = 'withdrawn'
         s.flush()
-        return _ack(live)
+        result = _ack(live)
+        s.add(OfLaunchCommand(account_id=account, command_key=command_key, binding_id=runtime.binding_id,
+            kind='commercial_terms_withdraw', request_hash=request_hash, actor=actor,
+            reason='Agency withdrew approved commercial terms',
+            before_json=json.dumps({'revision':live.revision,'status':'approved'}),
+            result_json=json.dumps(result), created_at=utcnow()))
+        return result
 
 
 def bundle_below_singles(s, account, item_id):

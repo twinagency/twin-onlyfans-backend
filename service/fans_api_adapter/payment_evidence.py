@@ -116,12 +116,65 @@ def _hold(s, row, reason, now):
     attention(s, row.account_id, row.fan_id)
 
 
+def _external_access_proven(s, row):
+    """Recognize retained outside-card access, without an engine grant or money record.
+
+    History facts are trusted only through their immutable current-binding ingress.
+    Live unlocks additionally need their authenticated webhook binding. A missing,
+    conflicting or uncertain engine send is not evidence of an outside purchase.
+    """
+    from db.models import Message
+    from db.onlyfans_models import OfRuntime, OfIngress
+    from db.onlyfans_history_models import OfFansMessageFact
+    from .evidence_scope import webhook_binding
+    runtime = s.get(OfRuntime, row.account_id)
+    fact = s.get(OfFansMessageFact, (row.account_id, row.fan_id, row.message_id))
+    message = s.get(Message, (row.account_id, row.fan_id, row.message_id))
+    if (runtime is None or fact is None or message is None or fact.conflicted
+            or fact.is_opened is not True or fact.is_tip is True or fact.preview_ids_json is None
+            or message.direction != 'out' or message.is_unsent
+            or message.price_cents != fact.price_cents
+            or row.amount_cents is not None and row.amount_cents != fact.price_cents):
+        return False
+    try:
+        media, previews = json.loads(fact.media_ids_json), json.loads(fact.preview_ids_json)
+        if (not media or any(type(m) is not int or m <= 0 for m in media)
+                or type(previews) is not list or any(type(m) is not int for m in previews)
+                or not set(previews) <= set(media) or not set(media) - set(previews)
+                or json.loads(message.media_ids) != media):
+            return False
+    except (TypeError, ValueError):
+        return False
+    ingress = s.scalar(select(OfIngress.event_key).where(
+        OfIngress.account_id == row.account_id, OfIngress.fan_id == row.fan_id,
+        OfIngress.message_id == row.message_id, OfIngress.binding_id == runtime.binding_id,
+        OfIngress.status == 'applied').limit(1))
+    if ingress is None:
+        return False
+    if row.source == 'history':
+        if fact.via != 'history' or row.raw_sha256 != fact.raw_sha256:
+            return False
+    elif row.source != 'webhook' or webhook_binding(s, row) != runtime.binding_id:
+        return False
+    if s.scalar(select(OfTextIntent.intent_id).where(
+            OfTextIntent.account_id == row.account_id,
+            OfTextIntent.binding_id == runtime.binding_id, OfTextIntent.fan_id == row.fan_id,
+            OfTextIntent.status.in_(('dispatching', 'unknown'))).limit(1)) is not None:
+        return False
+    return True
+
+
 def _link_unlock(s, row, now):
     """Bind an unlock to the accepted intent (and frozen grant) that sent its message."""
     intent = s.scalar(select(OfTextIntent).where(OfTextIntent.account_id == row.account_id,
                                                  OfTextIntent.provider_message_id == row.message_id))
     if intent is None:
-        row.reason = 'no_matching_send'
+        if _external_access_proven(s, row):
+            # 'paired' means the observation is explained by the retained card.
+            # It is not an engine grant, settlement, or financial transaction.
+            row.status, row.reason, row.updated_at = 'paired', 'external_access_proven', now
+        else:
+            row.status, row.reason, row.updated_at = 'pending', 'no_matching_send', now
         return None
     policy = s.get(OfDeliveryPolicy, row.account_id)
     if policy is not None and policy.transport_kind == 'fansapi':
@@ -161,7 +214,9 @@ def match(s, account, fan_id, now, *, window=None, mismatch_settle=None):
     Idempotent and order independent. Returns True when an unlock became linked (ready for commerce).
     """
     rows = s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
-        OfFansEvidence.fan_id == fan_id, OfFansEvidence.status == 'pending',
+        OfFansEvidence.fan_id == fan_id,
+        ((OfFansEvidence.status == 'pending') | ((OfFansEvidence.status == 'paired') &
+          (OfFansEvidence.reason == 'external_access_proven'))),
         OfFansEvidence.kind.in_(('unlock', 'transaction'))).order_by(OfFansEvidence.occurred_at,
         OfFansEvidence.evidence_id).with_for_update()).all()
     changed = False

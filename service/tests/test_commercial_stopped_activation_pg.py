@@ -10,6 +10,40 @@ from test_commercial_scope_lifecycle_pg import recover
 import pytest
 from onlyfans_runtime.store import Refused
 
+@pytest.mark.parametrize('block', [None, 'authentication', 'no_contact'])
+def test_preparation_hold_requires_verified_proof_and_atomic_operator_activation(world, block):
+    from db.onlyfans_fans_intake_models import OfFansLink
+    from db.onlyfans_engine_models import OfFansConnection
+    from sqlalchemy import select
+    world.product('Pilot photo', [31], standard=300, description='One photo.')
+    world.launch(authorization_mode='autonomous')
+    recover(world.store, world.account, world.fans)
+    scope = pilot_scope.describe(world.store,TENANT,world.account)
+    stopped = pilot_scope.set_status(world.store,TENANT,world.account,'stopped',
+        expected_revision=scope['revision'],command_key=key(0x99301),actor=OPERATOR,reason='Test preparation release')
+    with Session(world.database[1]) as s,s.begin():
+        conn=s.scalar(select(OfFansConnection).where(OfFansConnection.account_id==world.account,OfFansConnection.status=='active'))
+        creator=conn.provider_creator_id
+        link=s.get(OfFansLink,(world.account,creator))
+        link.send_blocked=True
+        link.block_reason='provider_auth_failed' if block=='authentication' else 'preparation_only'
+    if block=='no_contact':
+        from db.models import OfConversationState
+        with Session(world.database[1]) as s:revision=s.get(OfConversationState,(world.account,min(world.fans))).revision
+        world.store.control(TENANT,world.account,min(world.fans),mode='no_contact',expected_revision=revision,
+            command_key=key(0x99302),actor=OPERATOR,reason='Fan stop',action='mark_no_contact')
+    def activate():
+        return pilot_scope.set_status(world.store,TENANT,world.account,'active',expected_revision=stopped['revision'],
+            command_key=key(0x99303),actor=OPERATOR,reason='Named operator ends verified preparation')
+    if block:
+        with pytest.raises(Refused):activate()
+    else:
+        assert activate()['status']=='active'
+    with Session(world.database[1]) as s:
+        link=s.get(OfFansLink,(world.account,creator))
+        assert link.send_blocked is bool(block)
+        assert s.get(OfRuntime,world.account).enabled is (block is None)
+
 def test_full_commercial_scope_restarts_through_normal_audited_status_command(world):
     world.product('Pilot photo', [31], standard=300, description='One photo.')
     world.launch(authorization_mode='autonomous')

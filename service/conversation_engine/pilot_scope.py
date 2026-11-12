@@ -328,6 +328,79 @@ def digest_resolution_key(binding, epoch, event_key, payload_sha256):
     return sha256(f'plan-c-digest-resolve:{binding}:{epoch}:{event_hash}:{payload_sha256}'.encode()).hexdigest()
 
 
+def queue_observation_key(binding, epoch, event_key, digest):
+    return sha256(f'coexist-queue:{binding}:{epoch}:{event_key}:{digest}'.encode()).hexdigest()
+
+
+def classify_queue_observation(s, runtime, row):
+    """Audit an exact, non-conflicting queue notification under coexistence.
+
+    The bytes and original hold stay immutable. A later variant makes every
+    observation of that event unresolved again through the shared query.
+    """
+    from db.onlyfans_engine_models import OfEnginePilotReconnectReceipt as Receipt, OfEnginePilotWebhookDigest as Row, OfFansWebhookConflict
+    from .coexistence import enabled
+    from fans_api_adapter.queue_review import queue_envelope
+    if not enabled(s, runtime):
+        return False
+    conn = s.get(OfFansConnection, (runtime.account_id, row.epoch))
+    receipt = s.get(Receipt, (runtime.account_id, row.epoch, row.event_key, row.payload_sha256))
+    if conn is None or conn.binding_id != runtime.binding_id or receipt is None:
+        return False
+    raw = bytes(receipt.raw_body)
+    if sha256(raw).hexdigest() != row.payload_sha256:
+        return False
+    try:
+        body, _ = queue_envelope(raw)
+    except (Refused, ValueError, TypeError, KeyError):
+        return False
+    if body['account_id'] != conn.provider_account_id:
+        return False
+    if s.scalar(select(Row.payload_sha256).where(Row.account_id == runtime.account_id,
+            Row.epoch == row.epoch, Row.event_key == row.event_key,
+            Row.payload_sha256 != row.payload_sha256).limit(1)) is not None:
+        return False
+    if s.scalar(select(OfFansWebhookConflict.payload_sha256).where(
+            OfFansWebhookConflict.account_id == runtime.account_id, OfFansWebhookConflict.epoch == row.epoch,
+            OfFansWebhookConflict.event_key == row.event_key).limit(1)) is not None:
+        return False
+    original = s.get(OfFansWebhook, (runtime.account_id, row.epoch, row.event_key))
+    if original is not None and original.payload_sha256 != row.payload_sha256:
+        return False
+    key = queue_observation_key(runtime.binding_id, row.epoch, row.event_key, row.payload_sha256)
+    if s.get(OfLaunchCommand, (runtime.account_id, key)) is None:
+        before = {'epoch':row.epoch, 'eventKey':row.event_key, 'payloadSha256':row.payload_sha256}
+        result = {'classification':'coexistence_queue_notification', 'sendAuthorized':False}
+        s.add(OfLaunchCommand(account_id=runtime.account_id, command_key=key, binding_id=runtime.binding_id,
+            kind='plan_c_queue_observation', request_hash=sha256(raw).hexdigest(),
+            actor='fans-webhook', reason='Exact retained queue notification under staff coexistence',
+            before_json=json.dumps(before,sort_keys=True), result_json=json.dumps(result,sort_keys=True),
+            created_at=utcnow()))
+    return True
+
+
+def classify_retained_queue_observations(s, runtime):
+    """One-time paginated classification of pre-upgrade retained evidence."""
+    from sqlalchemy import tuple_
+    from db.onlyfans_engine_models import OfEnginePilotWebhookDigest as Row
+    from .coexistence import enabled
+    if not enabled(s, runtime):
+        return
+    after = None
+    while True:
+        query = unresolved_webhook_digests(runtime).order_by(Row.received_at, Row.epoch, Row.event_key, Row.payload_sha256)
+        if after is not None:
+            query = query.where(tuple_(Row.received_at, Row.epoch, Row.event_key, Row.payload_sha256) > after)
+        rows = list(s.scalars(query.limit(_DIGEST_SCAN)))
+        if not rows:
+            break
+        for row in rows:
+            classify_queue_observation(s, runtime, row)
+        s.flush()
+        last = rows[-1]
+        after = (last.received_at, last.epoch, last.event_key, last.payload_sha256)
+
+
 def unresolved_webhook_digests(runtime):
     """One shared view for barriers, queue and readiness; original evidence never changes.
 
@@ -361,10 +434,27 @@ def unresolved_webhook_digests(runtime):
         OfLaunchCommand.kind == 'plan_c_queue_digest_resolution').correlate(other).exists()
     unreviewed_variant = select(other.payload_sha256).where(other.account_id == row.account_id,
         other.epoch == row.epoch, other.event_key == row.event_key, ~other_reviewed).correlate(row).exists()
+    from sqlalchemy.dialects.postgresql import JSONB
+    # Automatic classification is separate from a human review and valid only
+    # while this exact scope still permits coexistence. Conflicts always re-hold.
+    auto_text = (literal('coexist-queue:' + runtime.binding_id + ':') + cast(row.epoch, String) + ':'
+        + row.event_key + ':' + row.payload_sha256)
+    auto_key = func.encode(func.sha256(func.convert_to(auto_text, 'UTF8')), 'hex')
+    observed = select(OfLaunchCommand.command_key).where(OfLaunchCommand.account_id == row.account_id,
+        OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.command_key == auto_key,
+        OfLaunchCommand.kind == 'plan_c_queue_observation').correlate(row).exists()
+    coexist_scope = select(OfEnginePilotScope.scope_id).where(
+        OfEnginePilotScope.account_id == runtime.account_id,
+        OfEnginePilotScope.binding_id == runtime.binding_id,
+        OfEnginePilotScope.scope_id != 1,
+        func.jsonb_extract_path_text(cast(OfEnginePilotScope.config_json, JSONB), 'contract_version') == 'commercial.v1',
+        func.jsonb_extract_path_text(cast(OfEnginePilotScope.config_json, JSONB),
+                                    'coexistence', 'mode') == 'coexist').exists()
+    classified = observed & coexist_scope
     return select(row).join(OfFansConnection, and_(OfFansConnection.account_id == row.account_id,
         OfFansConnection.epoch == row.epoch)).where(row.account_id == runtime.account_id,
         OfFansConnection.binding_id == runtime.binding_id, or_(row.safety_hold.is_(True), conflict),
-        or_(~resolved, conflict), or_(~queue_resolved, unreviewed_variant))
+        or_(~resolved, conflict), or_(~queue_resolved, unreviewed_variant), or_(~classified, conflict))
 
 
 def delivery_block(s, runtime, fan, *, commercial=False):
@@ -455,6 +545,7 @@ def digest_hold_scope(s, runtime):
     """
     from db.onlyfans_engine_models import OfEnginePilotReconnectReceipt as Receipt, OfEnginePilotWebhookDigest as Row
     from fans_api_adapter.event_scope import classify_raw, MATERIAL
+    classify_retained_queue_observations(s, runtime)
     keys = s.execute(unresolved_webhook_digests(runtime).with_only_columns(
         Row.epoch, Row.event_key, Row.payload_sha256).order_by(Row.received_at, Row.event_key,
         Row.payload_sha256).limit(_DIGEST_SCAN + 1)).all()
@@ -732,6 +823,27 @@ def _activate_fansapi_scope(s, store, runtime, row, config, *, actor, reason, me
     conn = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == runtime.account_id,
         OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active').with_for_update())
     link = s.get(OfFansLink, (runtime.account_id, conn.provider_creator_id)) if conn else None
+    preparation_proof = None
+    if (conn is not None and link is not None and link.send_blocked
+            and link.block_reason == 'preparation_only'
+            and config.get('contract_version') == 'commercial.v1'):
+        # A named operator may end preparation for this exact verified binding.
+        # Authentication/reconnect holds are never released here. The enclosing
+        # activation transaction rolls this change back if any later check fails.
+        proofs = s.scalars(select(OfLaunchCommand).where(
+            OfLaunchCommand.account_id == runtime.account_id,
+            OfLaunchCommand.binding_id == runtime.binding_id,
+            OfLaunchCommand.kind == 'preparation_connect')).all()
+        for proof in proofs:
+            saved = json.loads(proof.result_json)
+            if (saved.get('identityVerified') is True and saved.get('epoch') == conn.epoch
+                    and saved.get('provider_account') == conn.provider_account_id
+                    and saved.get('creator_id') == conn.provider_creator_id):
+                preparation_proof = proof.command_key
+                break
+        if preparation_proof is not None:
+            link.send_blocked, link.block_reason = False, None
+            link.updated_at = utcnow()
     if (conn is None or conn.epoch < 1 or link is None or link.state != 'connected' or link.send_blocked
             or link.provider_account_id != conn.provider_account_id):
         raise Refused('verified pilot connection unavailable')
@@ -765,6 +877,7 @@ def _activate_fansapi_scope(s, store, runtime, row, config, *, actor, reason, me
     runtime.enabled = True
     return {'runtimeEnabledBefore': False, 'policyRevisionBefore': previous_policy_revision,
             'policyRevisionAfter': policy.revision, 'connectionEpoch': conn.epoch,
+            'preparationConnectionProof': preparation_proof,
             'providerAccountId': conn.provider_account_id, 'providerCreatorId': conn.provider_creator_id,
             'fanRecovery': fan_recovery}
 

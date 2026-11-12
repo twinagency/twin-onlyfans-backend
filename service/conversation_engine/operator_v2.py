@@ -587,15 +587,20 @@ def unresolved(store, tenant, account, actor=None):
             item_id = f'unknown_send:{row.intent_id}'
             note = seen.get(item_id)
             summary = (f'A send to fan {row.fan_id} may have reached the fan (status {row.status}). Do not resend. '
-                       'Provider history showing the exact message releases the hold; so does an audited release when '
-                       'complete provider history read after a 30 minute quiet period proves nothing arrived.')
+                       'Reconcile positive provider evidence for the exact attempt. Missing history does not prove '
+                       'non-delivery and does not authorize replay. Unknown-text retirement is disabled pending owner policy.')
             step = 'reconcile_with_provider_history'
             if note is not None:
                 step = 'awaiting_provider_proof'
                 summary += f' Operator evidence recorded by {note.actor[:20]}: {note.reason[:120]}; it does not release the hold.'
             evidence = _send_evidence_view(s, row)
             items.append(_item('unknown_send', row.intent_id, 'operator', step, summary, cid, revision,
-                               row.wire_started_at or row.created_at, **({'sendEvidence': evidence} if evidence else {})))
+                               row.wire_started_at or row.created_at,
+                               requestId=s.scalar(select(OfEngineDecision.request_id).where(
+                                   OfEngineDecision.account_id==account, OfEngineDecision.intent_id==row.intent_id).limit(1)),
+                               attemptId=row.attempt_id, intentId=row.intent_id, cause=row.reason or row.status,
+                               ageSeconds=max(0, int((utcnow()-(row.wire_started_at or row.created_at)).total_seconds())),
+                               **({'sendEvidence': evidence} if evidence else {})))
         # 2. Money that is not linked to an unlock (kept apart from access evidence until a person links or dismisses it).
         from fans_api_adapter.evidence_scope import webhook_binding
         unscoped_provider_evidence = False

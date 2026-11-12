@@ -300,3 +300,60 @@ async def history_import_write(request:Request,account_id:str):
         return refuse("history_import_refused",409,"The history import request was refused. Refresh and check the preparation, budgets and gap.")
     except Exception:return refuse("outcome_unconfirmed",500,"The outcome is unconfirmed. Retry the same history import request.")
     return response({"ok":True,"accountId":account_id,"commandKey":body["commandKey"],"history":data})
+
+
+@router.get("/accounts/{account_id}/catalogue-terms/{item_id}")
+async def catalogue_terms_read(request:Request, account_id:str, item_id:int):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from sqlalchemy.orm import Session
+    from sqlalchemy import select
+    from db.models import CatalogItem
+    from onlyfans_runtime.catalogue_terms import latest_terms,_ack
+    def read_terms():
+        with Session(store.engine) as s:
+            store._runtime(s,tenant,account_id,lock=False)
+            item=s.scalar(select(CatalogItem).where(CatalogItem.account_id==account_id,CatalogItem.id==item_id))
+            if item is None:raise Refused('catalogue item unavailable')
+            row=latest_terms(s,account_id,item_id)
+            from onlyfans_runtime.content_management import fingerprint
+            return {**(_ack(row) if row else {'itemId':str(item_id),'revision':0,'status':'unapproved'}),
+                'contentFingerprint':fingerprint(item),'label':item.label,'description':item.description_for_ai,
+                'mediaIds':json.loads(item.media_ids),'previewIds':json.loads(item.preview_media_ids),
+                'savedPriceCents':item.price_cents}
+    try:data=await asyncio.to_thread(read_terms)
+    except Refused:return refuse('not_available',404,'That product is unavailable.')
+    return response({'ok':True,'accountId':account_id,'terms':data})
+
+
+@router.post("/accounts/{account_id}/catalogue-terms/{item_id}")
+async def catalogue_terms_write(request:Request, account_id:str, item_id:int):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from onlyfans_runtime.catalogue_terms import approve_terms,withdraw_terms
+    from onlyfans_read.agency_scope import actor_allowed
+    try:
+        if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise ValueError()
+        raw=bytearray()
+        async for part in request.stream():
+            if len(raw)+len(part)>4096:return refuse('request_too_large',413,'Terms request is too large.')
+            raw.extend(part)
+        body=json.loads(raw,object_pairs_hook=unique_keys)
+        common={'action','expectedRevision','commandKey','actor'}
+        if (type(body) is not dict or body.get('action') not in ('approve','withdraw')
+                or set(body)!=(common|({'standardCents','discountCents','expectedFingerprint'} if body['action']=='approve' else set()))
+                or type(body['expectedRevision']) is not int or body['expectedRevision']<0):raise ValueError()
+        if body['action']=='approve' and (type(body['expectedFingerprint']) is not str or not re.fullmatch('[a-f0-9]{64}',body['expectedFingerprint'])):raise ValueError()
+        if not actor_allowed(body['actor'],capability='manage'):return refuse('forbidden',403,'Agency pricing permission is required.')
+    except (ValueError,TypeError,UnicodeError,RecursionError):return refuse('invalid_request',400,'Invalid terms request.')
+    options={'expected_revision':body['expectedRevision'],'command_key':body['commandKey'],'actor':body['actor']}
+    try:
+        if body['action']=='approve':
+            data=await asyncio.to_thread(approve_terms,store,tenant,account_id,item_id,standard_cents=body['standardCents'],discount_cents=body['discountCents'],expected_fingerprint=body['expectedFingerprint'],**options)
+        else:
+            data=await asyncio.to_thread(withdraw_terms,store,tenant,account_id,item_id,**options)
+    except Refused as exc:
+        return refuse('terms_refused',404 if str(exc) in ('scope unavailable','catalogue item unavailable') else 409,'Refresh and review the current product, manual price and terms.')
+    return response({'ok':True,'accountId':account_id,'commandKey':body['commandKey'],'terms':data})

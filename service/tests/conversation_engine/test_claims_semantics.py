@@ -176,3 +176,24 @@ def test_judge_pdf_failure_text_says_six_pictures_but_payload_has_three():
                                   "yes I can make you a custom video", "I personally type every reply"])
 def test_judge_pdf_failure_unsupported_creator_involvement_and_customs(body):
     assert judge(_raw(body), _ctx()).outcome == 'invalid'
+
+
+@pytest.mark.parametrize('body', [
+    "Here you go, a short video clip for you.",
+    "Here's a video for you.", "I sent you a short video.",
+    "Sending you a video.", "Attached a video.",
+])
+def test_presented_media_kind_requires_grounded_kind(body):
+    with pytest.raises(Refused, match='media type'):
+        run(body, action='offer', grounding=Grounding(product_context=True, media_kinds=frozenset({'picture'})))
+    run(body, action='offer', grounding=Grounding(product_context=True, media_kinds=frozenset({'video'})))
+
+
+@pytest.mark.parametrize('body', [
+    'Did I send you a video?', 'You said "Here you go, a short video clip for you."',
+    'I never sent you a video.', 'If I sent you a video, would you watch it?',
+    'I had a video call with my sister.', 'Here is a video game I like.',
+    'Here you go, a photo for you.',
+])
+def test_presentation_checks_preserve_questions_reports_and_unrelated_chat(body):
+    run(body, action='offer', grounding=Grounding(product_context=True, media_kinds=frozenset({'picture'})))

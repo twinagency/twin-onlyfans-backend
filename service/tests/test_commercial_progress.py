@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from db.models import Base, Account, Fan, Message, OfConversationState
+from test_onlyfans_foundation_pg import database
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 from onlyfans_runtime import commercial_progress as p, commercial_controls as cc, quote
 
 CFG = {"fastt_commercial_initiative": "active", "fastt_first_offer_window": [2, 6], "fastt_repeat_offer_window": [3, 6]}
@@ -100,15 +103,16 @@ def test_config_windows_are_independent_and_legacy_scalars_not_converted():
         with pytest.raises(ValueError): cc.validate_patch_fields({cc.FIRST_WINDOW_FIELD: value}, ValueError)
 
 @pytest.fixture
-def persistence(tmp_path, monkeypatch):
-    engine = create_async_engine("sqlite+aiosqlite:///" + str(tmp_path / "progress.db"))
+def persistence(database, monkeypatch):
+    # Use the migration-built PostgreSQL schema; avoid import-order-dependent
+    # partial metadata and fresh SQLite approximations of the production state.
+    engine = create_async_engine(make_url(database[0]).set(drivername="postgresql+asyncpg"), poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     @asynccontextmanager
     async def session():
         async with factory() as s: yield s
     monkeypatch.setattr(p, "get_session", session)
     async def setup():
-        async with engine.begin() as c: await c.run_sync(Base.metadata.create_all)
         async with factory.begin() as s:
             s.add(Account(id="900111", nickname="Synthetic")); await s.flush()
             s.add(Fan(account_id="900111", fan_id=910111)); await s.flush()
@@ -220,24 +224,25 @@ def test_delivery_pointer_needs_both_scoped_positive_owners_and_is_not_cleared(p
         a=await p.load("900111",910111,100,"Hello",cfg=CFG)
         async with persistence.begin() as s:
             state=await s.get(OfConversationState,("900111",910111));state.unresolved_attempt_id="fastt-pilot-7"
-            await s.execute(text("CREATE TABLE twin_bridge_send_attempts(id INTEGER,account_id TEXT,fan_id INTEGER,state TEXT)"))
-            await s.execute(text("CREATE TABLE native_pilot_receipts(attempt_id INTEGER,state TEXT)"))
-            await s.execute(text("INSERT INTO twin_bridge_send_attempts VALUES(7,'900111',910111,'dispatching')"))
-            await s.execute(text("INSERT INTO native_pilot_receipts VALUES(7,'dispatching')"))
+            await s.execute(text("CREATE SCHEMA IF NOT EXISTS fastt_runtime"))
+            await s.execute(text("CREATE TABLE fastt_runtime.twin_bridge_send_attempts(id INTEGER,account_id TEXT,fan_id INTEGER,state TEXT)"))
+            await s.execute(text("CREATE TABLE fastt_runtime.native_pilot_receipts(attempt_id INTEGER,state TEXT)"))
+            await s.execute(text("INSERT INTO fastt_runtime.twin_bridge_send_attempts VALUES(7,'900111',910111,'dispatching')"))
+            await s.execute(text("INSERT INTO fastt_runtime.native_pilot_receipts VALUES(7,'dispatching')"))
         b=await p.load("900111",910111,100,"Hello",cfg=CFG)
         assert b["status"]=="held" and b["reason"]=="delivery_uncertain"
         async with persistence.begin() as s:
-            await s.execute(text("UPDATE native_pilot_receipts SET state='sent'"))
+            await s.execute(text("UPDATE fastt_runtime.native_pilot_receipts SET state='sent'"))
         async with persistence() as s:
             assert await p.delivery_unresolved(s,await s.get(OfConversationState,("900111",910111)))
         async with persistence.begin() as s:
-            await s.execute(text("UPDATE twin_bridge_send_attempts SET state='sent'"))
+            await s.execute(text("UPDATE fastt_runtime.twin_bridge_send_attempts SET state='sent'"))
         c=await p.load("900111",910111,100,"Hello",cfg=CFG,new_opportunity=True)
         assert c["id"]==a["id"] and c["status"]=="active"
         async with persistence.begin() as s:
             state=await s.get(OfConversationState,("900111",910111))
             assert state.unresolved_attempt_id=="fastt-pilot-7" and not await p.delivery_unresolved(s,state)
-            await s.execute(text("UPDATE twin_bridge_send_attempts SET fan_id=999999"))
+            await s.execute(text("UPDATE fastt_runtime.twin_bridge_send_attempts SET fan_id=999999"))
         async with persistence() as s:
             assert await p.delivery_unresolved(s,await s.get(OfConversationState,("900111",910111)))
     asyncio.run(run())

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import threading
 import unittest
+from contextlib import nullcontext
 
 from onlyfans_runtime.launch_history_memory.recovery import HistoryRecovery, archive_equivalent
 from onlyfans_runtime.store import Event
@@ -25,12 +26,17 @@ class HistoryCapacityTests(unittest.TestCase):
         self.assertFalse(archive_equivalent(Mock(),message,event))
 
     def setUp(self):
+        # These scheduling unit tests mock claims, not a database-backed worker.
+        # Telemetry has separate PostgreSQL coverage and grants no read capacity.
+        metrics = patch('onlyfans_runtime.history_telemetry.measure', return_value=nullcontext())
+        metrics.start()
+        self.addCleanup(metrics.stop)
         self.recovery = HistoryRecovery(SimpleNamespace())
         self.reader = SimpleNamespace(account_id='account', messages=Mock(), chats=Mock())
         for name in ['claim_scan', 'claim', 'fail', 'page', 'scan_page']:
             setattr(self.recovery, name, Mock())
         self.recovery.claim_scan.return_value = None
-        self.recovery.claim.return_value = SimpleNamespace(fan_id=7, before_id=99)
+        self.recovery.claim.return_value = SimpleNamespace(fan_id=7, before_id=99, page_limit=20)
         self.reader.messages.return_value = SimpleNamespace(events=[], has_more=False, observations=[])
         self.recovery.page.return_value = 'complete'
 

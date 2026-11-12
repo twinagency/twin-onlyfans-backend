@@ -285,6 +285,15 @@ _PRODUCT_SUBJECT = re.compile(r"\b(?:it|this|that|these|those|they|one|prices?)\
 _TYPE_CLAIM = re.compile(r"\b(?:it|this|that|they|these|those)(?:'s|'re|\s+is|\s+are|\s+was|\s+will\s+be)\s+"
                          r"(?:just\s+|only\s+|actually\s+|really\s+)?(?:(?:a|an|the|one|my)\s+)?"
                          r"(?:(?!(?:not|no|never|a|an|the)\b)[\w-]+\s+){0,2}(" + _ANY_KIND + r")\b(?!\s+(?:call|chat|game|games|shoot|tape))", re.I)
+# Presentation and sending phrases assert what the attached product is, even
+# without a copula ("Here you go, a short video clip for you").
+_PRESENTED_TYPE = re.compile(
+    r"\b(?:here(?:'s|\s+is|\s+are|\s+you\s+go)|"
+    r"(?:i(?:'ve|\s+have)?\s+)?(?:send(?:ing)?|sent|attached|got)(?:\s+you)?)"
+    r"[,:\s]+(?:an?\s+|the\s+|some\s+)?"
+    r"(?:(?!(?:not|no|never)\b)[\w-]+\s+){0,3}(" + _ANY_KIND +
+    r")\b(?!\s+(?:call|chat|game|games|shoot|tape))", re.I)
+
 _DURATION_CLAIMS = (
     # copula: a length needs "long" or a media noun after it ("it is a ten minute drive" is not a claim about the product)
     re.compile(r"\b(?:it|this|that|they|these|those)(?:'s|'re|\s+is|\s+are|\s+was|\s+will\s+be)\s+(?:just\s+|only\s+|actually\s+|about\s+|around\s+)?"
@@ -333,9 +342,10 @@ def _bare_price_claims(text):
 
 def _media_type_claims(text):
     for clause, question in _clauses(text.replace('\u2019', "'")):
-        for match in _TYPE_CLAIM.finditer(clause):
-            if not _NEGATION.search(match.group(0)) and _asserted(clause, question, match.start()):
-                yield next(kind for kind, rx in _KIND_WORDS.items() if re.fullmatch(rx, match.group(1), re.I))
+        for pattern in (_TYPE_CLAIM, _PRESENTED_TYPE):
+            for match in pattern.finditer(clause):
+                if not _NEGATION.search(match.group(0)) and _asserted(clause, question, match.start()):
+                    yield next(kind for kind, rx in _KIND_WORDS.items() if re.fullmatch(rx, match.group(1), re.I))
 
 
 def _duration_claims(text):

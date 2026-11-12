@@ -43,7 +43,10 @@ def record(s, account, fan_id, message_id, row, event, *, via, now):
             conflicted=False, via=via, raw_sha256=ev.digest(row), sent_at=ev.stamp(event.created_at), created_at=now))
         s.flush()
         return "new"
-    if (existing.price_cents, existing.media_ids_json) != (event.price_cents, media):
+    if ((existing.price_cents, existing.media_ids_json) != (event.price_cents, media)
+            or previews is not None and existing.preview_ids_json is not None
+               and set(json.loads(existing.preview_ids_json)) != set(previews)
+            or locked is not None and existing.locked_text is not None and existing.locked_text != locked):
         existing.conflicted = True      # the first-seen terms stay; the disagreement is what coverage must not trust
         return "conflict"
     if opened is True and existing.is_opened is not True:

@@ -144,12 +144,27 @@ def _record_outside_digest(store, tenant, account, raw, event_key, *, signature,
             reconnect = (safety_hold and matched is None and
                          envelope.get('event') in ('accounts.connected', 'accounts.reconnected'))
             key = (account, epoch, event_key, digest)
+            # Classified audit history does not consume unresolved receipt capacity.
+            from conversation_engine.pilot_scope import unresolved_webhook_digests
+            from conversation_engine.coexistence import enabled as coexistence_enabled
+            safe_queue = False
+            if matched is not None and not conflict and coexistence_enabled(s, runtime):
+                try:
+                    from fans_api_adapter.queue_review import queue_envelope
+                    queue, _ = queue_envelope(raw)
+                    safe_queue = queue['account_id'] == matched.provider_account_id
+                except (Refused, ValueError, TypeError, KeyError):
+                    pass
+            unresolved_count = s.scalar(select(func.count()).select_from(
+                unresolved_webhook_digests(runtime).subquery()))
             if s.get(OfEnginePilotReconnectReceipt, key) is None and (reconnect or (
-                    len(raw) <= RETAIN_MAX_BYTES and s.scalar(select(func.count()).select_from(
-                        OfEnginePilotReconnectReceipt).where(
-                        OfEnginePilotReconnectReceipt.account_id == account)) < RETAIN_MAX_PER_ACCOUNT)):
+                    len(raw) <= RETAIN_MAX_BYTES and (safe_queue or unresolved_count < RETAIN_MAX_PER_ACCOUNT))):
                 s.add(OfEnginePilotReconnectReceipt(account_id=account, epoch=epoch, event_key=event_key,
                     payload_sha256=digest, raw_body=raw, signature=signature, received_at=utcnow()))
+        s.flush()
+        from conversation_engine.pilot_scope import classify_queue_observation
+        retained = s.get(OfEnginePilotWebhookDigest, (account, epoch, event_key, digest))
+        classify_queue_observation(s, runtime, retained)
         return bool(conflict)
 
 
@@ -177,6 +192,8 @@ class SupervisedPilot:
         with Session(self.worker.engine.store.engine) as s, s.begin():
             runtime = self.worker.engine.store._runtime(s, self.tenant, self.account)
             scope, config = require(s, runtime, active=True)
+            from conversation_engine.pilot_scope import classify_retained_queue_observations
+            classify_retained_queue_observations(s, runtime)
             policy = s.get(OfDeliveryPolicy, self.account)
             if (scope.revision != self.scope_revision or scope.fingerprint != self.scope_fingerprint
                     or frozenset(config['fans']) != self.allowed_fans

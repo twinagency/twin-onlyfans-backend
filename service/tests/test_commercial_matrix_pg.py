@@ -110,12 +110,14 @@ class Clock:
     def govern(self, pilot):
         pilot.worker.engine.model._clock = self
         pilot.worker.engine.model.ledger.clock = self
-        return pilot
+        return self
 
 
 def second_pilot(w, clock=None):
     pilot = build_supervised_pilot(w.store, w.env, model_transport=w.model_transport, fans_transport=w.fans_mock.transport)
-    return clock.govern(pilot) if clock else pilot
+    if clock:
+        clock.govern(pilot)
+    return pilot
 
 
 def drain(w, pilot=None, n=3):
@@ -145,6 +147,11 @@ def test_q1_ordinary_replies_on_a_selling_account_burst_correction_uncertainty_e
     for line in ('sales are', 'not selling', 'cannot offer', 'no offers'):
         assert line not in spoken()[0].lower()
 
+    # A deterministic writer explicitly addresses all three questions. This tests
+    # request handling, not real-model prose quality (qualified separately).
+    world.choose = lambda latest, prompt, approved, proposal: (
+        {'body': "I'm from Brisbane. I haven't shared whether I'm up late tonight or what I do all day."}
+        if latest == 'what do you do all day?' else proposal)
     # a burst of three questions before any reply: ONE reply, built from all three, and the earlier drafts retire
     for text_ in ('are you up late tonight?', 'where are you from?', 'what do you do all day?'):
         staged, mid = world.say(text_, FAN_A)
@@ -155,6 +162,8 @@ def test_q1_ordinary_replies_on_a_selling_account_burst_correction_uncertainty_e
     world.unthrottle()
     send_ok(world, world.pilot.tick())
     assert len(spoken()) == 2, 'one logical reply for the whole burst'
+    assert all(answer in spoken()[-1] for answer in ('Brisbane', 'up late tonight', 'what I do all day'))
+    world.choose = None
 
     # a correction: the application keeps it, the reply is one ordinary message, still no card
     staged, tick = world.converse("no wait, I meant tomorrow night, not tonight", FAN_A)
@@ -166,7 +175,12 @@ def test_q1_ordinary_replies_on_a_selling_account_burst_correction_uncertainty_e
         staged, tick = world.converse(text_, FAN_A)
         send_ok(world, tick)
     assert len(spoken()) == 5 and card_to(world, FAN_A) == []
-    assert all(r.status == 'completed' for r in requests_of(world, FAN_A)), [r.status for r in requests_of(world, FAN_A)]
+    retired = [r for r in requests_of(world, FAN_A) if r.status == 'cancelled']
+    assert len(retired) == 2 and all(r.next_step.startswith('superseded_by_message:') for r in retired)
+    assert all(r.status in ('completed', 'cancelled') for r in requests_of(world, FAN_A))
+    before = len(spoken())
+    drain(world, second_pilot(world))
+    assert len(spoken()) == before, 'superseded burst requests never replay after restart'
 
     # historical repetition failure: she has opened her last two replies the same way; a third identical opener is rejected once,
     # the correction is sent instead, and the fan still gets exactly one reply
@@ -227,7 +241,7 @@ def test_q4_old_purchase_partly_owned_bundle_unknown_coverage_and_a_new_asset_wi
         ids['combo'] = w.product('Combo bundle', [31, 61, 62], previews=[62], standard=3000, description='Combo bundle, two paid items and one preview.')
         w.launch()
         with Session(database[1]) as s:
-            assert owned_state(s, w.account, FAN_A)[0] == {31}, 'the imported opened card is the retained older purchase'
+            assert __import__('conversation_engine.history_ownership', fromlist=['derive']).derive(s, w.account, FAN_A, [31])[31].state == 'owned', 'full production history decision recognizes the retained older purchase'
 
         # FAN_A owns media 31: the single is not offered again and the whole bundle containing it is excluded; chat continues
         for ask in ('show me the beach photo', 'I want the combo bundle'):
@@ -275,6 +289,7 @@ def test_q6_an_ambiguous_product_reference_asks_instead_of_charging_and_a_specif
     staged, tick = world.converse('show me the photo please', FAN_A)
     send_ok(world, tick)
     assert card_to(world, FAN_A) == [] and grants(world, FAN_A) == [] and 'APPROVED OFFER: none' in world.model_prompts[-1]
+    assert 'which' in to_fan(world, FAN_A)[-1]['body']['text'].lower()
     staged, tick = world.converse('the sunset photo', FAN_A)
     send_ok(world, tick)
     assert [c['body']['price'] for c in card_to(world, FAN_A)] == [15.0]
@@ -307,6 +322,10 @@ def test_q6_a_terms_category_discount_or_content_change_between_plan_and_send_ne
         pass
     nothing_sent(world)                                                       # the planned card never reaches the wire
     assert [g.used_intent_id for g in grants(world, FAN_A)] == [None] * len(grants(world, FAN_A))
+    if change == 'previews_changed':
+        staged, tick = world.converse(ask, FAN_A)
+        assert card_to(world, FAN_A) == [] and 'APPROVED OFFER: none' in world.model_prompts[-1]
+        approve(world.store, item, standard=4000, discount=3500, tenant=TENANT, account=world.account)
     # the permitted journey afterwards: the fan asks again and only what is CURRENTLY approved is offered, at its current terms
     staged, tick = world.converse(ask, FAN_A)
     assert tick is not None
@@ -469,6 +488,13 @@ def test_q9_an_unknown_card_survives_restarts_without_replay_or_refund_and_block
     [sent] = [i for i in intents(world) if i.price_cents > 0]
     assert sent.status == 'unknown' and sent.reservation_held and len(world.cards()) == 1
     held = policy(world)
+    from plan_c_worker import _work_counts
+    readiness = _work_counts(world.pilot)
+    assert readiness['eligibleFans'] == len(world.fans)-1 and readiness['heldFans'] == 1
+    cases = operator_v2.unresolved(world.store, TENANT, world.account, actor=OPERATOR)
+    case = next(c for c in cases if c.get('intentId') == sent.intent_id)
+    assert case['attemptId'] and case['requestId'] and case['ageSeconds'] >= 0
+    assert 'does not prove' in case['summary']
     for _ in range(3):                                                           # restart after restart
         drain(world, second_pilot(world), 2)
     [sent] = [i for i in intents(world) if i.price_cents > 0]
@@ -484,7 +510,7 @@ def test_q9_an_unknown_card_survives_restarts_without_replay_or_refund_and_block
     assert len(to_fan(world, FAN_A)) == 1 and policy(world)[0] == held[0]
     # another fan proceeds normally
     staged, tick = world.converse('show me the beach photo', FAN_B)
-    send_ok(world, tick)
+    assert tick['dispatched'] == ['accepted']
     assert len(card_to(world, FAN_B)) == 1 and len(world.cards()) == 2
 
 
@@ -495,7 +521,7 @@ def test_q9_a_card_that_crashed_before_the_wire_is_retired_never_sent_twice_and_
     world.approve_turn(staged)
     world.unthrottle()
 
-    class Crash(Exception):
+    class Crash(BaseException):
         pass
 
     def die(*args, **kwargs):

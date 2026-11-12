@@ -701,14 +701,17 @@ def retire_superseded(store, tenant, account, fan_id, keep_source_message_id):
                 OfEngineRequest.fan_id == fan_id, OfEngineRequest.binding_id == runtime.binding_id,
                 OfEngineRequest.status == 'open', OfEngineRequest.source_message_id != keep_source_message_id
                 ).with_for_update()):
-            ready = list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
-                OfEngineDecision.request_id == request.request_id, OfEngineDecision.status == 'ready',
-                OfEngineDecision.intent_id.is_(None))))
-            if not ready:
+            parts = list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
+                OfEngineDecision.request_id == request.request_id)))
+            # Only entirely never-queued drafts can be superseded here. A sent,
+            # queued, or uncertain part remains with the delivery/recovery owner.
+            if not parts or any(p.intent_id is not None or p.status not in ('ready', 'cancelled') for p in parts):
                 continue
-            for p in ready:
+            for p in parts:
                 p.status, p.updated_at = 'cancelled', utcnow()
-            request.next_step, request.updated_at = 'review_changed_conversation', utcnow()
+            request.status = 'cancelled'
+            request.next_step = 'superseded_by_message:' + str(keep_source_message_id)
+            request.updated_at = utcnow()
             request.revision += 1
         return count
 

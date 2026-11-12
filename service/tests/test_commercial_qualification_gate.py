@@ -190,3 +190,10 @@ def test_only_the_ops_group_runs_as_root_with_exactly_the_five_capabilities_its_
         assert forbidden not in block
     assert "--cap-drop ALL" in block and "--security-opt no-new-privileges" in block and "--read-only" in block
     assert "--network container:" in block or '--network "container:$RUN_PG"' in block
+
+
+def test_every_results_row_is_a_tab_separated_record():
+    """results.tsv rows must be real TSV (a mangled printf once wrote 'browsertINCOMPLETEt...')."""
+    rows = re.findall(r"^\s*(?:\S.*)?printf (\S.*?) (?:browser|\"\$required\"|\"\$s\"|\"\$name\")", SOURCE, re.M)
+    assert rows, "no results-row printf found"
+    assert all(r == "'%s\\t%s\\t%s\\t%s\\n'" for r in rows), rows

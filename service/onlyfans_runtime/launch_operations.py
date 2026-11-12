@@ -80,6 +80,16 @@ def account_state(s, runtime):
     return {**value, "fingerprint": digest(value)}
 
 
+def operator_stopped(s, runtime):
+    """True while this binding's latest account control is pause/emergency_stop; only resume clears it.
+    Ordered by the recorded control revision (account_state's count), not by timestamps that can tie."""
+    results = [json.loads(raw) for raw in s.scalars(select(OfLaunchCommand.result_json).where(
+        OfLaunchCommand.account_id == runtime.account_id,
+        OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.kind == "account_control"))]
+    latest = max(results, key=lambda result: result["revision"], default=None)
+    return latest is not None and latest["action"] != "resume"
+
+
 def stop_runtime_in_session(s, runtime, *, command_key, actor, request_hash, now):
     """Shared stop owner; caller holds the account runtime lock and transaction."""
     account = runtime.account_id

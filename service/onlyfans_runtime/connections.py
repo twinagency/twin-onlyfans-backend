@@ -348,6 +348,14 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
         if action=='verify' and row.expires_at<=utcnow():raise Refused('replace expired connection credentials before verification')
         policy=s.get(OfDeliveryPolicy,account)
         if action=='activate':
+            # A pilot/preparation scope owns the policy (same predicates as the policy writer, text_delivery
+            # _configure_in_session); an operator stop is undone only by control_account resume.
+            from conversation_engine.preparation import assert_send_allowed
+            from conversation_engine.pilot_scope import current as current_pilot
+            from .launch_operations import operator_stopped
+            assert_send_allowed(s,runtime)
+            if current_pilot(s,runtime)[0] is not None:raise Refused('a pilot scope governs this account; use the scope controls')
+            if operator_stopped(s,runtime):raise Refused('account was stopped by an operator; use resume')
             if row.status!='verified' or row.expires_at<=utcnow() or row.verified_at is None:raise Refused('verify the selected provider connection before activation')
             if policy and (policy.active_intent_id or policy.queued_count):raise Refused('delivery is unresolved')
             if policy and payload['limitUnits']<policy.used_units:raise Refused('used allowance cannot be reset')

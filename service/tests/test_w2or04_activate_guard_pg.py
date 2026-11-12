@@ -138,6 +138,22 @@ def test_f501_stop_before_first_activation_then_activate_is_recoverable_by_resum
         store.close()
 
 
+@pytest.mark.parametrize('action', ['pause', 'emergency_stop'])
+def test_f521_stop_after_an_earlier_resume_still_keeps_activate_off(database, monkeypatch, action):
+    """Pins latest-by-revision: an older resume must not clear a newer stop."""
+    store, account, _ = verified(database, monkeypatch)
+    try:
+        assert change(store, account, 'activate', 1, 'c' * 64, LIMITS) == 2
+        _control(store, account, action, 'd' * 64)
+        _ready(monkeypatch)
+        assert _control(store, account, 'resume', 'e' * 64)['enabled'] is True
+        _control(store, account, action, 'f' * 64)
+        assert change(store, account, 'activate', 2, '1' * 64, {**LIMITS, 'limitUnits': 9}) == 3
+        assert _state(store, account) == (False, True, 'native', 9)
+    finally:
+        store.close()
+
+
 def test_w3rca02_activate_after_pause_then_resume_is_allowed(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
     try:

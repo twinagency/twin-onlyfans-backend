@@ -357,7 +357,7 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
             TextAuthority(store)._configure_in_session(s,runtime,expected_revision=policy.revision if policy else 0,
                 enabled=True,limit_units=payload['limitUnits'],throttle_seconds=payload['throttleSeconds'],
                 media_enabled=payload['mediaEnabled'],transport_kind='native',actor=actor,reason='Explicit dashboard account activation')
-            runtime.enabled=not operator_stopped(s,runtime);runtime.recovery_needed=True   # after an operator stop only resume re-enables
+            runtime.enabled=not operator_stopped(s,runtime);runtime.recovery_needed=True   # Activate never clears an operator stop
             row.automate_new_conversations=False;row.automation_starts_at=None   # activation never arms future conversations
         else:
             runtime.enabled=False

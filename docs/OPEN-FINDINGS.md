@@ -4,6 +4,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 
 - Source: `.scratch/rwl-W1/STATE.md`, `.scratch/rwl-W2/STATE.md` (Threads, Summary, Orphan), `.scratch/rwl-programme/STATE.md` (Live-risk, OQ-1..9, Severity policy, Disputes), `git show rwl/W<n>-<slug>:docs/review/W<n>-<slug>/FINDINGS.md` for 16 review lanes, live results `.scratch/rwl-W{1,2}/live-verify/RESULTS.md`.
 - Pins: W1 = 659ea29..e8e90954, W2 = e8e90954..a2f1dda6. Live trial commit = 659ea29.
+- Reach ref (W4 triage): `659ea29` lines renamed to the running build `8d0001f9` (jaka/takeover-20261111; contains 659ea29 + e8e90954, not a2f1dda6; m W4 live-verify). Values still measured at 659ea29. Each `n` whose cited file changed in 659ea29..e8e90954 (`git diff --stat`, local refs, no fetch) → `reach: re-check (file changed)`; code not re-reviewed.
 - Live stack (measured, both live-verify lanes, 0 OF calls): DB at `0133`; pin head `0136` → every finding on 0134–0136 objects is latent on the running stack. Sending disabled: 0 delivery policies, runtime off, 0 scope / intent / delivery / grant rows, 0 automations, tip_request off. 0 vault / catalogue / evidence / model-call rows → most sellability + ownership checks vacuous (OQ-6).
 - Rule: severity = harm if reached (written rule); Reach = live|latent + the one guard keeping it latent + m/i/g (programme Severity policy). Latent blocker gates lifting its guard, not a merge.
 - Dedupe: by file:line across lanes/windows; W2 "W1 carry-over" rows are restatements (not recounted). Cross-lane dups noted `=`.
@@ -13,7 +14,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 
 - raw: 404 lane-local ids (W1 222 = L1 35, L2 11, L3 36, L4 26, L5 26, L6 16, L7 29, L8 43; W2 182 = db 19, scope 22, sale 36, runtime 25, fans-api 27, tests-commercial 21, tests-history 21, claims-sim 11). Measured by grep of FINDINGS ids; W2 sale focus labels F1–F8 excluded.
 - picked: 92 ids in 6 groups. rest: 312 (lane-local ids; ` = ` dups inside groups still counted per id).
-- live trial (659ea29) present: G1 y (narrowed), G4 y (native case), G5 y (W1-04, F6); G2/G3/G6 n. Rest: S1 (R11/R13) y m, W2SC-14 y m.
+- 8d0001f9 (was 659ea29) present: G1 y (narrowed), G4 y (native case), G5 y (W1-04, F6); G3 n; G2, G6, G5-rest, G4 FansAPI/DRM/uncertain, G1 W2OR-03/-05: re-check (file changed). Rest: S1 (R11/R13) y m, W2SC-14 y m.
 - red tests on lane branches: W1 25, W2 45 (THERMO). None run against the live stack.
 
 | verdict | ids |
@@ -36,7 +37,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - ids: DOC-10 = W2S-02 = CS-02 (carry-over, ownership.py:179-185, history_ownership.py:164-168); W2S-03, W2S-04, W2S-06, W2S-07, W2S-11, W2S-12, W2S-16, CS-06; W2OR-03, W2OR-05 (manual-vault / Moxy cards skip `ownership_gate`), W2OR-21; W2FA-01, W2FA-02 (cond), W2FA-03, W2FA-04, W2FA-07 (cond), W2FA-08, W2FA-11, W2FA-15, W2FA-17; W2SC-06 (partial coverage reported complete).
 - what: missing / malformed / non-message (post, stream) / dismissed purchase evidence reads as "not owned"; history derive turns unknown → clear (count-vs-count, fact-less unlock, `ours` not fan-scoped, conflicting tx ignored); import keyed by account only.
 - severity: blocker (REVIEW #9, #11). Reach: latent — guard on live stack = sending disabled + 0 evidence rows (m). In code @659ea29: commercial money-evidence hold `pilot_scope.delivery_block` holds evidenced fans (m); residual re-offer (non-message PPV, history gaps, dismissed rows, malformed JSON) i. W2S-03/04 + W2FA-* need 0136 tables (absent live, m).
-- 659ea29: y (DOC-10/CS-02 mechanism m, narrowed; residual i); W2-new parts n.
+- 8d0001f9 (was 659ea29): y (DOC-10/CS-02 mechanism m, narrowed; residual i); W2-new parts n for ownership.py / history_ownership.py / history_import.py (unchanged 659ea29..e8e90954, m); W2OR-03/-05 reach: re-check (file changed: text_delivery.py, media_delivery.py).
 - fix: no evidence / no import / malformed JSON / non-message purchase / dismissed money row ⇒ ownership `unknown` ⇒ refuse paid card; scope history lookups by fan + binding.
 - red: `rwl/W2-conversation-engine-sale:service/tests/test_w2_conversation_engine_sale_pg.py` (w2s02, w2s03, w2s04b, w2s07, w2s11); `rwl/W2-fans-api-adapter:service/tests/test_w2_fans_api_adapter_pg.py` (w2fa_01 ×2, w2fa_03). DOC-10 malformed-JSON half: idea only.
 - OQ: OQ-8 (import freeze → W2FA-17); W2FA-02/07 conditional defaults "no" (lane, not numbered).
@@ -45,7 +46,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - ids: W2SC-02, W2SC-11, W2SC-22 = W2OR-04, W2OR-18, W2OR-19, W2OR-20, W2OR-08, W2OR-09, W2OR-10; F03 (W1 L4, connections.py:332-344).
 - what: stop/pause re-validates scope + limits inside `_configure_in_session(scope_stop=True)` → `Refused` rolls back runtime-off + queue cancel; activate sets native + media + 10000 units + runtime on with no scope check, admission admits any fan; then stop is refused.
 - severity: blocker (inv. 4 "stop never refusable"). Reach: latent — guard = no commercial scope can exist live (DB 0133 < 0134, 0 scope rows; m). After 0134 the only guard is nobody pressing dashboard activate (m by reading).
-- 659ea29: n (stop was a pure runtime write, m; activate code unchanged since 659ea29 but needs a scope to harm, m).
+- 8d0001f9 (was 659ea29): n (stop was a pure runtime write, m; activate needs a scope to harm, m) → reach: re-check (file changed: connections.py, store.py, text_delivery.py, preparation.py). W4 dispute: legacy text-only stop variant y at 659ea29 (W4CEC, i).
 - fix: one validation-free `stop_scope` (runtime off, queue cancelled, policy off, scope stopped, no config read); activate calls `assert_enable_allowed`, refuses on commercial/preparation scope.
 - red: `rwl/W2-conversation-engine-scope:service/tests/test_w2_scope_commercial_route_pg.py` (emergency_stop ×2); `rwl/W2-onlyfans-runtime:service/tests/test_w2_onlyfans_runtime_pg.py` (w2or04, w2or18).
 - OQ: OQ-7 (non-audience sends on active scope; default hold).
@@ -54,7 +55,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - ids: W2SC-01, W2SC-03, W2SC-04, W2S-01, W2S-10, W2S-27, W2S-30, CS-03, W2DB-01, W2DB-04 (terms row can price another account's item/binding, inv. 8), W2DB-05, W2DB-08.
 - what: any approved `of_catalogue_terms` row makes an unpromoted account "commercial"; `prepare_commercial_offer` mints from caller `coverage_ref`/`valid_until` without #4 holds or audience; damaged scope row = "no pilot" opens holds; promotion FK accepts any launch command; lineage NULL passes.
 - severity: blocker. Reach: latent — guard = `of_catalogue_terms` absent live (0135 not applied, m) + `prepare_commercial_offer` has no non-test caller (m).
-- 659ea29: n (m: whole route added in W2).
+- 8d0001f9 (was 659ea29): n (m: whole route added in W2; commerce.py, pilot_scope.py, scope_contract.py unchanged 659ea29..e8e90954, m).
 - fix: one commercial predicate = validated, promoted, active scope row with explicit audience; terms alone never commercial; grant coverage from validated config + `prepare_pilot_offer` hold block; FK terms → same-account item + binding.
 - red: `rwl/W2-conversation-engine-scope:service/tests/test_w2_scope_commercial_route_pg.py` (terms_alone, never_mints, damaged ×2); `rwl/W2-conversation-engine-sale:service/tests/test_w2_conversation_engine_sale_pg.py` (w2s01a ×2, w2s01b); `rwl/W2-db-migrations:service/tests/test_w2_db_migrations_pg.py` (w2db01, w2db04 ×2, w2db05).
 - OQ: OQ-7.
@@ -63,7 +64,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - ids: F01 (W1 L4), N1 (W1 L4 R2), L3-01, L3-02, L3-03, CVA-01, T01, T12, DOC-01, DOC-02, DOC-13, W2S-05, TC-07.
 - what: `catalog_terms` checks only `removed_at` + kind; sync un-removes retained not-ready rows; DRM skip deleted; vanished never retired; uncertain items keep earlier category membership; new W2 shortlist/price path adds no DRM/vanished gate; tests pin the open gap as correct (T01).
 - severity: blocker (CVA-01, DOC-02 conditional on OQ-4; default per-asset → blocker). Reach: latent — guard live = sending disabled + 0 vault/catalogue rows (m); in code: preparation-scope hold @e8e (m), lifted for an active commercial scope @a2f (i).
-- 659ea29: y for native not-ready/vanished (F01 R2, m); FansAPI / DRM / uncertain parts n.
+- 8d0001f9 (was 659ea29): y for native not-ready/vanished (F01 R2, m); FansAPI / DRM / uncertain parts n → reach: re-check (file changed: fans_api_adapter/vault_sync.py, content_sync.py, vault_management.py).
 - fix: one per-asset readiness gate (ready, canView, !hasError, !DRM, in window, classification certain) inside `catalog_terms` / offer prepare for every paid path.
 - red: `rwl/W1-fans-api-adapter:service/tests/test_w1_fans_api_adapter_pg.py` (l3_01_02 ×4, l3_01b, l3_03); `rwl/W2-conversation-engine-sale:service/tests/test_w2_conversation_engine_sale_drm_pg.py`; `rwl/W1-commands-vault-ai:service/tests/test_w1_commands_vault_ai_classification.py` (CVA-01); `jaka/rules-tests-20261111:service/tests/test_rule_retained_vault_unsellable_pg.py` (X01).
 - OQ: OQ-1, OQ-2, OQ-3 (ask owner first), OQ-4, OQ-6.
@@ -72,7 +73,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - ids: W1-04, F6 (both pre-existing), W1-01, W1-02, W1-05 = F2, W1-06, W1-32, F1, F5, L3-05, L3-08 ≈ W2FA-06, L3-09, W2SC-05, W2SC-07, W2SC-08, W2FA-05, W2FA-13, W2FA-14, W2FA-19, DOC-07, DOC-17.
 - what: runtime retries a ledger `unknown` row (same-pass fallback / replay) → second possibly-charged call; Retry-After `'²'` turns refusal into held `unknown` (no human); local/unclassified preparation failures non-terminal → identity GET re-bought every pass; Retry-After clamped to 3600 / per-fan only → paid 429 storm; caption path outside ledger.
 - severity: blocker (W1-01) / major (rest). Reach: latent — W1-04 guard = scheduler `uncertain` filter + fallback off by default (i; webhook redelivery path bypasses filter, open); live 0 model-call rows (m); paid reads: preparation unconfigured live (0 scope rows, m), bounded by scope budget.
-- 659ea29: y (W1-04 line identical, m; F6 narrowed, m); rest n.
+- 8d0001f9 (was 659ea29): y (W1-04 line identical, m; F6 narrowed, m); rest n → reach: re-check (file changed: model_runtime.py, model_ledger.py, model_client.py, openrouter.py, pilot_supervised.py).
 - fix: `unknown` row ⇒ hold, never re-call; refusal never → `unknown`; local/unclassified failures terminal or counted; honour provider Retry-After per account, no 3600 clamp.
 - red: `rwl/W1-model-transport:service/tests/test_w1_model_transport_pg.py` (f1, f2, f5); `rwl/W2-conversation-engine-scope:service/tests/test_w2_scope_history_pg.py` (W2SC-05, W2SC-06); `rwl/W2-fans-api-adapter:service/tests/test_w2_fans_api_adapter_pg.py` (w2fa_05, w2fa_06). W1-04 / W1-01: none (needs PG; lane skipped).
 - OQ: none numbered (W1-13 402 handover, unnumbered).
@@ -81,7 +82,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - ids: F02 = CVA-11 → W2OR-01 (worse), W2OR-02, W2OR-11, W2OR-12, W2S-08, W2S-09, CVA-08.
 - what: `approvedTotalCents` accepted on a single (preview counted as bundle) and frozen as `agency_category` price; category price change never reaches approved singles; keyword `asks_cheaper` grants discounts on non-asks; discount grant replaced by standard successor at higher price; price authz tenant-wide with self-asserted actor.
 - severity: major. Reach: latent — guard live = drafts created disabled + 0 vault rows + sending disabled (m); W2OR-01/02 need 0135 (absent, m).
-- 659ea29: n (m: in-window code).
+- 8d0001f9 (was 659ea29): n (m: in-window code) → reach: re-check (file changed: vault_management.py, vault_editing.py, vault_api.py; native_sales.py / quote.py unchanged).
 - fix: `approvedTotalCents` only with >1 paid asset; one category-price check shared by drafts + `approve_terms`; `catalog_terms` compares `category_price_revision`; discount variant sticky per grant.
 - red: `rwl/W1-onlyfans-runtime:service/tests/test_w1_onlyfans_runtime_category_single_price.py`; `rwl/W2-onlyfans-runtime:service/tests/test_w2_onlyfans_runtime_pg.py` (w2or01 ×2, w2or02); `rwl/W2-conversation-engine-sale:service/tests/test_w2_conversation_engine_sale_price_intent.py` (W2S-08).
 - OQ: OQ-1 (operator-priced legacy singles stay sellable).
@@ -270,7 +271,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 | W3DC-09, W3DC-10, W3DC-11 | YAGNI | |
 | W3DR-03, W3DR-05 | fix | disclosure: 0 `TEST-CHANGE:`; migration change unstated |
 | W3DR-04 | policy | network failure joins incident recovery |
-| W3DR-06 | policy | OQ-21: R0 cannot boot on live DB 0133 (X01 m) |
+| W3DR-06 | policy | OQ-21: R0 cannot boot on live DB 0133 (X01 m). → G13 (W4, not recounted) |
 | W3DR-09 | dup-of | W1-20 (worse) |
 | W3DR-11, W3DR-17, W3DR-18 | fix | Dockerfile outside §3; tests uncollected; downgrade guard |
 | W3DR-10, W3DR-12, W3DR-13, W3DR-16, W3DR-20 | YAGNI | structure / counter / test env |
@@ -321,3 +322,154 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - W1 fans-api M1 wrong (W3FA-06).
 - W1 F2 "fixed" false at a2f; fixed in R0 66a1da4a (W3TL-06).
 - W1-04 latent, not live (W3TL). Open: W3TL-13.
+
+# W4 (a2f1dda6 + delta 3b8fc64c, closed 2026-11-12)
+
+- Source: `.scratch/rwl-W4/STATE.md` (Threads, Summary), 11 review lanes `.scratch/rwl-W4/<lane>/FINDINGS.md`, live `.scratch/rwl-W4/live-verify/RESULTS.md` (13 confirmed / 2 failed / 0 blocked / 3 n/a, 0 OF calls). Programme `.scratch/rwl-programme/STATE.md` (OQ-21b…26, Disputes, Fable 11:2x).
+- Pins: W4 = a2f1dda6 (kept) + delta-r0-decoding 66a1da4a..3b8fc64c. Running build (m, live-verify step 0 + end, no restart): `8d0001f9` jaka/takeover-20261111 (merge of #82 c48eb755), clean, schema HEAD 0133 = engine DB; contains 659ea29 + e8e90954, not a2f1dda6. :8787 = `onlyfans_app` (engine API on PG); legacy `server.py` relay + SQLite not running → relay-only findings n/a on the running stack (m), reachable on any relay deploy (deploy-here.sh / deploy-vps.sh) (i).
+- Live (m): engine DB 0133 with 0129b fully applied (DS-1, MB-3); vault-frozen + reconnect guards present (DS-2); `fastt_runtime` schema absent on engine DB (DS-3 failed vs lane's 16/0); 0 RLS policies on `of_%` (W4TI-03 live); 0 pending fans projections (SS-1); 1 live binding, 0 dup (OFR-3); 0 paid messages (OFR-2, vacuous); downgrade evidence all 0 (MB-1, vacuous); attribution view present on PG (MA-1); 0 pre-0032 NULL-kind automation sends (MA-2); 0 command-route 5xx since restart (MT-1); 187 inbound messages match the lane's minor-adjacent regex (count only; RESULTS check id `W4CEC-1` measures W4CEC-4 reach; some benign, g). migrations-b-2 failed = stale lane expectation (W4MB-08 not shown live).
+- Same rules as W1–W3. W4 lanes mark nearly every id `659ea29: y` (files unchanged since 659ea29, m per lane) → present on 8d0001f9 inferred (i), not re-diffed.
+
+## W4 counts
+
+- raw: 211 lane-local ids (DD 7, SS 10, TI 7, CEB 28, CEC 20, DM 29, DS 21, MA 22, MB 20, MT 18, OFR 29) by grep of `W4<lane>-NN`. Withdrawn, not counted: W4DD-04, W4DM-27 → 209.
+- picked: 127 ids in 12 groups (extended G1 4, G2 4, G5 13, G6 2, G7 4, G8 13, G9 2, G10 23, G11 9, G12 4; new G13 45, G14 4). G3 / G4: no W4 adds. rest: 82 = fix 43, YAGNI 34, dup-of 2, policy 3.
+- live-confirmed: G10 W4TI-03 (doc-only harm); G14 reach (187 matching inbound; sending off). G13 latent on the running stack (DS-3 failed; relay SQLite not running); W3DR-06 condition still true (R0 HEAD 0129b vs live 0133, i from DS-1). All else latent behind sending off / 0 scope, policy, model-call rows (m).
+- red tests on W4 lane branches (THERMO): 22; none run against the live stack.
+
+## W4 groups
+
+### G1 (W4 adds) · Ownership gap → re-offer of already-bought media
+- same root cause (several ownership proofs; unknown / partial read as not owned).
+- ids: W4CEB-4 (ownership_gate.py:19-31 vs ownership.py:177-183: free/NULL `resolved_by` counted mapped, never owned; `media_count` never compared); W4OFR-05 (onlyfans_read/repo.py:1017, :1037-1048 empty `media_ids` → message id reported as owned media id; red `rwl/W4-onlyfans-read:service/tests/test_w4_onlyfans_read_contract.py`); W4OFR-29 (projections.py:255-258 vs repo.py:1003-1005 timestamp vs `is_paid`); W4DM-14 (backfills/backfill_relink_ppv_messages.py:8-12, :137-145 guessed relink lifts paid-unlinked hold).
+- live: latent — 0 vault / catalogue rows, 0 paid messages (OFR-2 m), sending off.
+- fix: G1 fix + one canonical paid/owned proof shared by gate, read API and history; `len(ids) < media_count` ⇒ unknown; never invent media ids.
+
+### G2 (W4 adds) · Stop refusable / false success
+- same root cause (stop path reads + validates scope config; replay without current state).
+- ids: W4CEC-1 — blocker (store.py:434-436 → pilot_scope.py:293-302 → scope_contract.py:249-256: stored scope config failing `validated()` refuses every pause / no_contact / takeover on the account, incl. engine opt-out + webhook takeover, while campaigns keep sending); W4CEB-10 (operator_v2.py:405-406 stop/takeover refused without owner row); W4MT-3 (launch_operations.py:52-58, :123-125 stop replay after resume reports stale "stopped"); W4MT-10 (launch_api.py GETs lock runtime `FOR UPDATE` → queued stop → lock_timeout → 500).
+- new evidence: W2OR-04 worse — connection activate re-enables a runtime stopped by pause / emergency_stop (connection_api.py:106 → connections.py:308-351, m); W2OR-18 stop → 400 "needs correction" (m); W3TSA-05 fingerprint refusal deletable (W4MT-6 M2 survived 56/56).
+- live: latent — 0 scope / policy rows (m).
+- fix: G2 `stop_scope` never reads/validates scope config; stop allowed without owner row; replay returns `replayed:true` + current state; read routes `lock=False`.
+- OQ: OQ-7, OQ-11.
+
+### G5 (W4 adds) · Paid-call ledger: release / unknown / reservation
+- same root cause (classification + reservation lifecycle owned by several modules; `release` on unproven refusal).
+- status: W3DR-01 FIXED by 3b8fc64c (m: W3 probes 3/3, team suites 17 red → 22 green; R0 line only, not on 8d0001f9). Still red at 3b8fc64c: W3DR-02, W1 F5, W3DR-07 ×2 (m). W3TL-23 closed as test-gap (new green test). W3TL-04 latent-dead (`reconcile_unknown` no prod caller, m; dispute W4MT, Sol agrees).
+- ids: W4MT-1 (openrouter.py:9-10, :274-276; pilot_supervised.py:352-358: any non-200 incl. 502/504 released at cost 0 → re-planned; present at 3b8fc64c); W4CEB-1 (model_ledger.py:266-343, model_runtime.py:58, :187: settle on peer-swept `unknown/lease_expired` keeps outcome → paid answer never reused, fallback pays again; red `rwl/W4-conversation-engine-b:service/tests/test_w4_ceb_lease_lapse_settle_pg.py`); W4CEB-14 (lease guard assumes total deadline; httpx per-phase); W4CEB-17 (replayed failures billed without fix); W4CEB-19 (fallback + MAX_ATTEMPTS=1 → refused, no handover); W4SS-4 (model_runtime.py:248 recheck before reserve/mark_calling locks); W4MT-9 (pilot_supervised.py:307-318 lease sweep misses old `calling` rows); W4MT-18 (openrouter.py:125-128 cost overflow → unknown w/o generation id); W4DD-03 (openrouter.py:294-295 200 body unbounded, decompression bomb); W4DD-06 (non-200 2xx/3xx released); W4CEC-11 (draft-only scope skips `planning_block` → paid call per inbound); W4MA-05 + W4DS-09 (`grok_daily_cost` nullable `account_id` in PK: SQLite upsert never conflicts → cap never runs, m M5; PG insert fails).
+- live: latent — 0 model-call rows, model off (m).
+- **dispute OPEN: W4MA-05 vs W4DS-09** — does `llm_client._reserve` (:740, called :1075) ever get `account_id=None`? live writer m (W4MA), None caller unproven (g). Owner: **W5 llm-profile-learning**.
+- fix: G5 fix + only 4xx (and proven refusals) release; 5xx after wire start ⇒ unknown; settle from `unknown` resets outcome; total deadline + 1 MB cap + `Accept-Encoding: identity`; cap row keyed NOT NULL (sentinel).
+- OQ: OQ-14, OQ-21.
+
+### G6 (W4 adds) · Wrong price / invented discount
+- ids: W4CEB-7 (model_output.py:149-158, :383-399 discount vocabulary misses "half off" / "2 for 1"; denial exemption with contrastive "but"); W4MA-08 (20260611_0100_automation_kind.py no backfill × ai_chatter.py price-band query: pre-0032 automation sends counted as human paid asks → price bands; MA-2 = 0 on engine PG, relay DB not read).
+- related: W4MB-06 Moxy price-0 branch (in G13).
+- live: latent — sending off; relay not running (m).
+- fix: judge concept match for discounts; backfill `automation_kind` or exclude the Automation sentinel.
+- OQ: OQ-16.
+
+### G7 (W4 adds) · Stuck forever; health green
+- ids: W4CEB-2 (operator.py:78-92, model_config.py:92: default handover target never a valid actor → `handover_pending` forever); W4CEB-21 (operator_v2.py:325-336, :650-652 `unresolved` caps drop items silently); W4OFR-03 (health.py:57-59 verified connection ignores `expires_at` → `needsAttention` false); W4OFR-04 (repo.py:815-816, :766 quarantined fan with no state row invisible everywhere).
+- live: latent (i; 0 handovers / quarantines not measured).
+- fix: G7 fix + handover target = validated actor or queue; backlog marker per capped kind; health reads expiry + binding; list fans by quarantine as well as state.
+
+### G8 (W4 adds) · Fan / staff signals not honoured: stop, newer message, takeover
+- same root cause, widened: no single "newer input" / hold predicate (≥8 copies, W4SS-3) read by every origin.
+- ids: W4SS-1 — blocker (approval.py:110-122; pilot_scope.py:373-374; events.py:100-145, :336-337: accepted-but-unprojected fan message invisible → older approved draft sends when no pilot scope; red `rwl/W4-trace-supersede:service/tests/test_w4_trace_supersede_seams_pg.py::test_w4ss1_*`); W4SS-3 (8 divergent newer-input checks); W4SS-5 (pending branch no direction/binding filter → cancels instead of defers); W4SS-8 (campaigns.py:86-124, :338-435 send over unanswered inbound, kill engine draft; OQ-22); W4SS-9 (launch_engagement/readers.py:16-21 no binding filter); W4CEB-5 (journey.py:587-590, :633-641 "maybe later" overwrites opt-out → lapses to open); W4CEB-9 (pilot_ingress.py:27-32 catch-up ingress dated before scope dropped → stop unclassified); W4CEB-13 (journey.py:604-608 silent continue); W4CEC-2 — blocker-cond (pilot_scope.py:427-430, :391-407: trial exception lifts `human_sent` hold, held deletions, chat-queue digests; OQ-24); W4CEC-3 (exception never checks fingerprint, no expiry); W4CEC-14 (absence-as-proof deletion; non-numeric id wedges account); W4MT-2 (pilot_supervised.py:525-526 kill switch off + restart ⇒ no webhook intake, fan stops lost); W4MT-8 (pilot_draft.py:111-112 validate before intake → 409, inbound lost).
+- live: latent — sending off, 0 scope rows; SS-1 0 pending projections (m).
+- fix (code judo): one `newer_input(s, runtime, fan, epoch)` (pending OfIngress + pending projections + revision, binding-scoped) inside the G8 `controls.reason(fan)` chain; intake always before validate; exception = takeover only, fingerprint-bound, `valid_until`; pause kind stored durably.
+- OQ: OQ-12, OQ-17, OQ-18, OQ-22, OQ-24.
+
+### G9 (W4 adds) · Account holds not uniform
+- ids: W4CEB-3 (operator_v2.py:968-987, :1054-1056 any non-holding digest with same key proves a deletion → lifts account-wide `pilot_evidence_pending`; one key reusable); W4DS-13 (onlyfans_pilot_models.py:472-474, :329-345, :388-401 lease key incl. tenant, receipts w/o account → cap by caller locks only).
+- live: latent — 0 scope rows (m).
+- fix: G9 `SendHolds`; proof = exact type + message id + recipient, one-use; receipts carry account + FK.
+
+### G10 (W4 adds) · Cross-account / binding scoping (inv. 8)
+- same root cause (keys by account or nothing; DB enforces none: single-column FKs, RLS without policies).
+- ids: W4TI-01 (pilot_supervised.py:100-140 foreign provider event stored + holds pilot fan; red `rwl/W4-trace-isolation:service/tests/test_w4_trace_isolation_pilot_foreign_provider_pg.py`); W4TI-02 (single-column binding/item FKs, onlyfans_engine_models.py:22 … :493 + migrations); W4TI-03 (RLS w/o `CREATE POLICY` — **live-confirmed m**, doc-only harm); W4TI-04 (two resolvers; `None` = any account); W4TI-06, W4TI-07 (mutants survived: no shared-fan-id / rebind tests); W4DM-06 (mass_message_funnels no owner, relay multi-user); W4DM-09, W4DM-10 (`uq_event_dedupe` w/o account), W4DM-12 (Blacklist global, OQ-W4DM-a), W4DM-29; W4DS-10, W4DS-11 (`command_key` global), W4DS-12 (model_call fan not tied to request), W4DS-14; W4MA-11 (chatter grants: last row deleted ⇒ full access); W4MA-14; W4OFR-06 (read router on relay without AgencyScopeMiddleware; not on running app, OFR-1 n/a m); W4OFR-18 (authz and read in different sessions); W4OFR-26 (no cross-tenant HTTP test); W4OFR-28 (`list_bindings` / `get_binding` no channel filter); W4CEB-16 (operator_v2.py:597-601); W4MT-6 (M1: configuration_api.py:261 ownership route's only tenant check deletable, 69/69 green). New evidence: W3FA-03 red 2/2 (`rwl/W4-trace-isolation:service/tests/test_w4_trace_isolation_resolve_pg.py`); W2SC-14 narrowed.
+- live: no live cross-account path (m, W4TI + W4OFR); 1 binding live (OFR-3 m).
+- fix: G10 fix + `UNIQUE(account_id,id)` on bindings + catalog_items, composite FKs; one `resolve_connection(..., tenant, account)` scope required; two-account same-fan-id tests; relay single-tenant decision or owner columns.
+- OQ: OQ-W4DM-a (relay single-tenant?) → owner.
+
+### G11 (W4 adds) · Credentials exposed / at rest
+- **OQ-26 secrets at rest:** W4MB-02 (20260820_0100_user_llm_keys.py:45; tenant_keys.py:19-20 agency LLM keys plaintext); W4DM-05 (import_legacy.py:75-97, :162-175 via server.py session bootstrap + admin mutations: cookies + plaintext proxy password into SQL each capture); W4DM-28 (mirror never deletes → deleted proxy / account creds stay); W4DM-15 (models.py:2680, :2768, :2802 user / chatter passwords + invite token plaintext); W4MA-10 (0022/0200 migrations, auth.py:519, :540 plaintext compare `!=`; OQ-W4MA-a); W3RCA-10 (W3, not recounted: capture-context decrypted proxy URL).
+- other: W4MA-18 (env.py:68 query-string passwords printed); W4MT-11 (content_sync_api.py:89-93, configuration_api.py:101, :147 raw `str(exc)` to client); W4OFR-14 (raw DB text to wire, latent); W4DS-06 (snapshots 0081 / 0087 `sealed_config` tables no RLS / REVOKE).
+- live: relay-only items not on running stack (m, n/a); W3RCA-10 route configured (W3 X17). W4DM-05/-28 not Live-risk (Fable 11:2x: server.py unreachable from running app).
+- fix: G11 fix + hash passwords / invite tokens (KDF, rehash on login); encrypt keys + proxy creds under host-only key; stop mirroring JSON creds into SQL (or reconcile deletes).
+- OQ: OQ-26 (priority = owner), OQ-W4MA-a / OQ-W4DM-b (plaintext decision vs public-IP default deploy).
+
+### G12 (W4 adds) · Real-looking ids / names in the public repo
+- ids: W4MB-01 (20260805_0100_customs_owed_column.py:13-14 account/fan id pair + fan nickname; 20260819_0200_cotag_brain_settings.py:11-12); W4MA-12 (20260524_0100_employees_per_user.py:54 username drives backfill; 20260522_1208:14-15 tx hash; 0053/0054 persona text); W4DM-25 (models.py:1627-1631 personal-looking default handle + stale contracts); W4DS-16 (db/repo.py:54 creator handles; 6/9 functions dead).
+- live: present in repo HEAD (m by lanes); values not repeated here.
+- fix: synthetic placeholders; history rewrite = owner.
+- OQ: OQ-15.
+
+### G13 (new) · Schema line / upgrade path
+- root cause: three schema sources (init_db `create_all` + catch-up, relay alembic line whose 0001 = live-ORM `create_all`, engine snapshots + `check_schema` digest pins) with no single path from any existing DB to HEAD; DB guards only as strong as the pin, not tested.
+- (a) R0 / engine line: W3DR-06 (W3, not recounted: R0 HEAD 0129b refuses live 0133; no schema.py-only fix, W4DS m) + **OQ-21b** (default (a) rebase R0 onto the 0133 line; (b) downgrade only if MB-1 zeros — measured 0,0,0,0,0, vacuous; (c) stamp = never); W4DS-01 (16 `fastt_runtime` tables outside alembic + check_schema, 3 drifted DDL copies; DS-3: schema absent on engine DB → latent there); W4DS-02 (operations.py:32, :129-142 pin can't back up 0133 before 0133→0136; no app-level way back); W4DS-03 (unknown `onlyfans_since` tag silently skipped); W4DS-04 (guard pins ignore tgattr / proconfig / prosecdef); W4DS-05 (vault-frozen + reconnect guards not verified at boot; DS-2 present live m); W4DS-07 + W4MB-08 (snapshots 0089 / 0090 edited in place after commit; MB-2 stale expectation); W4MB-13 (revisions build tables from live ORM).
+- (b) relay SQLite line: W4DM-01 (engine.py:211-232 catch-up `DEFAULT CURRENT_TIMESTAMP NOT NULL` on populated table → init_db raises, relay serves 500s; m sqlite repro); W4DM-02 (unique-index catch-up failures swallowed); W4DM-03 (non-role relay on PG URL runs create_all on engine PG); W4DM-04 + W4MA-01 (documented `alembic upgrade head` on self-healed DB always fails at 0002; 14 non-idempotent revisions, m) + W4MB-14 (0059/0063/0064 same); W4DM-07 (Moxy intent FK missing on create_all DB); W4DM-16; W4DM-21 (catch-up untested, mutant survived); W4MA-02 (0001 not reproducible); W4MA-03 (attribution view only via migrations → fresh init_db 0 views → stats 500; MA-1 present on PG); W4MA-04 (0006 / 0026 silently NULL account + relabel provider if forced, m); W4MA-06 (55/55 downgrades destructive; `downgrade base` 106 → 17 tables, m) + W4MB-07; W4MA-07 (env.py cwd default creates/targets wrong DB, m); W4MA-09 (bought_amount drop, manual preservation); W4MA-13, W4MA-15 (Automation sentinel only via migration, 0 on init_db, m), W4MA-16, W4MA-17, W4MA-19, W4MA-21 (no suite runs relay revisions).
+- (c) DB guards weaker than invariants (rule: all W4MB here): W4MB-03 (0129b unknown guard survives 111 tests once pin re-hashed, m) + W4DS-08 (settled CHECK → `true` survives, m); W4MB-04 (model-call INSERT unguarded), W4MB-05 (decision `unknown→held→queued` bypass), W4MB-12 (generation N+1 while N unknown) — inv 5; W4MB-10 (approval actor / expiry not frozen) — inv 7; W4MB-06 (Moxy branch: paid item at price 0, ≈ G6); W4MB-09 (`of_fans_evidence`, `of_ledger_exclusion`, policy-change no append-only guard); W4MB-11 (two live grants per offer); W4MB-15, W4MB-16, W4MB-17, W4MB-18, W4MB-19, W4MB-20 (PG-only rebuild, JSON rename, unnamed drops (W2DB-00 class), CHECK mismatch, snapshot runner ×10, guard looseness).
+- live: **latent** on the running stack — engine PG 0133 = schema HEAD 0133 (m); `fastt_runtime` absent (DS-3); relay SQLite not running (MA-3, DM-1/-2 n/a m). Relay items live on any fresh / existing relay deploy (i).
+- fix (code judo): relay — init_db is the only SQLite path (stamp a `selfheal` sentinel, docs drop the alembic step, catch-up per column with constant defaults, unique-index failure = boot error, seed sentinel + view in init_db); engine — roll-forward only (every downgrade raises), snapshot sha256 asserted, `fastt_runtime` under alembic + check_schema; one `_pg` test per DB guard (insert/update the forbidden transition → raise).
+- OQ: OQ-21, OQ-21b.
+
+### G14 (new) · Content safety
+- root cause: safety / judge regexes run on un-normalised text with a fixed contextual exemption list; no self-stated-age rule; safety tests not collected.
+- ids: W4CEC-4 (safety_context.py:8-15, :32-38; callers model_output.py:87, :93, journey.py:189: "schoolgirl" / "stepsis" / "shy teen" roleplay passes both checks + judge unless the fixed context word appears; red 7/7 `rwl/W4-conversation-engine-c:service/tests/test_w4_conversation_engine_c_safety.py`); W4CEB-6 (model_output.py:354, :491-493 "I’m 17" (curly) / "I'm only 17" / "seventeen" pass age gate); W4CEB-8 (curly apostrophe normalised in one place only; refusal / human-claim / `_LATER` regexes on raw text); W4CEC-16 (safety_context / prompt_registry / recovery / sales tests nested, not collected).
+- live: reach **187** inbound messages match the minor-adjacent regex (m count, no text read; some benign, g); harm latent — sending disabled (m).
+- fix: never exempt schoolgirl/boy, teen, step-* terms; normalise once (NFKC, ’‘→', zero-width strip) before every judge regex; any self-stated age < 18 (digits or words) ⇒ hard stop + human handover; move gating tests top-level.
+- OQ: **OQ-25** (ask owner, with OQ-17); default hard stop, blocker before any autonomous send.
+
+## W4 rest
+
+| ids | verdict | note |
+|---|---|---|
+| W4DD-01 | YAGNI | structure (Sol rejected defect) |
+| W4DD-02, W4DD-05 | fix | openrouter table doc; decode bound test for gzip/br |
+| W4DD-07 | policy | OQ-W4DD-a: `sk-` synthetic fixtures under REVIEW #1? default allowed |
+| W4SS-2 | fix | R04 can't go red; per-seam tests added (kill M1/M2) |
+| W4SS-6 | fix | doc: staff-msg cancel located, lazy |
+| W4SS-7 | policy | consume_dispatch → POST window; dispute Sol blocker vs lane minor; name boundary in inv. 7 |
+| W4SS-10 | fix | stale refusal counts vs call budget; newest msg gets no draft |
+| W4TI-05 | dup-of | W1-15 / W3RCT-25 (Sol rejected as new) |
+| W4CEB-11, W4CEB-12 | YAGNI | structure: inert journey knobs (delete); identity-line precedence ×2 |
+| W4CEB-15, W4CEB-18, W4CEB-20, W4CEB-24 | fix | 2nd approve audit row; ack not in txn; None profile → AttributeError; permissive duck-typed defaults |
+| W4CEB-22 | fix | judge quantity claims ("10-pic set") |
+| W4CEB-23, W4CEB-25, W4CEB-26, W4CEB-27 | YAGNI | dead `prefixed`; dup rule tables / keys; fixtures in prod |
+| W4CEB-28 | fix | doc |
+| W4CEC-5 | fix | tip asks reach prompt examples (inv. 12); red 5 in same file as G14 |
+| W4CEC-6, W4CEC-7, W4CEC-8, W4CEC-9, W4CEC-17, W4CEC-18 | YAGNI | structure; CEC-7 = route readers via `scope_contract.load` (W2SC-10 judo) |
+| W4CEC-10, W4CEC-13, W4CEC-15, W4CEC-19 | fix | fail-closed mislabels (draft cancelled, card price on text-only, credential hold hides cause, refusal reason lost) |
+| W4CEC-12, W4CEC-20 | fix | prompt injection via history / example lines; one untrusted-text helper |
+| W4DM-08, W4DM-17 | fix | `sqlite_where`; closed-set CHECKs |
+| W4DM-11 | fix | `AutomationRule.is_enabled` default True (inv. 4); relay |
+| W4DM-13 | fix | FanSafetyFlag "append-only" vs CASCADE |
+| W4DM-19 | policy | fan IP / UA retention |
+| W4DM-18, W4DM-20, W4DM-22, W4DM-23, W4DM-24, W4DM-26 | YAGNI | nit / structure; DM-20 delete script; DM-22 split models.py after freezing 0001 |
+| W4DS-15, W4DS-17, W4DS-19, W4DS-20 | YAGNI | structure (check_schema 370 lines; mixins; 3 sources of truth) / nit |
+| W4DS-18, W4DS-21 | fix | assert metadata table set; mismatch msg names revisions |
+| W4MA-20 | fix | doc (claims ≠ code ×8) |
+| W4MA-22 | YAGNI | view SQL owner (fix with W4MA-03) |
+| W4MT-4, W4MT-7, W4MT-13, W4MT-14, W4MT-16 | YAGNI | structure: auth gate ×14, tick 228 lines, private imports, v1/v2 both mounted |
+| W4MT-5 | fix | 53/57 broad excepts unlogged (MT-1: 0 5xx live) |
+| W4MT-12 | dup-of | W3RCA-S2 (`Refused` by message text) |
+| W4MT-15, W4MT-17 | fix | vault cancel no evidence + rmtree before commit; doc |
+| W4OFR-01, W4OFR-02, W4OFR-07, W4OFR-16, W4OFR-17 | fix | money views disagree (spend vs earnings vs financials; limit before filter, red `test_w4_onlyfans_read_earnings_pg.py`; stale totals; reasons overwritten) |
+| W4OFR-08, W4OFR-09, W4OFR-12 | fix | red `test_w4_onlyfans_read_contract.py` (non-ASCII bearer 500; Unavailable TypeError; fan id aliases) |
+| W4OFR-10, W4OFR-11, W4OFR-13, W4OFR-19 | fix | silent broad except / no degrade / outcome coercion / swallowed facts error |
+| W4OFR-15, W4OFR-20 | fix | doc (millicents mislabel; refusal-vs-empty) |
+| W4OFR-21 | fix | test-gap: fake repo hides batched paths |
+| W4OFR-22, W4OFR-23, W4OFR-24, W4OFR-25, W4OFR-27 | YAGNI | structure; OFR-22 = G10 judo (one scoped read) |
+
+## W4 disputes
+- **OPEN: W4MA-05 vs W4DS-09** — `llm_client._reserve` with `account_id=None`? Owner W5 llm-profile-learning (G5).
+- W4SS-7 severity (Sol blocker vs lane minor/doc) → policy row.
+- W1-10 should be minor (W4SS, i). W1-12 partial: NULL due → wasted turn, no early wire call (W4MT, i).
+- W1 DB-17 wrong: `of_vault_sync_frozen` blocks DELETE (W4DS m, Sol agrees; DS-2 trigger live m).
+- W3TL-04 latent-dead (W4MT, Sol confirmed). W3FA-14 wording; W3FA-10 reach guard wrong (W4MT, i).
+- G2 "659ea29: n" partly wrong: legacy text-only stop y (W4CEC, i).
+- W3DR-01 fixed by 3b8fc64c (W4DD m); W1 DB-04 fixed at a2f1dda6 (W4CEB m); W3TL-23 closed as test-gap (W4CEB m).
+- W4MB DA "live 0133 skipped 0129b" refuted (W1 C01 + W4 DS-1 / MB-3 m).
+- Unplaced: none.

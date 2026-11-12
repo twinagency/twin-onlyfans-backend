@@ -1,4 +1,6 @@
-"""Part B: release a Plan C fan held by an UNKNOWN send, only when provider history PROVES the message is absent.
+"""Part B: retire the hold of a Plan C fan held by an UNKNOWN send, only when provider history shows no sign of the message.
+
+(Docstring reworded 2026-11-12: a clean history is evidence for an operator decision, never proof that the send did not happen.)
 
 Live finding (2026-11-11): two test fans were held forever by sends that ended `unknown`. The only release needed the
 exact message to be found (positive reconcile), so if the message never arrived there was no way out. This pins the

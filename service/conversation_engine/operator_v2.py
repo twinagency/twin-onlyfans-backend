@@ -502,8 +502,8 @@ def unresolved(store, tenant, account, actor=None):
             item_id = f'unknown_send:{row.intent_id}'
             note = seen.get(item_id)
             summary = (f'A send to fan {row.fan_id} may have reached the fan (status {row.status}). Do not resend. '
-                       'Provider history showing the exact message releases the hold; so does an audited release when '
-                       'complete provider history read after a 30 minute quiet period proves nothing arrived.')
+                       'Provider history showing the exact message releases the hold; so can an audited release (an operator retirement of unconfirmed work) '
+                       'after a complete provider-history read, 30 minutes of quiet and a newer fan message; that is a decision, not proof it never arrived.')
             step = 'reconcile_with_provider_history'
             if note is not None:
                 step = 'awaiting_provider_proof'
@@ -1089,8 +1089,9 @@ def reconcile(store, tenant, account, item_id, body):
 
     unknown_send: audit only. The intent stays unknown and its fan stays held, no key is replaced, nothing is
       resent and it is never marked not-sent: releasing it needs positive provider history (send_recovery.reconcile)
-      or the separate audited absence release (send_recovery.release_unconfirmed_send: complete guarded history after a
-      quiet period, a newer fan message, every other hold intact; the intent becomes unconfirmed, never not-sent).
+      or the separate audited operator retirement (send_recovery.release_unconfirmed_send: complete guarded history after a
+      quiet period, a newer fan message, every other hold intact; the intent becomes unconfirmed, never not-sent;
+      a clean history is evidence for that decision, not proof of non-delivery).
     unlinked_transaction / unreconciled_access on an of_fans_evidence row: a held row (or a stale pending
       transaction) is dismissed with the operator as resolved_by; it is never converted into a grant.
     unreconciled_access on revoked access evidence: audit only (acknowledged, state untouched).

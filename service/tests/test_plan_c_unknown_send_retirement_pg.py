@@ -9,6 +9,7 @@ one group per contract bullet. It reuses the rig and helpers of test_plan_c_unkn
 
 Real PostgreSQL, real Plan C text-only pilot rig, scripted provider; nothing is sent anywhere.
 """
+from dataclasses import replace
 from datetime import timedelta
 import json
 
@@ -254,7 +255,9 @@ def test_no_record_ever_says_not_sent_and_no_unit_is_refunded_by_a_retirement_or
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
         assert policy.used_units >= before['used']
     assert 'not_sent' not in dump and 'never sent' not in dump.lower() and 'not sent' not in dump.lower()
-    assert '"unconfirmed"' in dump
+    with Session(rig.w.database[1]) as s:
+        result = json.loads(s.scalar(select(OfLaunchCommand.result_json).where(OfLaunchCommand.kind == 'release_unconfirmed_send')))
+    assert result['deliveryOutcome'] == 'unconfirmed'
 
 
 # ======================================================================================================================
@@ -386,6 +389,20 @@ def _retire_and_answer(rig, wire, intent):
     return facts(rig)
 
 
+def _real_matcher(monkeypatch):
+    """The rig's account id ('acc-a') is not an OnlyFans-form id, so native AccountScope.parse refuses it (the existing
+    reconcile tests stub the matcher for that reason). Instead of stubbing the matcher, give ONLY the account parser the
+    form it has in production (provider id = the bound creator) so the REAL native matcher and proof hash run."""
+    from native_pilot.scope import AccountScope
+    real = AccountScope.parse.__func__
+
+    def parse(cls, value):
+        if value == ACCOUNT:
+            return cls(db_id=value, provider_id=str(CREATOR_ID))
+        return real(cls, value)
+    monkeypatch.setattr(AccountScope, 'parse', classmethod(parse))
+
+
 def _late_copy(rig, intent, ident=99001):
     """The provider's own history row for the message the lost send DID deliver, found only after the retirement."""
     return provider_message(ident, CREATOR_ID, escape_plain_text(intent.body), at(rig, intent, 3),
@@ -412,8 +429,9 @@ def test_a_late_signed_sent_event_for_the_retired_text_is_kept_as_evidence_and_r
         'an unexplained creator-account message holds or hands over the fan; it is not silently dismissed'
 
 
-def test_late_positive_provider_history_is_recorded_against_the_retired_intent_without_settling_it(scene):
+def test_late_positive_provider_history_is_recorded_against_the_retired_intent_without_settling_it(scene, monkeypatch):
     rig, wire, intent = scene
+    _real_matcher(monkeypatch)
     done = _retire_and_answer(rig, wire, intent)
     row_before = _intent_row(rig, intent)
     late = _late_copy(rig, intent)
@@ -452,8 +470,9 @@ def test_late_positive_provider_history_is_recorded_against_the_retired_intent_w
     ('price', {'price': 500}),
     ('long_after', {'createdAt': '2099-01-01T00:00:00Z'}),
 ])
-def test_late_evidence_must_match_the_retired_payload_exactly(scene, label, patch):
+def test_late_evidence_must_match_the_retired_payload_exactly(scene, monkeypatch, label, patch):
     rig, wire, intent = scene
+    _real_matcher(monkeypatch)
     _retire_and_answer(rig, wire, intent)
     late = {**_late_copy(rig, intent), **patch}
     with pytest.raises(Refused):
@@ -464,8 +483,9 @@ def test_late_evidence_must_match_the_retired_payload_exactly(scene, label, patc
         assert s.scalar(select(OfLaunchCommand).where(OfLaunchCommand.kind == 'late_positive_after_release')) is None
 
 
-def test_late_evidence_needs_the_actor_the_released_state_and_complete_history(scene):
+def test_late_evidence_needs_the_actor_the_released_state_and_complete_history(scene, monkeypatch):
     rig, wire, intent = scene
+    _real_matcher(monkeypatch)
     late = _late_copy(rig, intent)
     with pytest.raises(Refused):                  # still unknown: the ordinary reconcile is the right tool, not this one
         send_recovery.record_late_positive_evidence(
@@ -480,3 +500,41 @@ def test_late_evidence_needs_the_actor_the_released_state_and_complete_history(s
             send_recovery.record_late_positive_evidence(authority(rig), TENANT, ACCOUNT, FAN, intent.intent_id, **args)
     with Session(rig.w.database[1]) as s:
         assert s.scalar(select(OfLaunchCommand).where(OfLaunchCommand.kind == 'late_positive_after_release')) is None
+
+
+# ======================================================================================================================
+# Provenance of the history observation, and a scope stop after the retirement
+# ======================================================================================================================
+def test_a_hand_built_or_edited_history_observation_is_refused_even_when_every_field_looks_right(scene):
+    """Only read_absence_history() builds the observation; release re-derives its fingerprint, so an observation that was
+    edited (e.g. a matching creator message removed) or assembled by hand cannot carry a retirement."""
+    rig, wire, intent = scene
+    age(rig)
+    ours = provider_message(91001, CREATOR_ID, intent.body, at(rig, intent, 3))
+    put(wire, FAN, ours)
+    honest = read(rig, FAN, intent)
+    with pytest.raises(Refused, match='positive reconciliation'):
+        release(rig, intent, honest)
+    edited = replace(honest, messages=tuple(m for m in honest.messages if m['id'] != 91001))
+    refused(rig, intent, edited, 'was not read by this process')
+    wire.history[FAN] = [m for m in wire.history[FAN] if m['id'] != 91001]
+    handmade = replace(read(rig, FAN, intent), pages=2)       # a claim the reader never issued
+    refused(rig, intent, handmade, 'was not read by this process')
+    release(rig, intent, read(rig, FAN, intent))              # the genuine read of the clean chat still works
+
+
+def test_a_scope_stop_after_the_retirement_blocks_the_new_work(scene):
+    rig, wire, intent = scene
+    age(rig)
+    release(rig, intent, read(rig, FAN, intent))
+    current = pilot_scope.describe(rig.w.store, TENANT, ACCOUNT)
+    pilot_scope.set_status(rig.w.store, TENANT, ACCOUNT, 'stopped', expected_revision=current['revision'],
+                           command_key=K(60), actor=ACTOR, reason='stop after retiring an unconfirmed send')
+    posts = facts(rig)['posts']
+    unpace(rig)
+    for _ in range(4):
+        try:
+            rig.pilot.tick()
+        except Refused:
+            pass
+    assert facts(rig)['posts'] == posts

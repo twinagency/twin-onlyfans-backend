@@ -1,8 +1,11 @@
 """Audited positive receipt reconciliation through the existing delivery authority.
 
-Also the one audited way to release a Plan C send whose provider history PROVES the message is absent
-(release_unconfirmed_send); see the module-level notes there before changing anything about it.
+Also the audited OPERATOR RETIREMENT of a Plan C text send whose outcome stayed unconfirmed
+(release_unconfirmed_send): a complete, fresh provider-history read that shows nothing that could be ours is
+evidence for an operator decision, never proof that the original send did not happen. See the notes there before
+changing anything about it.
 """
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime,timedelta
 import difflib
@@ -21,15 +24,19 @@ RETIRED_UNCONFIRMED_TEXT = "operator_retired_unconfirmed_text"
 RELEASED_UNCONFIRMED_SEND = "operator_released_unconfirmed_send"
 
 
-def snapshot(authority,tenant,account,fan,intent_id):
+def snapshot(authority,tenant,account,fan,intent_id,*,released=False):
     with Session(authority.engine) as s,s.begin():
         runtime=authority.store._runtime(s,tenant,account)
         row=authority._intent(s,account,intent_id)
         from conversation_engine.delivery import is_engine_intent
         retired = (row.status == "cancelled" and row.reason == RETIRED_UNCONFIRMED_TEXT
                    and not is_engine_intent(s, row))  # engine intents are one-use: never reopened
+        # A retired (released) ENGINE intent is one-use. It is readable here only to RECORD late evidence about it
+        # (record_late_positive_evidence); reconcile() and every other caller still refuse it.
+        released_ok = (released and row.status == "cancelled" and row.reason == RELEASED_UNCONFIRMED_SEND
+                       and is_engine_intent(s, row))
         if (row.fan_id!=fan or row.binding_id!=runtime.binding_id or
-            (row.status not in ("dispatching","unknown","accepted") and not retired)
+            (row.status not in ("dispatching","unknown","accepted") and not retired and not released_ok)
             or row.wire_version!=1 or row.wire_started_at is None or not row.dispatch_token or not row.attempt_id
             or authority._intent_hash(row)!=row.payload_hash):
             raise Refused("recovery intent unavailable")
@@ -81,6 +88,64 @@ def reconcile(authority,tenant,account,fan,intent_id,*,history,complete,provider
     outcome=authority.record_accepted(tenant,account,intent_id,intent["token"],proof)
     projected=authority.materialize(tenant,account,intent_id) if outcome=="accepted" else False
     return {"recorded":True,"outcome":outcome,"projected":projected,"intentId":intent_id,"resumed":False}
+
+
+def record_late_positive_evidence(authority,tenant,account,fan,intent_id,*,history,complete,provider_message_id,command_key,actor,reason):
+    """Keep a LATE positive observation of a text whose hold an operator already retired.
+
+    The message turned out to exist. That contradicts the premise of the retirement but never reopens it: the intent
+    stays cancelled/operator_released_unconfirmed_send with no receipt, the attempt stays unknown, nothing is sent,
+    refunded or accepted, and the earlier release record is untouched. The observation is stored beside it (audit
+    command + a 'late_positive' section of the attempt evidence) and the conversation is flagged for attention.
+    """
+    from native_pilot.recovery import _matches,proof_hash
+    if complete is not True or type(history) is not list or not 1<=len(history)<=1000:
+        raise Refused("complete bounded recovery evidence required")
+    intent=snapshot(authority,tenant,account,fan,intent_id,released=True)
+    matches=[]
+    for raw in history:
+        try:event=_matches(raw,intent)
+        except Exception:continue
+        matches.append((event,raw))
+    if len(matches)!=1 or type(provider_message_id) is not int or isinstance(provider_message_id,bool) or matches[0][0].message_id!=provider_message_id:
+        raise Refused("positive recovery proof unavailable")
+    event,raw=matches[0]
+    evidence_hash=proof_hash(raw,intent)
+    request_hash=digest(["late_positive_after_release",intent_id,intent["attempt_id"],intent["payload_hash"],evidence_hash,actor,reason])
+    command_identity(command_key,actor,reason,request_hash)
+    from db.models import OfConversationState
+    from db.onlyfans_engine_models import OfEngineAttempt
+    from conversation_engine import pilot_scope
+    from .text_delivery import _attach_evidence,_iso
+    with Session(authority.engine) as s,s.begin():
+        runtime=authority.store._runtime(s,tenant,account)
+        prior=_prior(s,runtime,command_key,LATE_POSITIVE_AFTER_RELEASE,request_hash)
+        if prior is not None:return prior
+        scope,config=pilot_scope.current(s,runtime)
+        if scope is None or fan not in config["fans"]:raise Refused("fan is outside an active or stopped Plan C pilot scope")
+        pilot_scope.authorize(config,actor,"reconcile")
+        row=authority._intent(s,account,intent_id)
+        attempt=s.get(OfEngineAttempt,(account,row.attempt_id)) if row.attempt_id else None
+        if (row.status!="cancelled" or row.reason!=RELEASED_UNCONFIRMED_SEND or row.fan_id!=fan
+                or row.binding_id!=runtime.binding_id or row.attempt_id!=intent["attempt_id"] or row.payload_hash!=intent["payload_hash"]
+                or row.provider_message_id is not None or row.receipt_json is not None
+                or attempt is None or attempt.outcome!="unknown" or attempt.intent_id!=intent_id):
+            raise Refused("recovery intent changed")
+        now=utcnow()
+        before={"intentId":intent_id,"attemptId":row.attempt_id,"status":row.status,"reason":row.reason,
+            "payloadHash":row.payload_hash,"providerObservation":raw,"evidenceHash":evidence_hash,
+            "providerMessageId":provider_message_id,**_retained_send_evidence(s,row)}
+        if not _attach_evidence(s,row,"late_positive",{"command_key":command_key,"observed_at":_iso(now),
+                "provider_message_id":provider_message_id,"evidence_hash":evidence_hash,"created_at":str(event.created_at),
+                "conflicts_with_release":True,"outcome":"unconfirmed_but_observed"}):
+            raise Refused("late evidence could not be attached to the retired attempt")
+        state=s.get(OfConversationState,(account,fan))
+        if state is not None:
+            state.requires_attention=True
+            state.updated_at=now
+        return _record(s,runtime,command_key,LATE_POSITIVE_AFTER_RELEASE,request_hash,actor,reason,before,
+            {"recorded":True,"outcome":LATE_POSITIVE_AFTER_RELEASE,"reopened":False,"intentId":intent_id,
+             "providerMessageId":provider_message_id,"evidenceHash":evidence_hash},now)
 
 
 def retire_unconfirmed_text(authority, tenant, account, fan, intent_id, *, expected_attempt_id,
@@ -180,12 +245,16 @@ def _retained_send_evidence(s,row):
 
 
 # ======================================================================================================================
-# Release of an unknown Plan C send that provider history PROVES is absent.
+# Operator retirement of an unconfirmed Plan C text send (policy: 30 minute quiet period, 2 minute history freshness).
+#
+# What this is NOT: proof that the send never happened. A provider history that shows nothing is a view with limits
+# (LIMITATIONS below): a message can be delayed past the read, deleted, or simply not listed. The record therefore
+# stays "unconfirmed" forever and a late positive observation is kept against it (record_late_positive_evidence).
 #
 # retire_unconfirmed_text above is hard-wired to the paused single-fan NATIVE pilot. The FansAPI Plan C trial had no way
 # to release a fan whose send ended unknown unless the exact message could be found (reconcile). This is the other half:
 # only when a complete, fresh, guarded provider-history read shows NO message that could be ours, after a quiet period,
-# with a newer fan message waiting, may an authorized operator release the HOLD (never the record):
+# with a newer fan message waiting, may an authorized operator retire the HOLD (never the record):
 #   * the intent becomes cancelled/"operator_released_unconfirmed_send": never claimed as not sent, wire fields and the
 #     delivery-unit reservation stay (used_units never decreases), the engine decision is held, its request cancelled;
 #   * every other hold (stop, no-contact, takeover, restriction, safety/operator case, pending evidence) still wins;
@@ -197,7 +266,21 @@ MATCH_WINDOW=timedelta(minutes=5)        # the window reconcile() uses; any unkn
 FRESH_READ=timedelta(minutes=2)          # the history read must have just finished
 CLOCK_SKEW=timedelta(seconds=30)
 MAX_HISTORY=1000
+LATE_POSITIVE_AFTER_RELEASE="late_positive_after_release"
+LIMITATIONS=("provider history is the provider's own view of this chat; observing no matching message does not prove "
+             "the original send was not delivered",
+             "a message deleted or unsent by anyone, or omitted by the provider, would not appear in it",
+             "a delivery delayed past this read would not appear in it")
 RELEASABLE_REASONS=("invalid_receipt","ambiguous_transport","dispatch_expired")   # never provider_identity_conflict (a receipt exists)
+
+
+_ISSUED=OrderedDict()                    # fingerprints of the observations read_absence_history() built in THIS process
+_ISSUED_MAX=256
+
+
+def _fingerprint(read):
+    return hashlib.sha256(json.dumps([read.account_id,read.fan_id,read.creator_id,read.digest,read.complete,read.reached_start,
+        read.pages,read.started_at.isoformat(),read.ended_at.isoformat()]).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -212,6 +295,12 @@ class HistoryRead:
     pages:int
     started_at:datetime      # naive UTC, before the first request
     ended_at:datetime        # naive UTC, after the last response
+
+    @property
+    def coverage(self):
+        """How far back the read reached: the chat start, or at least past the dispatch, or not far enough."""
+        if not self.complete:return "incomplete"
+        return "chat_start" if self.reached_start else "older_than_dispatch"
 
     @property
     def digest(self):
@@ -286,7 +375,10 @@ def read_absence_history(authority,tenant,account,fan,intent_id,*,client,max_pag
             break
         if covered:break
         next_page=result.next_page
-    return HistoryRead(account,fan,creator,tuple(messages),bool(reached or covered),reached,pages,started,utcnow())
+    observed=HistoryRead(account,fan,creator,tuple(messages),bool(reached or covered),reached,pages,started,utcnow())
+    _ISSUED[_fingerprint(observed)]=True
+    while len(_ISSUED)>_ISSUED_MAX:_ISSUED.popitem(last=False)
+    return observed
 
 
 def _squash(text):
@@ -305,7 +397,7 @@ def _similar(a,b):
 
 
 def _absence_findings(history,*,fan,creator,body,dispatched,known_ids,next_input_id,now):
-    """None when history proves no message that could be ours exists; otherwise the (fixed-vocabulary) reason."""
+    """None when history shows no message that could be ours; otherwise the (fixed-vocabulary) reason. Not a proof of absence."""
     from .native_protocol import message,NativeProtocolError
     seen,next_seen=set(),False
     for raw in history.messages:
@@ -335,7 +427,9 @@ def _absence_findings(history,*,fan,creator,body,dispatched,known_ids,next_input
 
 def release_unconfirmed_send(authority,tenant,account,fan,intent_id,*,expected_attempt_id,expected_revision,next_input_id,
                              history,command_key,actor,reason,quiet_seconds=QUIET_SECONDS):
-    """Release the HOLD of one unknown Plan C plain-text send whose absence the provider's own history proves.
+    """Retire the HOLD of one unknown Plan C plain-text send after a complete, fresh provider-history read shows no sign of it.
+
+    This is an operator decision on unconfirmed work, not a finding that the send did not happen (see LIMITATIONS).
 
     Idempotent per command key (replay returns the first result without re-checking). Every refusal leaves the intent,
     the fan's hold, the reservation and the engine records exactly as they were. The actor needs the existing
@@ -413,6 +507,8 @@ def release_unconfirmed_send(authority,tenant,account,fan,intent_id,*,expected_a
             next_input_id=next_input_id,now=now)
         if finding is not None:
             raise Refused("absence is not proven ("+finding+"); use positive reconciliation if the message was delivered")
+        if _fingerprint(history) not in _ISSUED:
+            raise Refused("provider history was not read by this process (fail closed: read and retire in the same process)")
         canonical_out=s.scalars(select(Message.message_id).where(Message.account_id==account,Message.fan_id==fan,
             Message.direction=="out",Message.created_at>=dispatched-COVER_MARGIN))
         if any(ident not in known for ident in canonical_out):
@@ -448,15 +544,18 @@ def release_unconfirmed_send(authority,tenant,account,fan,intent_id,*,expected_a
             "dispatchedAt":_iso(row.dispatched_at),"wireStartedAt":_iso(row.wire_started_at),"lastActivityAt":_iso(last),
             "quietSeconds":quiet_seconds,"nextInputId":next_input_id,"scopeRevision":scope.revision,"controlRevision":state.revision,
             "providerHistory":{"digest":history.digest,"messages":len(history.messages),"pages":history.pages,
-                "reachedStart":history.reached_start,"oldest":_iso(oldest),"startedAt":_iso(history.started_at),
-                "endedAt":_iso(history.ended_at),"creatorId":creator},**evidence}
+                "reachedStart":history.reached_start,"coverage":history.coverage,"oldest":_iso(oldest),
+                "startedAt":_iso(history.started_at),"endedAt":_iso(history.ended_at),"creatorId":creator,
+                "quietSeconds":quiet_seconds,"freshnessSeconds":int(FRESH_READ.total_seconds()),
+                "limitations":list(LIMITATIONS)},**evidence}
         row.status,row.reason,row.updated_at="cancelled",RELEASED_UNCONFIRMED_SEND,now
         # Retain the reservation and every wire field. Release only this hold.
         authority._release_hold(s,row,tenant)
         from conversation_engine.delivery import released_unconfirmed
         released_unconfirmed(s,row)
         _attach_evidence(s,row,"release",{"command_key":command_key,"released_at":_iso(now),"history_digest":history.digest,
-            "history_messages":len(history.messages),"quiet_seconds":quiet_seconds,"next_input_id":next_input_id,
+            "history_messages":len(history.messages),"history_pages":history.pages,"coverage":history.coverage,
+            "quiet_seconds":quiet_seconds,"next_input_id":next_input_id,"limitations":list(LIMITATIONS),
             "outcome":"unconfirmed"})
         return _record(s,runtime,command_key,"release_unconfirmed_send",request_hash,actor,reason,before,
             {"released":True,"deliveryOutcome":"unconfirmed","intentId":intent_id,"attemptId":row.attempt_id,

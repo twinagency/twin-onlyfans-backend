@@ -288,7 +288,9 @@ def payment_observed(s, intent, kind):
 
 
 def released_unconfirmed(s, intent):
-    """An operator released the hold of an unknown send that provider history proved absent (send_recovery).
+    """An operator retired the hold of an unconfirmed send after a clean provider-history read (send_recovery).
+
+    This is a decision about unconfirmed work, not a finding that the send never happened.
 
     The decision becomes 'held' (the only non-terminal status an unknown decision may take): it is never completed,
     never retried and never called "not sent". Its approval is withdrawn, unsent later parts are cancelled, and the

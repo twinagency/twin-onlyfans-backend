@@ -494,3 +494,116 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - W3DR-01 fixed by 3b8fc64c (W4DD m); W1 DB-04 fixed at a2f1dda6 (W4CEB m); W3TL-23 closed as test-gap (W4CEB m).
 - W4MB DA "live 0133 skipped 0129b" refuted (W1 C01 + W4 DS-1 / MB-3 m).
 - Unplaced: none.
+
+# W5+W6 (a2f1dda6 + deltas c48eb755 / 8d0001f9..bd47f63d, closed 2026-11-12)
+
+- Source: `.scratch/rwl-W5/STATE.md` + `.scratch/rwl-W6/STATE.md` (Summary, Live-risk, Orphan), 25 lane `FINDINGS.md` (W5 11, W6 14), live `rwl/W6-live-verify:.scratch/rwl-W6/live-verify/RESULTS.md` (38 checks: 28 confirmed / 5 failed / 5 blocked, 0 OF calls). Programme `.scratch/rwl-programme/STATE.md`; Fable 17:4x decisions applied.
+- Pins: lanes at a2f1dda6; delta lanes delta-browserbase-login (c48eb755), delta-history-reads (8d0001f9..bd47f63d). Running (m): engine `8d0001f9` (since 11:43:23); **OF worker restarted 15:34:07 on 943f3851 (unreviewed)**; creator sign-in listener :8479 up since 2026-11-11.
+- Live (m, W6 S0): sending OFF — 0 delivery policies, 0 pilot scope, 0 automation rules, 0 deliveries, 0 model calls. Every harm below is latent unless marked **LIVE**.
+- Same rules as W1–W4. Id prefixes: W5 BB ED LP ME MR NL NR NT RL TA TB; W6 HR SI OC VA VS AX CE MW AA C1 C2 C3 AD AE; `-m<n>` minor, `-S<n>` structure; `-L<n>` live checks not counted.
+
+## W5+W6 counts
+
+- raw: 1373 lane-local ids. Withdrawn, not counted: W5ED-26, W5ME-21, W5ME-24, W5NL-25, W5NR-19, W5NR-38, W5TB-19, W6HR-13, W6HR-18 → **1364** (W5 333, W6 1031).
+- per lane: BB 13, ED 27, LP 41, ME 25, MR 34, NL 36, NR 49, NT 24, RL 27, TA 34, TB 23 · HR 17, SI 55, OC 72, VA 82, VS 90, AX 71, CE 99, MW 81, AA 63, C1 69, C2 82, C3 59, AD 89, AE 102.
+- severity: blocker 33, blk-cond 32, major 479, minor 755, nit 55, unlabelled 10 (W6MW-26 … 35, structure).
+- orphans (no lane id): W6-ORPH-1 (= W5NL-8), W6-ORPH-2, sell_lane.py:467 → G16.
+
+| verdict | ids |
+|---|---|
+| picked (6 groups) | 251 |
+| fix | 177 |
+| YAGNI | 922 |
+| policy — owner | 9 |
+| dup | 5 |
+| **total** | **1364** |
+
+- defaults for the rest: blocker / blk-cond → fix; major → fix, unless structure (-S, class structure, W6MW-26 … 35) or test-gap → YAGNI; minor / nit → YAGNI.
+- groups: G14 38 (blk 10, cond 7, maj 16, min 5) · G15 48 (blk 7, cond 11, maj 29, min 1) · G16 27 + 3 orphans (blk 1, maj 19, min 7) · G5 45 (blk 2, cond 2, maj 37, min 4) · G8 42 (blk 4, cond 9, maj 28, min 1) · G10+G11 51 (blk 4, cond 1, maj 45, min 1).
+
+## W5+W6 groups
+
+### G14 (extended) · Content safety — fix before ANY autonomous send
+- root cause: no age / minor gate on input, model output, or vision; the one "restriction" layer disguises restricted words instead of blocking them; describers are told not to refuse.
+- ids: **W6AA-1** = W6C1-59 — blocker (_common.py:2581-2641 `_RESTRICTED_WORDS` + `_double_first_vowel`: restricted minor/age words get a doubled vowel "to slip the filter", not blocked; 16 relay call sites + native ai_chatter.py:10391); **W6AA-2** (fan under-18 self-statement detected then dropped; W6AE-m13 dup); **W6AA-3** (_outbound.py:54-164 `_guard` / `finalize_draft` has no minor / age, tip-ask or customs check); W6AA-4 = W6C3-3 (operator banned-word filter runs after restriction → `\bteen\b` never matches; ai_chatter.py:10391 → :10521, autoreply.py:814 → :827); W6AA-5 = W6AE-29 (typo layer _common.py:1777-1891 rebuilds the restricted word); W6AA-6, W6AA-7, W6AA-m2, W6AA-m26 (red 7/7 `service/tests/test_w6_automations_engine_a_red.py`); **W6C2-1** (ai_chatter.py:7434-7446 `_DESC_OFF_LIMITS_RE` deliberately omits child / minor terms); W6C2-2, W6C2-3, W6C2-4, W6C2-22, W6C2-57; **W6VA-1** — blk-cond (vault_ai_api.py:2429-2433 "do not refuse"; refusal escalates to a bigger model; no apparent-age field); W6VS-1 (vault_scripts.py:908-937 story / mass lanes by model tier only); W6VS-76; W6CE-2 (inbound_describe.py:65-68, :194-215 "Do not refuse"; child = "awkward"); W6MW-1 — blocker (webhook_dispatch.py:875-965 inbound photo describe has no safety outcome); W6MW-21 (vision.py:66 `is_refusal` needs len < 40; stock refusal is exactly 40, m); **W6AE-1** — blocker (bot asks age, stores "16", keeps going; native via native_planning.py:105 → ai_chatter.py:6713); **W6AE-2** (wcfi.py:844-845, :984 fan fetish text into system prompt unchecked); **W6AE-4** (wcfi.py:2115-2177 no output check before the wire); W6AE-32; **W6AD-5** (pack_claim.py:70-92 `_DELIVERY_PROMISE` misses chat-spelled media promises, m); W6AD-15, W6AD-22, W6C3-25; **W5NR-5** — blk-cond (safety_detect.py:30-41, :233-255 no minor / age category; red `rwl/W5-native-pilot-runner:service/tests/test_w5_nr_safety_detect.py` 8 red m); W5NR-6, W5NR-7; W5MR-1, W5MR-14, W5TA-3.
+- live: latent — sending off (m); W4 reach 187 matching inbound still applies (m count).
+- fix: one `safety_gate(text)` (NFKC + apostrophe / zero-width normalise; minor / age / step-* / school terms; self-stated age < 18 in digits or words) run on fan input AND final output after every rewrite layer, before the wire; hit ⇒ hard stop + human handover. Delete `apply_word_restriction` disguise for minor / age words (block, never mutate). Describers: allow refusal, refusal ⇒ hold + no reuse, add `apparent_minor` output. Move gating tests top-level.
+- OQ: **OQ-25** (default hard stop; blocker before any autonomous send).
+
+### G15 (new, relates G6) · Money asks / offers: tips, customs, invented prices
+- root cause: prompts and code-default ladders ask for tips, sell customs and compute prices per fan; no banned-kind gate; agency manual price not the only source.
+- ids: **W6C1-1** — blocker (ai_chatter.py:518-548, :2652-2658 saved tip-ask flags run a tip-ask turn; `TEXT_ONLY` is a denylist); **W6C1-2** (ai_chatter.py:3123-3167 customs rule "He TIPS for it… SAY THE DOLLAR FIGURE"); **W6C1-3** (legacy tip offers render "only $N more"); W6C1-12, W6C1-15, W6C1-16, W6C1-31, W6C1-67, W6C1-69; **W6AE-5** — blk-cond (wcfi.py:1187-1198 → _customs.py:557-563 customs ETA = timed promise); **W6AE-6** (per-fan price from band / A-B arm / ceiling / cents tail); W6AE-7; **W6AE-8** (tip_reward_config.py:147-155 default rung prices $10-$200); **W6AE-11** (upsell.py:712-900 a sent card cut twice); W6AE-12, W6AE-13, W6AE-16; **W6AD-1** — blocker (pack price from fan spend ladder, not manual price); **W6AD-2** (pack_pricing.py:268-280 `MAX_SOFTEN_RUNGS` walk-down after refusal; red `service/tests/test_w6_automations_engine_d_red.py`); W6AD-3, W6AD-4, W6AD-9, W6AD-10, W6AD-12, W6AD-20; W6AA-10, W6AA-11; W6C2-8, W6C2-16, W6C2-17, W6C2-18, W6C2-23; W6C3-4, W6C3-6, W6C3-13, W6C3-20; W5MR-2, W5MR-3 (OQ-W5MR-a), W5MR-13, W5MR-17; W5NL-2; W5RL-4, W5RL-5 (red `test_w5_rl_persona_lint.py`); W6AX-1 — blk-cond (automation_registry.py:66-81 no banned-kind gate, incl. tip_request); W6VS-23, W6VS-24; W6OC-3 (of_client.py:3675-3680 `send_tip` guarded only by `_owner_fence`, no stop-chain); W6OC-70.
+- live: latent — native vault-mode not running, relay not running, sending off (m).
+- fix: banned kinds (tip ask, customs sell, timed promise) refused at `register()` and at the outbound gate; price = agency manual price or unsellable (no defaults, no ladder, no soften, no A/B); one discount per card, approved variant only; `send_tip` behind the stop chain.
+- OQ: OQ-W5MR-a; with G6.
+
+### G16 (new) · Send-path fail-open — **ARMED** the moment native sending is enabled
+- root cause: `except Exception` around holds / fences returns "go"; pasted blocks reference undefined names, so the guard crashes into the fail-open branch.
+- orphans: **W6-ORPH-1** = W5NL-8 (native_pilot/engine.py:464-467 `except Exception: return result  # fail open`; :496-502 undefined `result` → NameError swallowed → offer passes without repeat / unlinked-payment / already-bought checks; red `test_w5_nl_offer_blocker.py`); **W6-ORPH-2** (engine.py:509 `hero[offer_id]` KeyError on ordinary turns); **sell_lane.py:467** (`self.account_id` in module-level `qualify_snapshot` → NameError on the pull-lift path, escapes native_sales' except = crash, m, Sol confirmed).
+- ids: W5NT-7 (attribution.py:513-538 manual-chatter yield fails open → `log.debug`); W5TA-5 (coordination.py:821-826 fence fail-closed depends on sender env; red `test_w5_ta_fence_fail_open.py`); W5TB-1 (worker.py:474-478, :509-513 lease + cooldown read as go on import error; red `test_w5_tb_fail_open_gates.py`); W5NR-10 (runner.py:504-507 hold read once before vault work), W5NR-13, W5NR-14, W5NR-17, W5NR-20, W5NR-22; W5MR-5, W5MR-6, W5MR-7, W5MR-19, W5MR-21; W6AE-19 (wcfi.py:1686-1695 ownership read error → bot owns); W6MW-6 (webhook_dispatch.py:398-405 spend gate → None, no log); W6MW-36 (webhook_dispatch.py:238 "false" string enables); W6AX-15 (audience_include.py:125-131 three fail-open paths), W6AX-m1; W6AD-m2, W6AD-m35; W6C1-9 (ai_chatter.py:1263-1276 corrupt config → full defaults); W6VA-48 (vault_ai_api.py:2205-2211); W6CE-m70; **W5ED-7** — blocker (gated_worker.py:19-45 pre-send stop exists only in an unlaunched ops monkeypatch); W5ED-23.
+- live: latent — sending off (m); armed on first enable (i).
+- fix: every guard read is fail-closed (exception ⇒ hold + log error), no `return result` in except; lint/test that every name in engine.py / sell_lane.py resolves (pyflakes in run-tests); move the pre-send stop into the real send path.
+
+### G5 (extended) · Retry after an irreversible step (paid model call or OF POST)
+- root cause: retry / requeue decided without knowing whether the paid call or the POST happened; reservation `unknown` treated as "retry".
+- ids — paid regeneration: **W5LP-1** — blocker (profile learner re-calls after unknown; red `test_w5_lp_llm_client_spend.py`); **W5NR-3** — blocker (model.py:263-273 settle fail → draft discarded, input requeued, paid again); W5NR-4, W5NR-11, W5NR-12, W5NL-15; W6AE-22, W6AE-23, W6C3-31, W6C2-13; W6VA-3, W6VA-4, W6VA-5, W6VA-6; W6CE-17 = W6MW-2 (webhook_dispatch.py:92-100 describe budget counts only successes); W5LP-2, W5LP-3, W5LP-4, W5LP-7, W5LP-8, W5LP-9, W5LP-40; W5ME-4, W5ME-5, W5NT-4, W5MR-4, W5MR-16, W5NR-33, W6AE-40, W6C3-11.
+- ids — duplicate sends: **W6AX-2** — blk-cond (automation_executor.py:1756-1778 → :666-676 failed broadcast requeued → up to 3× same mass send; red `test_w6_auth_executor_red.py`); W6AX-5 (:1797-1801 orphan reconcile, no cap); W6AX-23; W6AE-24 (wcfi.py:2192-2213 timeout after OF accepted = "nothing sent"); W6C3-21; W6AD-6 (tip_reward.py:198-240 check → wire → record); W5NL-10; W5TA-4 (red `test_w5_ta_prewire_unknown.py`), W5TA-7; W5NR-16; W5TB-16; W6CE-15; W6MW-4; W6OC-24.
+- live: latent — 0 model calls, sending off (m).
+- fix: G5 fix + record-before-wire (intent row, then POST, then settle); unknown POST ⇒ reconcile against OF history, never resend; unknown model call ⇒ hold, never re-call; executor: failed job after `fn()` started ⇒ `unknown`, not `pending`.
+
+### G8 (extended) · Newer input / staff / stop not honoured
+- root cause: send decisions read input / staff / stop state once, early; skipped rows never advance the input head.
+- ids: **W6HR-1** — blk-cond, **LIVE code** (native_connector.py:204-220, store.py:878-895: skipped tip / unsent / deleted row never `_record`ed → newest inbound never bumps input; runs on the OF worker at **943f3851, unreviewed** (i via W6HR-2 m HEAD); 0 rows_skipped counted (m) → harm latent while sending off); W6HR-2 (recent_inbox.py:95-97 head stuck on a skipped row), W6HR-3 (recent_inbox.py:103-106; vacuous live), W6HR-4; **W6MW-78 — LIVE read path** (unread_preservation.py:78-86 snapshot → fan sends → `read()` clears new badge, i/g); **W6MW-77 — live-checked** (unread_preservation.py:41-42 hard-coded journal dir; L8-1 i: worker env sets ONLYFANS_UNREAD_JOURNAL_DIR, default dir absent; L8-2 0 errors m → latent); W5NL-1, W5NR-1 — blk-cond (service.py:1284-1291 `tolerate_newer` after 45 s), W5NR-2 (OQ-29a), W5NR-8, W5NR-9 (OQ-18), W5NR-15; W5TA-1, W5TA-2, W5TA-6; W5TB-4, W5TB-5; W5MR-8, W5MR-12; **W6C3-1** — blocker (ai_chatter.py:7977-7988 payload jobs skip `skip_list`), W6C3-22; W6C1-4 (ai_chatter.py:3833-3869 untagged staff reply in the OF app not a stand-down), W6C1-5, W6C1-6, W6C1-7, W6C1-10, W6C1-17; W6C2-5, W6C2-11, W6C2-19, W6C2-20; W6AE-3, W6AE-9, W6AE-10, W6AE-36, W6AE-39; W6AD-7, W6AD-17; W6MW-5; W6AA-8; W6AX-4; W5NL-16.
+- live: W6HR-1 / W6MW-78 code is running (i); harm latent — sending off (m).
+- fix: G8 fix + skipped rows still advance the input head (record a placeholder); re-read newest inbound + staff + stop at the wire for every job kind incl. payload jobs; unread restore by message id, not badge; journal dir from VAULT_SPOOL_DIR.
+- OQ: OQ-18, OQ-29a. Unowned: recent_inbox path → W7 delta.
+
+### G10+G11 (extended) · Cross-account scoping + credentials / exposure
+- root cause: login / sign-in / SSE / key lookup trust caller-supplied ids; no principal check; third-party custody of sessions.
+- ids — LIVE: **W5BB-1..4** (browserbase_login.py:284-289, :328-336 returned `ownerId` never compared with the account; :440 shared proxy pool; :435-443 session recording defaults; :247-250 cancel w/o release) — **Browserbase key still set** (carry-a m); login ran 6× since 11:43, bindings 1 → 1 → no cross-account capture so far (m); wrong-creator save needs a first link of a new account (i). **W6SI-18** (creator-sign-in/server.mjs:44 binds 0.0.0.0) — **listening on *:8479** (W6SI-L1 m); unauthenticated → 401 (W6SI-L2 m). **W5ME-9** (9a: `onlyfans_proxy.inventory` absent ⇒ one-proxy-per-account fence inert, W5 L12 m). **W6MW-17** = W5LP-5 = W6VA-17 (tenant_keys.py:90-135 `owners_of` `[]` ⇒ house key billed) — L8-3 m: 1 account, 0 user_accounts links; 0 model calls → harm latent.
+- ids — other: W6SI-1 (creator-sign-in/server.mjs:9, service.mjs:76 reconnect skips the network broker; proxy + owner from caller), W6SI-2, W6SI-5, W6SI-6, W6SI-7, W6SI-8, W6SI-9, W6SI-10, W6SI-13, W6SI-14; **W6CE-1** — blocker (events.py:95-108, :209-212 SSE no principal scoping; relay-only), W6CE-3, W6CE-4, W6CE-6 … 13; W6AX-7 (auth.py:817, :938-944 `require_master` unused → any signed-in user lists / deletes users), W6AX-8 … 12, W6AX-14, W6AX-27; W5ME-2, W5ME-3, W5ME-6, W5ME-26; W6MW-15, W6MW-16 (secrets_store.py:230-247 unreadable secrets cached `{}`); W6OC-6; W5RL-1, W5RL-8; W5MR-9; W6C3-24; W5LP-6, W5LP-10.
+- live: see LIVE ids; rest latent (relay not running / 1 account).
+- fix (owner first): unset the Browserbase key until `ownerId` == account check lands; bind :8479 to 127.0.0.1 / compose network; create `onlyfans_proxy.inventory` or make absence fail-closed; `owners_of` empty ⇒ refuse paid call, never house key; SSE + auth routes require principal / master.
+- OQ: OQ-26, OQ-28.
+
+## W5+W6 rest
+
+- notable rest fixes (blockers / blk-cond): W5ED-2 (Dockerfile.onlyfans:7 × .dockerignore misses gitignored secrets, G11 class); W5NT-1 (load_test.py:318-321 can wipe the engine DB — data loss, manual tool); W6OC-1 (of_client.py:2164-2204 OF-native welcome, no owner fence, G1/G9 class); W6VA-2 (vault_ai_brief.py:388-422 sellability ignores confidence, G4 class); W6CE-5 (employees.py:749-761 Automation sentinel spoofable → attribution).
+- class hints (fix with the named W3/W4 group): G1 W5NL-4, W6OC-8 … 12, W6C1-8, W6C1-13, W6C1-68, W6C2-14, W6AA-12 · G4 W5NL-3, W5MR-18, W6AA-13, W6C1-14, W6AD-11, W6AD-18, W6VS-5, W6VA-18, W6VS-90 · G7 W5RL-2, W6OC-15, W6AX-17, W6AX-21, W6VS-13 … 18, W5ME-1 · G9 W6VS-12 (vault_upload.py:889-983 uploads = OF writes, no stop check; engine-reachable i; W6VS-L1 0 m), W6OC-2, W6OC-4, W6AX-3.
+- policy — owner (9, values never copied, OQ-15): W6AD-16, W6MW-9, W6OC-72 (public-repo scrubs), W5ED-1, W5NT-2, W5MR-15, W6C1-64, W6C2-61, W6AE-m4.
+- dup (5): W6AE-m13 = W6AA-2; W5ED-16 = W3RCT-14; W6AX-28 = W1 DOC-08; W6VA-81 = CVA-16; W6AE-m10 = W6VS-24.
+
+| lane | fix | YAGNI | dup / policy |
+|---|---|---|---|
+| W5BB (delta-browserbase-login) | — | W5BB-5 … 13 (9) | — |
+| W5ED (engine-deploy) | W5ED-2 … 6, W5ED-8, W5ED-9, W5ED-28 | W5ED-10 … 15, W5ED-17 … 22, W5ED-24, W5ED-25, W5ED-27 (15) | dup: W5ED-16; policy: W5ED-1 |
+| W5LP (llm-profile-learning) | — | W5LP-11 … 39, W5LP-41 (30) | — |
+| W5ME (moxy-eval-proxy) | W5ME-1 | W5ME-7, W5ME-8, W5ME-10 … 20, W5ME-22, W5ME-23, W5ME-25, W5ME-27 (17) | — |
+| W5MR (moxy-runtime) | W5MR-10, W5MR-18, W5MR-20, W5MR-24 | W5MR-11, W5MR-22, W5MR-23, W5MR-25 … 34 (13) | policy: W5MR-15 |
+| W5NL (native-pilot-ledger) | W5NL-3 … 7, W5NL-14, W5NL-26 | W5NL-9, W5NL-11 … 13, W5NL-17 … 24, W5NL-S1 … S11 (23) | — |
+| W5NR (native-pilot-runner) | W5NR-18, W5NR-23 … 25 | W5NR-21, W5NR-26 … 32, W5NR-34 … 37, W5NR-39, W5NR-S1 … S12 (25) | — |
+| W5NT (native-pilot-tools) | W5NT-1, W5NT-3, W5NT-5, W5NT-6, W5NT-15 | W5NT-8 … 14, W5NT-16 … 24 (16) | policy: W5NT-2 |
+| W5RL (runtime-learning) | W5RL-2, W5RL-3, W5RL-6, W5RL-7 | W5RL-9 … 17, W5RL-S1 … S10 (19) | — |
+| W5TA (twin-bridge-a) | W5TA-8 … 10 | W5TA-11 … 34 (24) | — |
+| W5TB (twin-bridge-b) | W5TB-2, W5TB-3 | W5TB-6 … 15, W5TB-17, W5TB-18, W5TB-20 … 24 (17) | — |
+| W6HR (delta-history-reads) | W6HR-5 | W6HR-6 … 12, W6HR-14 … 17, W6HR-19 (12) | — |
+| W6SI (extensions-sign-in) | W6SI-4, W6SI-11 | W6SI-3, W6SI-12, W6SI-15 … 17, W6SI-19 … 55 (42) | — |
+| W6OC (of-client) | W6OC-1, W6OC-2, W6OC-4, W6OC-7 … 12, W6OC-14 … 16, W6OC-71 | W6OC-5, W6OC-13, W6OC-17 … 23, W6OC-25 … 69 (54) | policy: W6OC-72 |
+| W6VA (vault-ai-api) | W6VA-2, W6VA-7 … 16, W6VA-18 … 20 | W6VA-21 … 47, W6VA-49 … 80, W6VA-82 (60) | dup: W6VA-81 |
+| W6VS (vault-scripts) | W6VS-2 … 7, W6VS-10, W6VS-12 … 18, W6VS-26, W6VS-29 … 32, W6VS-34 … 37, W6VS-54, W6VS-89, W6VS-90 | W6VS-8, W6VS-9, W6VS-11, W6VS-19 … 22, W6VS-25, W6VS-27, W6VS-28, W6VS-33, W6VS-38 … 53, W6VS-55 … 75, W6VS-77 … 88 (60) | — |
+| W6AX (auth-executor) | W6AX-3, W6AX-6, W6AX-13, W6AX-16 … 22, W6AX-24 … 26, W6AX-35, W6AX-36 | W6AX-29 … 34, W6AX-m2 … m35 (40) | dup: W6AX-28 |
+| W6CE (chatters-employees) | W6CE-5, W6CE-14, W6CE-16, W6CE-18 … 21 | W6CE-22 … 26, W6CE-m1 … m69, W6CE-m71 … m73 (77) | — |
+| W6MW (media-webhook-misc) | W6MW-3, W6MW-7, W6MW-8, W6MW-10 … 14, W6MW-18 … 20 | W6MW-22 … 35, W6MW-37 … 76, W6MW-79 … 81 (57) | policy: W6MW-9 |
+| W6AA (automations-engine-a) | W6AA-9, W6AA-12 … 14, W6AA-m44 | W6AA-15 … 19, W6AA-m1, W6AA-m3 … m25, W6AA-m27 … m43 (46) | — |
+| W6C1 (ai-chatter-1) | W6C1-8, W6C1-11, W6C1-13, W6C1-14, W6C1-68 | W6C1-18 … 30, W6C1-32 … 58, W6C1-60 … 63, W6C1-65, W6C1-66 (46) | policy: W6C1-64 |
+| W6C2 (ai-chatter-2) | W6C2-6, W6C2-7, W6C2-12, W6C2-14, W6C2-21, W6C2-24, W6C2-25, W6C2-81 | W6C2-9, W6C2-10, W6C2-15, W6C2-26 … 56, W6C2-58 … 60, W6C2-62 … 80, W6C2-82 (57) | policy: W6C2-61 |
+| W6C3 (ai-chatter-3) | W6C3-2, W6C3-5, W6C3-8 … 10, W6C3-12, W6C3-15, W6C3-16, W6C3-18, W6C3-19, W6C3-23 | W6C3-7, W6C3-14, W6C3-17, W6C3-26 … 30, W6C3-32 … 59 (36) | — |
+| W6AD (automations-engine-d) | W6AD-8, W6AD-11, W6AD-14, W6AD-18, W6AD-19 | W6AD-13, W6AD-21, W6AD-23 … 27, W6AD-m1, W6AD-m3 … m34, W6AD-m36 … m61, W6AD-n1 (67) | policy: W6AD-16 |
+| W6AE (automations-engine-e) | W6AE-14, W6AE-15, W6AE-17, W6AE-20, W6AE-21, W6AE-25 … 28, W6AE-30, W6AE-31, W6AE-33 … 35, W6AE-37, W6AE-38 | W6AE-18, W6AE-41 … 45, W6AE-m1 … m3, W6AE-m5 … m9, W6AE-m11, W6AE-m12, W6AE-m14 … m57 (60) | dup: W6AE-m10, W6AE-m13; policy: W6AE-m4 |
+
+## W5+W6 disputes / open
+- **RESOLVED: W4MA-05 vs W4DS-09** (W5 L3): no `account_id=None` caller; defect real, latent.
+- live-verify blocked: ai-chatter-1-2, ai-chatter-1-3, ai-chatter-2-1, W6VA-L1, of-client-3. Failed, not a finding: chatters-employees-2 (employees table empty → W4MA-15 condition).
+- unreviewed code running: OF worker 943f3851 (W6HR-1 path); commercial-integration-4 48e007a5 never reviewed; recent_inbox unowned → W7 delta.
+- sub-references without rows (cited inside parents): W5BB-8c, W5ME-9a/9b, W5NR-41.
+- Unplaced: none. W6MW-26 … 35 (no severity, structure) → YAGNI.

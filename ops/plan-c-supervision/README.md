@@ -165,20 +165,36 @@ not a substitute for transaction-level admission.
 
 ### Stopped monitor recovery and conflicting event review
 
-Monitor recovery reads the same reviewed per-account supervision configuration as the supervisor.
-The database audit validates the current tenant, binding and active connection epoch from locked
-runtime/scope rows. Historical pinned v1 receipts remain limited to their original legacy identity.
+Identity. Monitor recovery reads the same reviewed per-account supervision configuration as the supervisor
+(account, binding, connection epoch, provider account, explicit fans). The evidence collector compares that
+configuration with the persisted runtime binding, active connection and scope fan list and refuses on any
+difference (`scope-identity.json` is retained in the evidence). The database audit receives the same identity,
+re-checks it against the rows it locks (`record_resolution(expected_identity=...)`), and validates the receipt's
+binding and epoch against the persisted runtime and active connection. Nothing assigns legacy constants: the
+three pinned v1 incidents remain limited to their original legacy identity, every other account uses the
+class/evidence receipts (v2, and v3 for readiness_unavailable).
+
+Order of operations when a conflicting message event key falls inside the monitor interval (stopped scope):
+
+1. Inspect the conflicting key: `resolve_conflicting_webhook.py` without `--apply` is a true dry run (writes nothing).
+2. Review it with `--apply` only if it is an eligible non-audience `messages.sent` / `messages.received` conflict
+   (every variant is an outside-fan message with retained or operator-supplied exact bytes). One key, one revision,
+   one actor, one evidence statement, one command key. Both payload variants stay retained, unmerged. Only that
+   key's hold is released; money, ownership, in-scope fan, projected/quarantined keys and every other conflict stay held.
+3. Only then validate/resolve the monitor interval. Interval validation refuses an unreviewed conflicting key and
+   says to review it first. A later variant under the key restores the hold and invalidates the review.
+
+`resolve_monitor_incident.py` has no dry run. Its default (or `--preview`) collects and retains evidence and validates
+it in the reviewed image; it audits nothing, publishes nothing and does not touch budget state. It prints
+`"result":"preview"` with `audited`, `published` and `applied` false. `--apply` (alone, or with `--resume <evidence
+directory>` to apply exactly the previewed evidence) audits in the database and publishes the resolution, and prints
+`"applied":true`. Resume checks source hashes and the current incident identity before audit; retries preserve
+command identity. `--dry-run` is refused.
+
+For readiness_unavailable supply an operator evidence reference and name exactly all unresolved sends. The v3 receipt
+requires a bounded interval (at most 24 hours from the last confirmed healthy instant), exact journal stop evidence (one
+stop line of this class), a stopped scope, an absent sender, the operator evidence reference and the exact list of
+unresolved sends. Naming a send acknowledges it; it does not resolve, retire or retry it. The receipt carries a caveat
+that the original readiness HTTP status, code and body were not retained; no specific response is stated.
 Current v2/v3 receipts cannot enable sending, settle an unknown send or release application holds.
-
-Resolve a reviewed conflicting message-event key while stopped before collecting the final monitor
-interval evidence when that conflicting delivery falls inside the interval. Retain every variant;
-only the existing stopped-scope conflict review may mark that exact key reviewed. A later variant
-restores the hold. Money, ownership, in-scope fan events and projected/quarantined keys remain refused.
-
-`resolve_monitor_incident.py` defaults to preview. It may collect and retain evidence, but cannot
-write the database audit, publish the incident resolution or update budget state without `--apply`.
-Review its saved evidence and receipt, then use `--apply --resume <evidence-directory>`. Resume
-checks source hashes and current incident identity before audit; retries preserve command identity.
-For readiness_unavailable, supply an operator evidence reference and name exactly all unresolved
-sends. The receipt acknowledges those sends and retains uncertainty; it does not resolve them.
 Unknown-send retirement remains a separate owner policy and is not authorized by monitor recovery.

@@ -27,7 +27,7 @@ def pinned_incidents():
     }
 # Classes that class/evidence-based resolution may cover. Must equal the service owner's set.
 # Network-check incidents use the same manual, interval/evidence-bound no-permit recovery.
-# readiness_unavailable (the sender's /readyz was not 200, e.g. 503 loop_stale) is deliberately NOT a thin v2 class: a stopped
+# readiness_unavailable (the sender's readiness check was not healthy) is deliberately NOT a thin v2 class: a stopped
 # sender loop can leave an unresolved send behind and its cause is unproven, so it resolves only through the v3 receipt below.
 READINESS='readiness_unavailable'
 V2_CLASSES=('credit_monitor_unavailable','provider_webhook_health_unavailable','sender_not_ready','network_check_failed')
@@ -41,9 +41,10 @@ V2_FIELDS=V1_FIELDS|{'incident_id','affected_interval','delivery_url_sha256','co
 V3_FIELDS=V2_FIELDS|{'evidence_reference','named_sends','cause_caveat'}
 MAX_INTERVAL=datetime.timedelta(days=7)
 READINESS_MAX_INTERVAL=datetime.timedelta(hours=24)
-# Retained in every v3 receipt and printed by the resolver. The cause was strongly supported by timing but never demonstrated.
-READINESS_CAVEAT=('UNPROVEN CAUSE: the supervisor recorded readiness_unavailable; the original readiness response was not retained. '
-    'A slow model chain exceeding the completed-tick health deadline (possibly HTTP 503 loop_stale) is suspected, not proven. '
+# Retained in every v3 receipt and printed by the resolver. The supervisor recorded readiness_unavailable; the original readiness
+# HTTP status, code and body were not retained, so no specific response is stated or implied here.
+READINESS_CAVEAT=('UNPROVEN CAUSE: the supervisor recorded readiness_unavailable; the original readiness HTTP status, code and body '
+    'were not retained, so the cause is not established. '
     'This record resolves the monitor stop only: it does not prove the cause, does not fix it, '
     'releases no hold, settles no send and grants no send permission.')
 EVIDENCE_PREFIX='operator:fansapi:'
@@ -96,6 +97,37 @@ LEGACY_BINDING='01612323-b06f-5320-b623-4e032f474a6e'
 ACCOUNT=os.environ.get('TWIN_SUPERVISION_ACCOUNT',LEGACY_ACCOUNT)
 BINDING=os.environ.get('TWIN_SUPERVISION_BINDING',LEGACY_BINDING)
 EPOCH=int(os.environ.get('TWIN_SUPERVISION_EPOCH','1'))
+
+def configure(config):
+    """Bind receipt validation to the reviewed per-account supervision configuration (the resolver's own path).
+
+    Pinned legacy incidents then apply only to the legacy identity; every other identity is class/evidence based.
+    """
+    global ACCOUNT,BINDING,EPOCH
+    ACCOUNT,BINDING,EPOCH=config['account'],config['binding'],config['epoch']
+
+_ACCOUNT_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z')
+
+def scope_identity_sql(account):
+    """The persisted identity the database audit will lock: runtime binding, active connection and the scope's fan list."""
+    if type(account) is not str or _ACCOUNT_ID.fullmatch(account) is None:raise ValueError('invalid account identity')
+    return ("select coalesce(json_agg(json_build_object('binding',r.binding_id,'epoch',c.epoch,'provider',c.provider_account_id,"
+        "'fans',(s.config_json::jsonb)->'fans')),'[]'::json) from of_runtime r "
+        "join of_fans_connection c on c.account_id=r.account_id and c.binding_id=r.binding_id and c.status='active' "
+        "join of_engine_pilot_scope s on s.account_id=r.account_id and s.binding_id=r.binding_id "
+        "where r.account_id='"+account+"';")
+
+def check_scope_identity(config,observed):
+    """The reviewed configuration must equal the persisted scope exactly; anything else is a different account."""
+    if type(observed) is not list or len(observed)!=1 or type(observed[0]) is not dict:
+        raise RuntimeError('persisted scope identity is missing or ambiguous')
+    row=observed[0];fans=row.get('fans')
+    if (set(row)!={'binding','epoch','provider','fans'} or row['binding']!=config['binding']
+            or type(row['epoch']) is not int or row['epoch']!=config['epoch']
+            or row['provider']!=config['providerAccount']
+            or type(fans) is not list or any(type(f) is not int for f in fans)
+            or sorted(fans)!=sorted(config['fans']) or len(set(fans))!=len(fans)):
+        raise RuntimeError('reviewed supervision configuration does not match the persisted scope')
 
 def classify_journal(raw,expected='credit_monitor_unavailable'):
     failures=re.findall(rb'pilot_supervisor_stopped:([A-Za-z0-9_]+)',raw)

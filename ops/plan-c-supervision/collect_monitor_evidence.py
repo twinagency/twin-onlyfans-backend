@@ -6,7 +6,7 @@ from operation_config import load
 config=load();supervisor.configure(config);ROOT=config['root']
 account=config['account'];epoch=config['epoch']
 import delivery_history
-from incident_state import classify_journal,journal_class,incident_spec,WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,READINESS
+from incident_state import classify_journal,journal_class,incident_spec,WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,READINESS,scope_identity_sql,check_scope_identity
 from guard_core import credit_estimate
 if len(sys.argv)!=2:raise SystemExit('one exclusive collection directory is required')
 d=Path(sys.argv[1]).resolve()
@@ -31,6 +31,10 @@ try:
  if spec is None:raise RuntimeError('incident changed')
  incident=json.loads(marker);save('original-incident.json',marker)
  state=supervisor.db_state()
+ # The reviewed configuration (binding, epoch, provider account, explicit fans) must equal what the database holds for this account.
+ observed=json.loads(sql(scope_identity_sql(account)))
+ check_scope_identity(config,observed)
+ save('scope-identity.json',json.dumps(observed,sort_keys=True).encode())
  if state['status']!='stopped' or (spec['scope_revision'] is not None and state['revision']!=spec['scope_revision']):raise RuntimeError('stopped revision changed')
  if subprocess.check_output(['docker','ps','-q','--filter','name='+config['senderContainer']]).strip():raise RuntimeError('sender running')
  journal=subprocess.check_output(['journalctl','-u',config['supervisorUnit'],'--since',incident['last_confirmed_healthy_utc'],'--no-pager','-o','cat'],timeout=10)

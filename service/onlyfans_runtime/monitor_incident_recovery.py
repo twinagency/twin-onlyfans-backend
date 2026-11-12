@@ -32,8 +32,8 @@ V2_FIELDS=V1_FIELDS|{'incident_id','affected_interval','delivery_url_sha256','co
 V3_FIELDS=V2_FIELDS|{'evidence_reference','named_sends','cause_caveat'}
 MAX_INTERVAL=timedelta(days=7)
 READINESS_MAX_INTERVAL=timedelta(hours=24)
-READINESS_CAVEAT=('UNPROVEN CAUSE: the supervisor recorded readiness_unavailable; the original readiness response was not retained. '
-    'A slow model chain exceeding the completed-tick health deadline (possibly HTTP 503 loop_stale) is suspected, not proven. '
+READINESS_CAVEAT=('UNPROVEN CAUSE: the supervisor recorded readiness_unavailable; the original readiness HTTP status, code and body '
+    'were not retained, so the cause is not established. '
     'This record resolves the monitor stop only: it does not prove the cause, does not fix it, '
     'releases no hold, settles no send and grants no send permission.')
 EVIDENCE_PREFIX='operator:fansapi:'
@@ -126,9 +126,19 @@ PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
 CREATOR='323358988'
 FANS=frozenset((318022380,601164546))
 
-def record_resolution(store,tenant,account,*,proof,actor,command_key):
+def record_resolution(store,tenant,account,*,proof,actor,command_key,expected_identity=None):
+    """Audit a monitor incident resolution against the persisted runtime, active connection and scope.
+
+    `expected_identity` is the ops owner's reviewed configuration ({'provider_account','fans'}); when given, it must equal
+    the persisted connection and scope inside the locked transaction, so both owners agree on the account they mean.
+    """
     if type(proof) is not dict or proof.get('actor')!=actor or proof.get('audit_command_key')!=command_key:
         raise Refused('unsupported monitor incident resolution')
+    if expected_identity is not None and (type(expected_identity) is not dict
+            or set(expected_identity)!={'provider_account','fans'} or type(expected_identity['provider_account']) is not str
+            or type(expected_identity['fans']) is not list
+            or any(type(f) is not int or type(f) is bool for f in expected_identity['fans'])):
+        raise Refused('invalid supervision identity')
     request_hash=digest(proof)
     try:
         observed=datetime.fromisoformat(proof['resolved_at'])
@@ -151,6 +161,10 @@ def record_resolution(store,tenant,account,*,proof,actor,command_key):
                 or scope.revision!=proof['scope_revision'] or policy is None or policy.enabled
                 or connection is None or not config['fans']):
             raise Refused('stopped incident scope changed')
+        if expected_identity is not None and (connection.provider_account_id!=expected_identity['provider_account']
+                or sorted(config['fans'])!=sorted(expected_identity['fans'])
+                or len(set(expected_identity['fans']))!=len(expected_identity['fans'])):
+            raise Refused('reviewed supervision identity does not match the persisted scope')
         # Pinned v1 receipts describe only the original legacy incidents. Current
         # class/evidence receipts are validated against the locked account state.
         if kind=='v1' and (account!=ACCOUNT or runtime.binding_id!=BINDING

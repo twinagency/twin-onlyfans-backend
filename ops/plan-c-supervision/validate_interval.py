@@ -151,6 +151,11 @@ def validate(root):
             matched.append({'event_key':key,'raw_sha256':receipt['hash'],'projection':receipt['projection']})
             continue
         digests=[d for d in local['digests'] if d['key']==key]
+        if len({d['hash'] for d in digests})>1:
+            # Order matters: an eligible conflicting key is inspected and reviewed while stopped FIRST; only then can the interval validate.
+            raise RuntimeError('conflicting provider event key %s has no audited conflicting-event review covering every retained variant: '
+                'inspect and review it first (resolve_conflicting_webhook.py; money, ownership and trial-fan conflicts stay held), '
+                'then validate the monitor interval'%str(key)[:80])
         if len(digests)!=1 or digests[0]['hold'] is not False:
             raise RuntimeError('digest evidence is missing or conflicting')
         if verdict.cls==IRRELEVANT:
@@ -175,5 +180,6 @@ def validate(root):
                 'anchor_context':'known prior receipt predates this incident','original_failure_subcause':'not retained'} if current_case else {})}
 
 if __name__=='__main__':
-    configure_current()
+    # The identity was already taken at import from TWIN_SUPERVISOR_CONFIG or from the resolver's TWIN_SUPERVISION_CONTEXT.
+    # The validator container receives only the context, so main must not demand the configuration file again.
     print(json.dumps(validate('/proof'),sort_keys=True))

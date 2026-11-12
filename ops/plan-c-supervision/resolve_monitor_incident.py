@@ -13,11 +13,43 @@ def assert_sender_stopped():
  if subprocess.run(['systemctl','is-active','--quiet',CONFIG['senderUnit']]).returncode==0:
   raise RuntimeError('sender service must remain stopped')
 CONFIG={}
+def mode(argv):
+ """'preview' (default) collects and retains evidence and validates it; only 'apply' audits, publishes and updates budget state.
+
+ There is no dry run: even the first preview runs the collector and the validator and writes an evidence directory.
+ """
+ if '--dry-run' in argv:
+  raise RuntimeError('--dry-run is not offered: the first run collects and retains evidence. Use --preview (the default) or --apply')
+ apply,preview=argv.count('--apply'),argv.count('--preview')
+ if apply>1 or preview>1 or (apply and preview):raise RuntimeError('expected at most one of --preview or --apply')
+ return 'apply' if apply else 'preview'
+def container_context():
+ """The reviewed identity handed to the validator and to the database audit: both must see the same account."""
+ return json.dumps({k:CONFIG[k] for k in ('account','binding','epoch','providerAccount','fans','publicUrl') if k in CONFIG},sort_keys=True)
+def validator_args(image,evidence):
+ return ['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL',
+    '--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service:/app/ops/plan-c-supervision',
+    '-v',str(evidence)+':/proof:ro','-v',str(HERE/'validate_interval.py')+':/opt/validate.py:ro',
+    '-e','TWIN_SUPERVISION_ACCOUNT='+CONFIG.get('account',state.ACCOUNT),
+    '-e','TWIN_SUPERVISION_BINDING='+CONFIG.get('binding',state.BINDING),
+    '-e','TWIN_SUPERVISION_EPOCH='+str(CONFIG.get('epoch',state.EPOCH)),
+    '-e','TWIN_SUPERVISION_CONTEXT='+container_context(),
+    '--entrypoint','python',image,'/opt/validate.py']
+def audit_args(image,evidence):
+ return ['docker','run','--rm','--network','host','--user','65532:65532','--read-only',
+   '--cap-drop','ALL','--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service',
+   '-e','ONLYFANS_PROCESS_ROLE=worker','-v',str(ROOT/'config/pilot-worker-database-url')+':/run/pilot-database-url:ro',
+   '-v',str(ROOT/'config/pilot-operator-identity.json')+':/run/pilot-identity.json:ro',
+   '-v',str(evidence)+':/proof:ro','-v',str(HERE/'db_audit.py')+':/opt/audit.py:ro',
+   '-e','TWIN_SUPERVISION_ACCOUNT='+CONFIG.get('account',state.ACCOUNT),
+   '-e','TWIN_SUPERVISION_TENANT='+CONFIG.get('tenant','fixture'),
+   '-e','TWIN_SUPERVISION_CONTEXT='+container_context(),
+   '--entrypoint','python',image,'/opt/audit.py']
 def parse_args(argv):
- """No arguments, or --resume DIR, or (readiness_unavailable only) --evidence-ref REF with any number of --named-send ID."""
- usage='expected no args, --resume evidence-directory, or --evidence-ref REF [--named-send ID ...]'
- resume=ref=None;named=[];args=[a for a in argv[1:] if a not in ('--apply','--dry-run')];i=0
- if argv.count('--apply')>1 or argv.count('--dry-run')>1 or ('--apply' in argv and '--dry-run' in argv):raise RuntimeError(usage)
+ """[--preview|--apply] then no arguments, or --resume DIR, or (readiness_unavailable only) --evidence-ref REF with any number of --named-send ID."""
+ usage='expected [--preview|--apply] and no args, --resume evidence-directory, or --evidence-ref REF [--named-send ID ...]'
+ mode(argv)
+ resume=ref=None;named=[];args=[a for a in argv[1:] if a not in ('--apply','--preview')];i=0
  while i<len(args):
   flag=args[i]
   if flag not in ('--resume','--evidence-ref','--named-send') or i+1>=len(args):raise RuntimeError(usage)
@@ -44,7 +76,7 @@ def attest_readiness(evidence,manifest,ref,named):
  return named
 def main():
  resume,ref,named=parse_args(sys.argv)
- apply='--apply' in sys.argv
+ apply=mode(sys.argv)=='apply'
  # The release pin is staged only after independent review; never chosen implicitly.
  release=read(SUP/'reviewed-recovery-release.json')
  image=release['image'];commit=release['commit']
@@ -76,15 +108,7 @@ def main():
   readiness=manifest.get('classification')==state.READINESS
   if readiness:named=attest_readiness(evidence,manifest,ref,named)
   elif ref is not None or named:raise RuntimeError('--evidence-ref and --named-send are only for readiness_unavailable incidents')
-  validator=['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL',
-    '--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service:/app/ops/plan-c-supervision',
-    '-v',str(evidence)+':/proof:ro','-v',str(HERE/'validate_interval.py')+':/opt/validate.py:ro',
-    '-e','TWIN_SUPERVISION_ACCOUNT='+CONFIG.get('account',state.ACCOUNT),
-    '-e','TWIN_SUPERVISION_BINDING='+CONFIG.get('binding',state.BINDING),
-    '-e','TWIN_SUPERVISION_EPOCH='+str(CONFIG.get('epoch',state.EPOCH)),
-    '-e','TWIN_SUPERVISION_CONTEXT='+json.dumps({k:CONFIG[k] for k in ('account','binding','epoch','providerAccount','fans','publicUrl') if k in CONFIG},sort_keys=True),
-    '--entrypoint','python',image,'/opt/validate.py']
-  findings=json.loads(command(validator))
+  findings=json.loads(command(validator_args(image,evidence)))
   if findings.get('interval_valid_for_bounded_scope') is not True:raise RuntimeError('interval proof refused')
   (evidence/'scope-findings.json').write_bytes(state.encoded(findings))
   # Bind every retained source file into one audit digest. The receipt is excluded
@@ -123,7 +147,9 @@ def main():
   if Path(name).name!=name or state.digest((evidence/name).read_bytes())!=h:raise RuntimeError('evidence changed')
  if not state._valid_resolution(receipt,incident_hash,marker):raise RuntimeError('receipt does not match stopped incident')
  if not apply:
-  print(json.dumps({'result':'dry_run','evidence':str(evidence),'sendingEnabled':False,'holdsReleased':False,
+  # A preview is not a dry run: the collector and validator ran and the evidence directory was written. Nothing else was.
+  print(json.dumps({'result':'preview','applied':False,'audited':False,'published':False,'writes':'retained evidence directory only',
+    'evidence':str(evidence),'sendingEnabled':False,'holdsReleased':False,
     'incident_sha256':incident_hash,'receipt':receipt,'nextAction':'Review this evidence, then use --apply --resume with this evidence directory'},sort_keys=True))
   return
  os.chmod(evidence,0o750);os.chown(evidence,0,65532)
@@ -134,15 +160,7 @@ def main():
   # Prevent source substitution between collection and DB commit.
   for name,h in sources.items():
    if state.digest((evidence/name).read_bytes())!=h:raise RuntimeError('evidence changed')
-  args=['docker','run','--rm','--network','host','--user','65532:65532','--read-only',
-   '--cap-drop','ALL','--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service',
-   '-e','ONLYFANS_PROCESS_ROLE=worker','-v',str(ROOT/'config/pilot-worker-database-url')+':/run/pilot-database-url:ro',
-   '-v',str(ROOT/'config/pilot-operator-identity.json')+':/run/pilot-identity.json:ro',
-   '-v',str(evidence)+':/proof:ro','-v',str(HERE/'db_audit.py')+':/opt/audit.py:ro',
-   '-e','TWIN_SUPERVISION_ACCOUNT='+CONFIG.get('account',state.ACCOUNT),
-   '-e','TWIN_SUPERVISION_TENANT='+CONFIG.get('tenant','fixture'),
-   '--entrypoint','python',image,'/opt/audit.py']
-  result=json.loads(command(args))
+  result=json.loads(command(audit_args(image,evidence)))
   if result.get('recorded') is not True or result.get('sendingEnabled') is not False or result.get('evidenceSha256')!=evidence_hash:
    raise RuntimeError('database audit not confirmed')
   # Keep the largest established usage. A stopped snapshot cannot permit sends.
@@ -153,10 +171,10 @@ def main():
  caveat=receipt.get('cause_caveat')
  if caveat:print('CAVEAT: '+caveat,file=sys.stderr)   # shown to the operator before and with the outcome
  result=state.resolve(SUP,receipt,audit)
- print(json.dumps({'result':result,'evidence':str(evidence),'sendingEnabled':False,
+ print(json.dumps({'result':result,'applied':True,'evidence':str(evidence),'sendingEnabled':False,
                    'incident_sha256':incident_hash,**({'cause_caveat':caveat} if caveat else {})},sort_keys=True))
 if __name__=='__main__':
  from operation_config import load
  CONFIG=load();ROOT=CONFIG['root'];SUP=ROOT/'supervision-v11'
- state.ACCOUNT=CONFIG['account'];state.BINDING=CONFIG['binding'];state.EPOCH=CONFIG['epoch']
+ state.configure(CONFIG)
  main()

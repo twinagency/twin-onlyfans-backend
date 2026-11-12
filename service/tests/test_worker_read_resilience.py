@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from onlyfans_native_protocol_fixture import native_message
-from onlyfans_runtime import provider_connector as connector
+from onlyfans_runtime import native_connector, provider_connector as connector
 from onlyfans_runtime.native_protocol import NativeProtocolError, history_text
 from test_onlyfans_vault_response_limits import OWNER, session
 
@@ -20,6 +20,7 @@ def wire(monkeypatch, tmp_path):
     monkeypatch.setenv('ONLYFANS_PROCESS_ROLE', 'worker')
     monkeypatch.setenv('ONLYFANS_UNREAD_JOURNAL_DIR', str(tmp_path))
     monkeypatch.setattr(connector, '_PAGE_LIMITS', OrderedDict(), raising=False)
+    monkeypatch.setattr(native_connector, '_SKIP_LOGGED', {}, raising=False)
     state = {'rows': [native_message(10, owner=OWNER)], 'more': False, 'fail': [], 'limits': [], 'methods': []}
     reader = connector.NativeProviderConnector(session())
 
@@ -45,19 +46,35 @@ def timeout():
     return error
 
 
-def test_timeout_retries_same_position_with_smaller_page_then_grows_back(wire):
+def test_timeout_shrinks_then_grows_slowly_and_never_back_to_the_failing_size(wire):
     reader, state = wire
     state['fail'] = [timeout()]
     with pytest.raises(connector.NativeReadTransientError):
         reader.messages(fan_id=FAN, before_id=500, limit=100)
-    for _ in range(3):
+    for _ in range(10):
         assert reader.messages(fan_id=FAN, before_id=500, limit=100).events[0].message_id == 10
-    state['fail'] = [timeout(), timeout(), timeout(), timeout()]
-    for _ in range(4):
+    state['fail'] = [timeout(), timeout(), timeout()]
+    for _ in range(3):
         with pytest.raises(connector.NativeReadTransientError):
             reader.messages(fan_id=FAN, before_id=500, limit=100)
-    assert state['limits'] == [100, 20, 40, 80, 100, 20, 10, 5]
+    assert state['limits'] == [100, 20, 20, 20, 40, 40, 40, 80, 80, 80, 80, 80, 20, 10]
     assert set(state['methods']) == {'GET'}
+
+
+def test_head_and_deep_reads_keep_separate_page_caps(wire):
+    reader, state = wire
+    state['fail'] = [timeout()]
+    with pytest.raises(connector.NativeReadTransientError):
+        reader.messages(fan_id=FAN, before_id=500, limit=100)
+    for _ in range(6):  # recent-inbox head reads succeed at full size
+        reader.messages(fan_id=FAN, before_id=None, limit=100)
+    reader.messages(fan_id=FAN, before_id=500, limit=100)
+    state['fail'] = [timeout()]
+    with pytest.raises(connector.NativeReadTransientError):
+        reader.messages(fan_id=FAN, before_id=None, limit=100)
+    reader.messages(fan_id=FAN, before_id=None, limit=100)
+    reader.messages(fan_id=FAN, before_id=500, limit=100)
+    assert state['limits'] == [100] + [100] * 6 + [20, 100, 20, 20]
 
 
 def test_oversize_shrinks_but_other_failures_keep_page_size(wire):
@@ -105,34 +122,60 @@ def test_mention_row_imports(wire):
     assert [e.body for e in page.events] == ['so glad @synthetic_creator saw it']
 
 
-def test_unsupported_rows_are_skipped_and_counted_not_page_fatal(wire, caplog):
+def test_only_tip_unsent_deleted_rows_are_skipped_and_counted(wire, caplog):
     reader, state = wire
     state['rows'] = [native_message(16, owner=OWNER), {**native_message(15, owner=OWNER), 'isTip': True},
         {**native_message(14, owner=OWNER), 'isUnsent': True}, {**native_message(13, owner=OWNER), 'isDeleted': True},
-        native_message(12, owner=OWNER, text='<p><script>x</script></p>'), native_message(11, owner=OWNER)]
+        native_message(12, owner=OWNER), {**native_message(11, owner=OWNER), 'isTip': True}]
     state['more'] = True
     with caplog.at_level(logging.WARNING):
         page = reader.messages(fan_id=FAN, before_id=None, limit=100)
-    assert [e.message_id for e in page.events] == [16, 11] and page.has_more
+    assert [e.message_id for e in page.events] == [16, 12] and page.has_more
+    assert page.next_before == 11  # skipped rows are behind the cursor, never re-read
     line = next(r.getMessage() for r in caplog.records if 'onlyfans_history_rows_skipped' in r.getMessage())
-    logged = json.loads(line.split(' ', 1)[1])
-    details = logged.pop('details')
-    assert logged == {'account': 'acc-a', 'rows': 6,
-        'skipped': {'deleted': 1, 'tip': 1, 'unsent': 1, 'unsupported': 1}}
-    assert [d['reason'] for d in details] == ['tip', 'unsent', 'deleted', 'unsupported']
-    odd = details[-1]
-    assert odd['fan'] == FAN and odd['tags'] == ['p', 'script'] and odd['empty'] is False
-    assert odd['cause'].startswith('NativeProtocolError:') and odd['missing'] == []
-    assert 'x</script>' not in line  # shape only, never message text
+    assert json.loads(line.split(' ', 1)[1]) == {'account': 'acc-a', 'rows': 6, 'indexes': [1, 2, 3, 5],
+        'skipped': {'deleted': 1, 'tip': 2, 'unsent': 1}, 'suppressed': 0}
+    assert str(FAN) not in line
+
+
+def test_skip_log_is_rate_limited_per_account(wire, caplog):
+    reader, state = wire
+    state['rows'] = [native_message(12, owner=OWNER), {**native_message(11, owner=OWNER), 'isTip': True}]
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            reader.messages(fan_id=FAN, before_id=None, limit=100)
+    assert sum('onlyfans_history_rows_skipped' in r.getMessage() for r in caplog.records) == 1
+
+
+def test_page_of_only_skipped_rows_advances_the_cursor(wire):
+    reader, state = wire
+    state['rows'] = [{**native_message(11, owner=OWNER), 'isTip': True}, {**native_message(10, owner=OWNER), 'isDeleted': True}]
+    state['more'] = True
+    page = reader.messages(fan_id=FAN, before_id=500, limit=100)
+    assert (page.events, page.has_more, page.next_before) == ([], True, 10)
+
+
+@pytest.mark.parametrize('change', [
+    {'text': None}, {'mediaCount': 2}, {'media': [{'id': 5}, {'id': 5}], 'mediaCount': 2},
+    {'media': [{'id': '5'}], 'mediaCount': 1}, {'price': None}, {'price': '0.001'},
+    {'responseType': 'system'}, {'text': '<p><script>x</script></p>'},
+], ids=['text', 'mediaCount', 'dup-media', 'str-media', 'null-price', 'sub-cent', 'responseType', 'markup'])
+def test_malformed_or_unsupported_rows_still_refuse_the_page(wire, change):
+    reader, state = wire
+    row = {**native_message(11, owner=OWNER, outgoing=True, media=(7,), price=5), **change}
+    if 'text' in change and change['text'] is None:
+        del row['text']
+    state['rows'] = [native_message(12, owner=OWNER), row]
+    with pytest.raises(NativeProtocolError):
+        reader.messages(fan_id=FAN, before_id=None, limit=100)
 
 
 @pytest.mark.parametrize('rows,more', [
     ([native_message(11, owner=OWNER), {**native_message(10, owner=OWNER), 'fromUser': {'id': 999}, 'isTip': True}], False),
     ([native_message(11, owner=OWNER), {**native_message(10, owner=OWNER), 'createdAt': 'x', 'isTip': True}], False),
     ([native_message(10, owner=OWNER), {**native_message(11, owner=OWNER), 'isTip': True}], False),
-    ([{**native_message(10, owner=OWNER), 'isTip': True}], True),
 ])
-def test_out_of_scope_disordered_or_all_skipped_pages_still_refuse(wire, rows, more):
+def test_out_of_scope_or_disordered_skipped_rows_still_refuse(wire, rows, more):
     reader, state = wire
     state['rows'], state['more'] = rows, more
     with pytest.raises(NativeProtocolError):

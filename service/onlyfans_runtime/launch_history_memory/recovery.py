@@ -480,11 +480,11 @@ class HistoryRecovery:
                                 row.lease_token, row.before_id, connection_revision,
                                 page_limit=row.page_limit, scope=scope)
 
-    def page(self, tenant_id, claim, events, *, has_more, observations=(), provider_read_claim=None):
+    def page(self, tenant_id, claim, events, *, has_more, observations=(), provider_read_claim=None, next_before=None):
         if type(claim) is not ArchiveClaim:
             raise Refused("invalid historical recovery claim")
         if (type(events) not in {list, tuple} or type(has_more) is not bool or len(events) > PAGE_LIMIT
-                or (has_more and not events) or any(type(event) is not Event for event in events)):
+                or (has_more and not events and next_before is None) or any(type(event) is not Event for event in events)):
             raise Refused("invalid historical page")
         normalized = [event.normalized() for event in events]
         ids = [event.message_id for event in normalized]
@@ -492,6 +492,8 @@ class HistoryRecovery:
             raise Refused("invalid historical order or scope")
         if claim.before_id is not None and any(mid >= claim.before_id for mid in ids):
             raise Refused("historical cursor did not advance")
+        from onlyfans_runtime.store import page_cursor
+        cursor = page_cursor(ids, next_before, claim.before_id)
         from onlyfans_runtime.offer_terms import OfferObservation
         if (type(observations) not in {list, tuple} or len(observations) > len(normalized)
                 or any(type(o) is not OfferObservation for o in observations)):
@@ -526,11 +528,11 @@ class HistoryRecovery:
                 old = session.get(OfHistoryCursor, (claim.account_id, claim.fan_id))
                 stored_coverage = bool(old and old.binding_id == runtime.binding_id and old.status == "complete"
                     and old.start_before_id is None and old.upper_bound is not None
-                    and ids and ids[-1] <= old.upper_bound)
+                    and cursor is not None and cursor <= old.upper_bound)
                 recent_done = (not has_more or stored_coverage or
                     p.timestamp_order_verified and any(d < p.cutoff_at for d in dates))
                 if row.phase == "catchup":
-                    recent_done = not has_more or bool(ids and row.catchup_target is not None and ids[-1] <= row.catchup_target)
+                    recent_done = not has_more or bool(cursor is not None and row.catchup_target is not None and cursor <= row.catchup_target)
                 normalized = [e for e,d in zip(original,dates) if d >= p.cutoff_at]
                 kept = {e.message_id for e in normalized}
                 offers = [o for o in offers if o.source_id in kept]
@@ -586,8 +588,9 @@ class HistoryRecovery:
             self.store._observe_offers(session, runtime, offers)
             if row.upper_bound is None and ids:
                 row.upper_bound = ids[0]
+            if cursor is not None:
+                row.before_id = cursor
             if ids:
-                row.before_id = ids[-1]
                 oldest = min(datetime.fromisoformat(event.created_at).replace(tzinfo=None) for event in original)
                 row.oldest_message_at = min(row.oldest_message_at or oldest, oldest)
             row.page_limit = min(PAGE_LIMIT, max(5, claim.page_limit) * 2)
@@ -750,7 +753,7 @@ class HistoryRecovery:
                         completed += 1
                     else:
                         result = self.page(tenant_id, claim, page.events, has_more=page.has_more,
-                            observations=page.observations, **fenced)
+                            observations=page.observations, next_before=getattr(page, 'next_before', None), **fenced)
                         completed += result in {'continue', 'complete'}
                 except (Refused, AttributeError):
                     self.fail(tenant_id, claim, code='invalid_page')

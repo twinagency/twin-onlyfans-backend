@@ -24,7 +24,7 @@ from db.onlyfans_content_sync_progress_models import OfContentSyncSource
 from .native_context import canonical
 from .native_protocol import NativeProtocolError
 from .offer_import import LEASE_SECONDS, REFRESH_PAGES_PER_CHAT, _terminal
-from .store import PAGE_LIMIT, Refused, utcnow
+from .store import PAGE_LIMIT, Refused, page_cursor, utcnow
 
 ACCOUNT_INTERVAL_SECONDS = 5
 MAX_ATTEMPTS = 3
@@ -193,11 +193,13 @@ def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory
                 cursor.found_json = canonical(sorted(found, reverse=True))
                 cursor.pages_read += 1
                 job.pages_read += 1
-                cursor.before_id = min(ids) if ids else before
+                # Skipped rows (tips/unsent/deleted) still move the cursor.
+                oldest = page_cursor(ids, getattr(page, "next_before", None), before)
+                cursor.before_id = oldest if oldest is not None else before
                 remaining = [t for t in targets if t not in found]
                 if not remaining:
                     cursor.status, cursor.outcome = "complete", "found"
-                elif not page.has_more or (ids and min(ids) < min(remaining)):
+                elif not page.has_more or (oldest is not None and oldest < min(remaining)):
                     # Passed below every remaining target without seeing it.
                     cursor.status, cursor.outcome = "unresolved", "source_not_found"
                 elif cursor.pages_read >= REFRESH_PAGES_PER_CHAT or job.pages_read >= job.page_budget:

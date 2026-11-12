@@ -25,6 +25,9 @@ class MessagePage:
     # Commercial terms of outgoing paid offers on this page, captured from the
     # original rows. Optional so existing readers stay compatible.
     observations: list = field(default_factory=list)
+    # Oldest provider row id read, including rows the reader skipped; the
+    # next cursor. None keeps the legacy min(event ids) cursor.
+    next_before: int | None = None
 
 
 @dataclass(frozen=True)
@@ -115,10 +118,10 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
                 if recent_cutover:
                     from .launch_history_memory.recent import commit_recent_page
                     commit_recent_page(store, tenant_id, recovery, page.events, has_more=page.has_more,
-                                       observations=page.observations, **scope,**fenced)
+                                       observations=page.observations, next_before=page.next_before, **scope,**fenced)
                 else:
                     store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more,
-                                        observations=page.observations, **scope,**fenced)
+                                        observations=page.observations, next_before=page.next_before, **scope,**fenced)
                 recovered = 1
             except Exception as failure:
                 error=failure

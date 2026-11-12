@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Message, OfCreatorBinding
 from db.onlyfans_models import OfIngress, OfRecovery, OfRuntime
-from onlyfans_runtime.store import Event, PAGE_LIMIT, MAX_PENDING, RecoveryClaim, Refused, utcnow
+from onlyfans_runtime.store import Event, PAGE_LIMIT, MAX_PENDING, RecoveryClaim, Refused, page_cursor, utcnow
 from .recovery import INFO, HistoryRecovery, RecoveryBase
 
 
@@ -53,7 +53,7 @@ def request_before(store, tenant_id, claim, *, connection_revision=None):
 
 
 def commit_recent_page(store, tenant_id, claim, events, *, has_more,
-                       observations=(), connection_revision=None, provider_read_claim=None):
+                       observations=(), connection_revision=None, provider_read_claim=None, next_before=None):
     """Replace worker.py's recovery_page call together with request_before.
 
     The initial head, offers, archive handoff and recent completion are one
@@ -77,15 +77,17 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
     if not initial:
         return store.recovery_page(tenant_id, claim, events, has_more=has_more,
             observations=observations, connection_revision=connection_revision,
-            provider_read_claim=provider_read_claim)
+            provider_read_claim=provider_read_claim, next_before=next_before)
     if (type(events) not in {list, tuple} or type(has_more) is not bool
-            or len(events) > PAGE_LIMIT or (has_more and not events)
+            or len(events) > PAGE_LIMIT or (has_more and not events and next_before is None)
             or any(type(e) is not Event for e in events)):
         raise Refused("invalid recent head page")
     normalized = [e.normalized() for e in events]
     ids = [e.message_id for e in normalized]
     if ids != sorted(set(ids), reverse=True) or any(e.fan_id != claim.fan_id for e in normalized):
         raise Refused("invalid recent head order or scope")
+    # The head read used request_before(), not claim.before_id; checked below.
+    cursor = page_cursor(ids, next_before)
     from onlyfans_runtime.offer_terms import OfferObservation
     if (type(observations) not in {list, tuple} or len(observations) > len(normalized)
             or any(type(o) is not OfferObservation for o in observations)):
@@ -113,7 +115,8 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
             raise Refused("stale recent recovery claim")
         boot = s.get(RecentBootstrap, (claim.account_id, claim.fan_id))
         if boot and (boot.binding_id != runtime.binding_id
-                     or boot.before_id is not None and any(i >= boot.before_id for i in ids)):
+                     or boot.before_id is not None and (any(i >= boot.before_id for i in ids)
+                                                        or cursor is not None and cursor >= boot.before_id)):
             raise Refused("recent bootstrap cursor or binding changed")
         from onlyfans_runtime.history_policy import policy
         window = policy(s, claim.account_id, runtime.binding_id)
@@ -158,8 +161,8 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
                 binding_id=runtime.binding_id, upper_id=max(ids, default=0), observed_count=0)
             s.add(boot)
         boot.observed_count += len(ids)
-        if ids:
-            boot.before_id = min(ids)
+        if cursor is not None:
+            boot.before_id = cursor
         if has_more and boot.observed_count < 100:
             row.before_id, row.upper_bound = boot.before_id, boot.upper_id
             row.status = "needed"

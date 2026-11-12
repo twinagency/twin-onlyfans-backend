@@ -24,7 +24,7 @@ from transaction_contract import transaction_marker
 from onlyfans_read.contract import ID_PATTERN
 from .native_connector import NativeLoopbackConnector
 from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, request, load
-from .store import PAGE_LIMIT, Refused, _id
+from .store import Refused, _id
 from .text_delivery import Dispatch, TextAuthority
 
 ORIGIN = "https://onlyfans.com"
@@ -32,34 +32,44 @@ APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
 # Default GET timeout. A 77-row (536 KB) history page takes ~6 s server-side
 # (with or without proxy), so the 5 s write timeout starved every deep read.
 READ_TIMEOUT_SECONDS = 10
-# Message page size per (account, fan) after a slow read, mirroring the archive
-# path's oversize halving: 100 -> 20 -> 10 -> 5 on timeout/oversize, doubling
-# back after each success. In-process only; a restart costs one more timeout.
+# Message page size after a slow read, per (account, fan, lane): the newest-page
+# lane (recent inbox, head recovery) and the deep-cursor lane never share a cap.
+# Timeout/oversize at size L: cap = 20 (or L//2, min 5) and L becomes the
+# ceiling. Only GROW_AFTER consecutive successes at the cap double it, and it
+# never reaches the failing ceiling again. In-process only.
 SMALL_PAGE_LIMIT = 20
-_PAGE_LIMITS = OrderedDict()
+GROW_AFTER = 3
+_PAGE_LIMITS = OrderedDict()  # key -> (size, ceiling, streak)
 _PAGE_LOCK = threading.Lock()
 
 
-def _page_limit(account_id, fan_id, requested):
-    with _PAGE_LOCK:
-        return min(requested, _PAGE_LIMITS.get((account_id, fan_id), requested))
+def _page_key(account_id, fan_id, before_id):
+    return account_id, fan_id, "head" if before_id is None else "deep"
 
 
-def _page_outcome(account_id, fan_id, limit, error):
-    key = (account_id, fan_id)
+def _page_limit(key, requested):
     with _PAGE_LOCK:
+        entry = _PAGE_LIMITS.get(key)
+        return requested if entry is None else min(requested, entry[0])
+
+
+def _page_outcome(key, limit, error):
+    with _PAGE_LOCK:
+        entry = _PAGE_LIMITS.get(key)
         if error is None:
-            if key in _PAGE_LIMITS:
-                if limit * 2 >= PAGE_LIMIT:
-                    del _PAGE_LIMITS[key]
-                else:
-                    _PAGE_LIMITS[key] = limit * 2
+            if entry is None or limit != entry[0]:
+                return
+            size, ceiling, streak = entry[0], entry[1], entry[2] + 1
+            if streak >= GROW_AFTER and size * 2 < ceiling:
+                size, streak = size * 2, 0
+            _PAGE_LIMITS[key] = (size, ceiling, streak)
             return
         failure = getattr(error, "read_failure", None)
         slow = (type(failure) is dict and failure.get("failure") == "provider_timeout") or (
             str(error) == "native HTTPS response exceeded its byte budget")
         if slow:
-            _PAGE_LIMITS[key] = SMALL_PAGE_LIMIT if limit > SMALL_PAGE_LIMIT else max(5, limit // 2)
+            size = SMALL_PAGE_LIMIT if limit > SMALL_PAGE_LIMIT else max(5, limit // 2)
+            _PAGE_LIMITS[key] = (size, limit, 0)
             _PAGE_LIMITS.move_to_end(key)
             while len(_PAGE_LIMITS) > 4096:
                 _PAGE_LIMITS.popitem(last=False)
@@ -310,14 +320,15 @@ class NativeProviderConnector(NativeLoopbackConnector):
             parent_messages = super().messages
             def unread_state():
                 return load(self._signed_request("GET", API_PATH + f"/chats/{fan_id}"), max_bytes=MAX_HISTORY_BYTES)
-            size = _page_limit(self.account_id, fan_id, limit)
+            lane = _page_key(self.account_id, fan_id, before_id)
+            size = _page_limit(lane, limit)
             def read():
                 try:
                     page = parent_messages(fan_id=fan_id, before_id=before_id, limit=size)
                 except Exception as error:
-                    _page_outcome(self.account_id, fan_id, size, error)
+                    _page_outcome(lane, size, error)
                     raise
-                _page_outcome(self.account_id, fan_id, size, None)
+                _page_outcome(lane, size, None)
                 return page
             return preserve_unread(
                 account_id=self.account_id, fan_id=fan_id,

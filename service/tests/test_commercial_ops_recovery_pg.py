@@ -49,7 +49,10 @@ from onlyfans_runtime.store import Refused
 from fastapi.testclient import TestClient
 from model_transport.pilot_supervised import IntakeOnlyPilot
 
-ROLLBACK_READER = Path("/opt/r0-baseline/service")  # R0 baseline 0a691b7: HEAD 0129b_model_retry_due
+# The PREVIOUS (live) release reader baked at /opt/r0-baseline: build-candidate.sh BASELINE_COMMIT 659ea29, whose schema HEAD is
+# 0129_reconnect_receipt (it predates the 0129b forward repair, so it is behind this lineage and must refuse this schema).
+ROLLBACK_READER = Path("/opt/r0-baseline/service")
+ROLLBACK_READER_HEAD = "0129_reconnect_receipt"
 
 
 @pytest.fixture(autouse=True)
@@ -144,7 +147,7 @@ def test_rollback_is_guarded_the_previous_release_refuses_this_schema_and_the_do
     import subprocess
     import sys
     url, engine = database
-    assert ROLLBACK_READER.is_dir(), "mount the R0 baseline (0a691b7) tree at /opt/r0-baseline"
+    assert ROLLBACK_READER.is_dir(), "mount the R0 baseline (659ea29) tree at /opt/r0-baseline"
     store, other, broker = populated(database, monkeypatch)
     cstore, account, cfg, promoted = launchable(database, 1)
     try:
@@ -155,7 +158,7 @@ def test_rollback_is_guarded_the_previous_release_refuses_this_schema_and_the_do
         reader = subprocess.run([sys.executable, "-c", "import os; from sqlalchemy import create_engine; from db.schema import check_schema, HEAD; "
             "print('reader head', HEAD); c=create_engine(os.environ['R0_TEST_DB']).connect(); check_schema(c)"],
             cwd="/tmp", env=env, capture_output=True, text=True, timeout=60)
-        assert "reader head 0129b_model_retry_due" in reader.stdout
+        assert f"reader head {ROLLBACK_READER_HEAD}" in reader.stdout
         assert reader.returncode != 0 and "Database revision is not supported by this process" in reader.stderr
         with pytest.raises(RuntimeError) as refused:
             with engine.begin() as c:

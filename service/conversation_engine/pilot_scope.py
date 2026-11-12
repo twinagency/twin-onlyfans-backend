@@ -338,7 +338,7 @@ def classify_queue_observation(s, runtime, row):
     The bytes and original hold stay immutable. A later variant makes every
     observation of that event unresolved again through the shared query.
     """
-    from db.onlyfans_engine_models import OfEnginePilotReconnectReceipt as Receipt, OfEnginePilotWebhookDigest as Row, OfFansWebhookConflict
+    from db.onlyfans_engine_models import OfEnginePilotReconnectReceipt as Receipt, OfEnginePilotWebhookDigest as Row, OfFansWebhookConflict, OfFansWebhook
     from .coexistence import enabled
     from fans_api_adapter.queue_review import queue_envelope
     if not enabled(s, runtime):

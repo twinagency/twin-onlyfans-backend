@@ -160,6 +160,8 @@ wait_for_load() {
 mkdir -p "$BUILD/ctx/src" "$BUILD/ctx/baseline" "$BUILD/ctx/rollback"
 git -C "$REPO" archive "$FULL" service ops | tar -x -C "$BUILD/ctx/src"
 git -C "$REPO" archive "$ROLLBACK_FULL" service | tar -x -C "$BUILD/ctx/rollback"
+git -C "$REPO" archive "$BASE_FULL" service | tar -x -C "$BUILD/ctx/baseline"
+( cd "$BUILD/ctx/baseline" && find service -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ) > "$BUILD/baseline-files.sha256"
 ( cd "$BUILD/ctx/rollback" && find service -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ) > "$BUILD/rollback-files.sha256"
 ( cd "$BUILD/ctx/src" && find service ops -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ) > "$BUILD/source-files.sha256"
 printf 'requested_commit=%s\nrequested_tree=%s\nruntime_image=%s\n' "$FULL" "$TREE" "$RUNTIME_IMAGE" > "$BUILD/manifest.txt"
@@ -216,6 +218,8 @@ else
   echo "tree_check=FAIL image tree differs from the commit (see diff of source-files.sha256 / image-files.sha256)" | tee -a "$BUILD_RECORD/manifest.txt"
   die "image is not an exact build of $SHORT"
 fi
+"${IMG_RUN[@]}" --entrypoint sh "$IMAGE_ID" -c 'cd /opt/r0-baseline && find service -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum' > "$BUILD_RECORD/baseline-image-files.sha256"
+diff -q "$BUILD_RECORD/baseline-files.sha256" "$BUILD_RECORD/baseline-image-files.sha256" >/dev/null || die "baseline reader differs from requested commit"
 "${IMG_RUN[@]}" --entrypoint sh "$IMAGE_ID" -c 'pg_dump --version; pg_restore --version; psql --version; python --version; ls -d /opt/r0-baseline/service /opt/test-packages/pytest /app/ops/plan-c-supervision' > "$BUILD_RECORD/tools.txt" 2>&1 || die "required image tools are missing"
 PG_DUMP_VERSION=$(grep -m1 '^pg_dump' "$BUILD_RECORD/tools.txt" || true)
 echo "pg_dump=${PG_DUMP_VERSION:-ABSENT}" | tee -a "$BUILD_RECORD/manifest.txt"

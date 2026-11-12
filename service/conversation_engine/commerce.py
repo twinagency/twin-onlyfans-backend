@@ -298,7 +298,7 @@ def _successor(s, runtime, owner, prior, coverage, policy):
     return successor
 
 
-def terms_successor(s, runtime, owner, prior, policy, *, variant=None):
+def terms_successor(s, runtime, owner, prior, policy, *, variant=None, fresh_message=None):
     """A new grant for the same fan and product after the approved terms changed (new revision or discount variant).
 
     Allowed only while the prior card is provably unsent: no intent at all, or the exact terminal-cancellation proof of
@@ -337,20 +337,29 @@ def terms_successor(s, runtime, owner, prior, policy, *, variant=None):
     resolve = _real_catalogue_terms if policy.transport_kind == 'fansapi' else catalog_terms
     terms = resolve(s, runtime.account_id, prior.item_id, price_cents=price)
     digest = _hash(terms)
-    if digest == prior.terms_hash:
-        raise Refused('offer_successor_not_required')
+    same_terms = digest == prior.terms_hash
+    if same_terms:
+        # A fresh particular request can replace a provably never-wired card.
+        # Restart alone cannot replay it; unknown/accepted attempts fail the
+        # existing _never_dispatched proof above.
+        old = s.get(OfEngineDecision, (runtime.account_id, proof['decisionId'])) if proof else None
+        old_message = s.get(Message, (runtime.account_id, prior.fan_id, old.source_message_id)) if old else None
+        if (fresh_message is None or old_message is None
+                or fresh_message.message_id == old_message.message_id
+                or (fresh_message.created_at, fresh_message.message_id) <= (old_message.created_at, old_message.message_id)):
+            raise Refused('offer_successor_needs_fresh_input')
     _unowned(s, runtime.account_id, prior.fan_id, terms)
     from onlyfans_runtime.quote import request_exists
     if request_exists(s, runtime.account_id, prior.fan_id, terms):
         raise Refused('an existing offer needs review')
     new = _terms_stamp(terms)
-    authority = {'kind': 'terms_successor', 'predecessor': prior.grant_id, 'oldTermsHash': prior.terms_hash,
+    authority = {'kind': 'cancelled_unsent_successor' if same_terms else 'terms_successor', 'predecessor': prior.grant_id, 'oldTermsHash': prior.terms_hash,
                  'newTermsHash': digest, 'oldRevision': stamp.get('revision'), 'newRevision': new['revision'],
                  'oldVariant': stamp.get('variant'), 'newVariant': new['variant'], 'terms': new, 'neverDispatched': proof}
     successor = OfEngineOfferGrant(account_id=runtime.account_id, grant_id=str(uuid.uuid4()), fan_id=prior.fan_id,
         binding_id=runtime.binding_id, item_id=prior.item_id, terms_hash=digest, coverage_ref=prior.coverage_ref,
         expires_at=prior.expires_at, issuance=prior.issuance + 1, predecessor_grant_id=prior.grant_id,
-        issuance_reason='discount_variant' if variant == 'discount' else 'terms_revision',
+        issuance_reason='cancelled_unsent' if same_terms else 'discount_variant' if variant == 'discount' else 'terms_revision',
         authorization_json=json.dumps(authority, sort_keys=True, separators=(',', ':')), created_at=utcnow())
     try:
         with s.begin_nested():
@@ -470,7 +479,9 @@ def prepare_commercial_offer(store, tenant, account, fan_id, message_id, *, cove
             elif prior.terms_hash == digest and prior.used_intent_id is None and prior.expires_at > utcnow():
                 grant = prior
             elif prior.terms_hash == digest:
-                return {'state': 'held', 'reason': 'offer_authorization_needs_review', 'itemId': str(item_id)}
+                if prior.used_intent_id is None:
+                    return {'state': 'held', 'reason': 'offer_authorization_needs_review', 'itemId': str(item_id)}
+                grant = terms_successor(s, runtime, owner, prior, policy, variant=variant, fresh_message=message)
             else:
                 grant = terms_successor(s, runtime, owner, prior, policy, variant=variant)
             verified_terms(s, runtime, owner, grant)

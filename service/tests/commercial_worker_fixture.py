@@ -106,7 +106,7 @@ class World:
             # (`test_onlyfans_text_delivery_pg.current`). It is not coverage and grants nothing.
             runtime.enabled, runtime.recovery_needed, runtime.last_sync_at = True, False, utcnow()
             policy = s.get(OfDeliveryPolicy, self.account)
-            policy.daily_limit_units = 100
+            policy.daily_limit_units = body['limits']['daily_send_units']
             policy_revision, throttle = policy.revision, policy.throttle_seconds
         TextAuthority(self.store).configure(TENANT, self.account, expected_revision=policy_revision, enabled=True, limit_units=body['limits']['send_units'],
             throttle_seconds=throttle, media_enabled=True, actor=OPERATOR, reason='Operator opens the delivery policy')

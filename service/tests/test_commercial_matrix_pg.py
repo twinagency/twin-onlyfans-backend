@@ -421,7 +421,10 @@ def test_q8_a_429_on_a_commercial_account_recovers_without_a_new_fan_message_and
     approve_live(world)
     drain(world, restarted)
     assert len(world.cards()) == 1 and world.cards()[0]['body']['price'] == 12.0
-    assert len(grants(world, FAN_A)) == 1 and [r.status for r in requests_of(world, FAN_A)] == ['completed']
+    assert len(grants(world, FAN_A)) == 1
+    [request] = requests_of(world, FAN_A)
+    assert request.status == 'waiting_fan', 'accepted paid card waits for the fan; it is not a completed purchase'
+    assert len([i for i in intents(world) if i.status == 'accepted' and i.price_cents == 1200]) == 1
     clock.offset = timedelta(seconds=600)
     drain(world)
     drain(world, restarted)

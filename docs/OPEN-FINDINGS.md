@@ -329,7 +329,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - Source: `.scratch/rwl-W4/STATE.md` (Threads, Summary), 11 review lanes `.scratch/rwl-W4/<lane>/FINDINGS.md`, live `.scratch/rwl-W4/live-verify/RESULTS.md` (13 confirmed / 2 failed / 0 blocked / 3 n/a, 0 OF calls). Programme `.scratch/rwl-programme/STATE.md` (OQ-21b…26, Disputes, Fable 11:2x).
 - Pins: W4 = a2f1dda6 (kept) + delta-r0-decoding 66a1da4a..3b8fc64c. Running build (m, live-verify step 0 + end, no restart): `8d0001f9` jaka/takeover-20261111 (merge of #82 c48eb755), clean, schema HEAD 0133 = engine DB; contains 659ea29 + e8e90954, not a2f1dda6. :8787 = `onlyfans_app` (engine API on PG); legacy `server.py` relay + SQLite not running → relay-only findings n/a on the running stack (m), reachable on any relay deploy (deploy-here.sh / deploy-vps.sh) (i).
 - Live (m): engine DB 0133 with 0129b fully applied (DS-1, MB-3); vault-frozen + reconnect guards present (DS-2); `fastt_runtime` schema absent on engine DB (DS-3 failed vs lane's 16/0); 0 RLS policies on `of_%` (W4TI-03 live); 0 pending fans projections (SS-1); 1 live binding, 0 dup (OFR-3); 0 paid messages (OFR-2, vacuous); downgrade evidence all 0 (MB-1, vacuous); attribution view present on PG (MA-1); 0 pre-0032 NULL-kind automation sends (MA-2); 0 command-route 5xx since restart (MT-1); 187 inbound messages match the lane's minor-adjacent regex (count only; RESULTS check id `W4CEC-1` measures W4CEC-4 reach; some benign, g). migrations-b-2 failed = stale lane expectation (W4MB-08 not shown live).
-- Same rules as W1–W3. W4 lanes mark nearly every id `659ea29: y` (files unchanged since 659ea29, m per lane) → present on 8d0001f9 inferred (i), not re-diffed.
+- Same rules as W1–W3. W4 lanes mark nearly every id `659ea29: y`; the earlier "present on 8d0001f9 (inferred)" is replaced by measured values in **W3+W4 reach @ running 8d0001f9** below (blockers/majors).
 
 ## W4 counts
 
@@ -464,6 +464,25 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 | W4OFR-15, W4OFR-20 | fix | doc (millicents mislabel; refusal-vs-empty) |
 | W4OFR-21 | fix | test-gap: fake repo hides batched paths |
 | W4OFR-22, W4OFR-23, W4OFR-24, W4OFR-25, W4OFR-27 | YAGNI | structure; OFR-22 = G10 judo (one scoped read) |
+
+## W3+W4 reach @ running 8d0001f9 (blockers/majors; minors/nits skipped)
+
+- Method (m): per id, cited files at the lane pin (a2f1dda6; delta lanes 66a1da4a / f5205ddd / 3b8fc64c) vs `git show 8d0001f9:`. y = blob identical, or cited lines not in the 8d0001f9→pin `git diff -U0` hunks, or mechanism found by `git grep`; n = mechanism file/code absent. Only W2 commits (e8e90954..a2f1dda6) and R0 (66a1da4a, 3b8fc64c) are missing from the build; W2 touched text_delivery.py only at :257-287.
+- Count: 190 ids · y 186 · n 4 · ? 0. Severity-unlabelled rows taken from lane text (W3RCB-08 = W3CEA-07; W3TSA-02/-04/-09, W3FA-02, W3RCB-07 blocker[-cond]; W3TSA-11, W4TI-02/-06, W4DS-01 major); skipped W3TSA-17 (minor), W4TI-03 (info).
+- Judgement y (m by reading): W4CEC-1 via own `pilot_scope.current` validate / fingerprint refuse (pilot_scope.py:281-294 → store.py:434-436; scope_contract.py absent); W4MT-6 M2 only (launch_operations fingerprint refusal; M1 configuration_api route is W2); W3TSA-05 (`control_account` fingerprint check before `stop_runtime_in_session`, launch_operations.py:127-128); W3RCB-08 = DOC-10 commerce `held` path (ownership_gate absent everywhere); W3CEA-16 / W3RD-28 / W3RD-10 legacy `catalog_terms` + vault_editing parts (catalogue_select / catalogue_terms parts absent); W3DC-01 urllib (session_bootstrap.py:37, :419, :529); W3FA-02 `FansApiClient.send` (protocol.py:246).
+- G1: y 10 / n 2. y: W3CEA-07, W3RCB-08, W3RCB-06, W3FA-01, W3FA-04, W3FA-12, W3CEA-08, W3CEA-25, W3RD-05, W4OFR-05. n: W3CEA-09 (history_ownership.py absent), W4CEB-4 (ownership_gate.py absent).
+- G2: y 10 / n 0. y: W3TSA-05, W3RCA-02, W3RCA-03, W3RD-06, W3RCA-01, W3RCA-S1, W4CEC-1, W4CEB-10, W4MT-3, W4MT-6.
+- G4: y 7 / n 0. y: W3RCT-01, W3RCT-02, W3RCT-04, W3RCT-07, W3RCT-28, W3RD-02, W3CEA-16.
+- G5: y 22 / n 2. y: W3TL-01, W3DR-07, W3TL-02, W3TL-04, W3TL-05, W3TL-06, W3TL-07, W3TL-08, W3TL-11, W3TL-09, W3DR-23, W3TL-10, W3DR-08, W3TL-14, W3TL-18, W3TL-23, W3TL-27, W3RCB-10, W3RO-14, W4MT-1, W4CEB-1, W4MA-05. n: W3DR-01 (R0-only gzip decode; openrouter.py has none), W3DR-02 (R0 release/handover path; base = F2 y).
+- G6: y 14 / n 0. y: W3RD-01, W3RCB-14, W3RO-11, W3RO-10, W3RO-09, W3RO-12, W3RCA-08, W3RD-10, W3RD-28, W3RD-31, W3RD-32, W4CEB-7, W4MA-08, W4MB-06.
+- G7: y 35 / n 0. y: W3RCB-01, W3RCB-04, W3RO-01, W3RCB-03, W3RO-02, W3RCB-02, W3RCT-14, W3TSA-12, W3RCT-10, W3RD-07, W3RCB-15, W3RCB-05, W3RCB-11, W3RCB-12, W3RCB-13, W3RCB-16, W3RO-03, W3RO-04, W3RO-05, W3RO-18, W3RCA-06, W3RCT-05, W3RCT-06, W3RCT-08, W3RCT-09, W3RCT-13, W3RD-03, W3RD-04, W3RD-11, W3RD-29, W3FA-08, W3FA-09, W4CEB-2, W4OFR-03, W4OFR-04.
+- G8: y 19 / n 0. y: W3CEA-01, W3CEA-02, W3CEA-03, W3CEA-12, W3TSA-02, W3RO-06, W3RO-07, W3RCA-07, W3RCT-11, W3RCT-12, W3TSA-09, W4SS-3, W4SS-1, W4SS-8, W4CEB-5, W4CEB-9, W4CEC-2, W4CEC-3, W4MT-2.
+- G9: y 11 / n 0. y: W3TSA-01, W3TSA-03, W3TSA-04, W3FA-02, W3FA-14, W3TSA-11, W3RCA-04, W3RCA-05, W3RCB-09, W3TSA-S3, W4CEB-3.
+- G10: y 13 / n 0. y: W3FA-03, W3RO-36, W3FA-07, W3RCT-03, W3RCT-15, W3DC-03, W4TI-01, W4TI-02, W4TI-06, W4DM-06, W4MA-11, W4OFR-06, W4OFR-28.
+- G11: y 12 / n 0. y: W3RCA-10, W3RCA-23, W3TL-03, W3TL-26, W3TL-28, W3TL-29, W3DC-01, W3RCT-26, W4MB-02, W4DM-05, W4DM-28, W4MA-10.
+- G12: y 5 / n 0. y: W3RCB-07, W3RO-08, W3TL-22, W3TH-09, W4MB-01.
+- G13: y 25 / n 0. y: W4DS-01, W4DS-02, W4MB-08, W4MB-13, W4DM-01, W4DM-02, W4DM-03, W4DM-04, W4MA-01, W4DM-07, W4DM-21, W4MA-02, W4MA-03, W4MA-04, W4MA-06, W4MB-07, W4MA-07, W4MA-09, W4MB-03, W4MB-04, W4MB-05, W4MB-12, W4MB-10, W4MB-09, W4MB-11.
+- G14: y 3 / n 0. y: W4CEC-4, W4CEB-6, W4CEB-8.
 
 ## W4 disputes
 - **OPEN: W4MA-05 vs W4DS-09** — `llm_client._reserve` with `account_id=None`? Owner W5 llm-profile-learning (G5).

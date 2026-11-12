@@ -178,6 +178,7 @@ L3-P1 (fans_api_adapter) · F4 + F5-control (model_transport) · F02 control · 
 | F1 | fix/W5BB-1-capture-owner-binding | W5BB-1 + W3DC-03 (same root: capture not bound to account owner) | blocker, LIVE, cross-tenant, our #80/#82; + adds scripts/premerge.sh |
 | F2 | fix/W3DC-01-no-direct-egress | W3DC-01 | blocker, LIVE since #80/#82, direct OF egress from host IP |
 | F3 | fix/W3DC-06-secret-echo | W3DC-06 + W5BB-7 (Sign echoed in error/log) + W3DC-04 if small | our jaka findings (cookie echo) |
+| OWN-b | fix/OWN-b-signin-loopback | W6SI-18 (:8479 on all interfaces) | owner 22:1xZ (b): small, do next |
 | F4 | fix/W6HR-1-skipped-inbound-input | W6HR-1 (new red test) | blk-cond, LIVE on worker (#83, ours) |
 | F5 | fix/W2OR-04-activate-stop-check | W2OR-04 = W2SC-22 | blocker, LIVE path (Activate re-enables stopped account) |
 | F6 | fix/W3RO-01-recent-inbox-retry | W3RO-01 + W3RCB-01 rest | blocker, LIVE reads (infinite per-fan retry / page refusal) |
@@ -187,5 +188,14 @@ L3-P1 (fans_api_adapter) · F4 + F5-control (model_transport) · F02 control · 
 | F10 | fix/W3TL-01-ledger | W3TL-01, W3TL-02 | G5 blockers (money) |
 | F11 | fix/W6AD-1-money-asks | W6AD-1, W6AD-2 | G15 blockers |
 | F12 | fix/L3-01-unsellable | L3-01..03, CVA-01 | G4 blockers |
-Then G5/G7/G10 majors. YAGNI rows (CVA-06, CVA-10, W5BB-8) skipped. Drift-unknown 25 = code not on head → not queued here (belongs to commercial-integration line).
+Then G5/G7/G10 majors.
+
+### Gate: before relay re-enable (owner 22:2xZ, OQ-27 answered)
+Relay (service/server.py, automations, wcfi) is NOT in prod; it may be reused. These are NOT live-risk. Fix them after the engine/live items, before anyone turns the relay back on. Never delete relay code.
+| # | findings | note |
+|---|---|---|
+| R1 | W6AE-1..4 (wcfi asks age, stores "16") | cheap age guard first (refuse/hold if a fan states under 18). Fans 20+ per owner; this is legal safety |
+| R2 | W6AX-1 / W6AX-2 (triple mass send) | no red test yet; write one |
+| R3 | W6CE-1 | relay-only, per OQ-27 list |
+ YAGNI rows (CVA-06, CVA-10, W5BB-8) skipped. Drift-unknown 25 = code not on head → not queued here (belongs to commercial-integration line).
 Live confirm after F3 (or F4) and after F6.

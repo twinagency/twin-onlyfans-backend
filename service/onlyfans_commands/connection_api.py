@@ -122,7 +122,7 @@ async def capture_from_curl(request:Request,account_id:str):
         if not {'curl'}<=set(body) or not set(body)<={'curl','staticParamOverride'} or type(body['curl'])is not str:raise ValueError()
         if 'staticParamOverride' in body and body['staticParamOverride'] is not None and type(body['staticParamOverride'])is not str:raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid curl capture request.'},400)
-    # Provider assets go out through the account's assigned proxy, never direct (W3DC-01).
+    # Provider assets go out through the saved connection's proxy (None if none saved), never urllib (W3DC-01).
     try:proxy=await asyncio.to_thread(get_capture_proxy,store,tenant,account_id)
     except Exception as exc:return failure(exc)
     try:
@@ -152,8 +152,10 @@ async def browserbase_login_start(request:Request,account_id:str):
     try:
         if await read_json(request)!={}:raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid Browserbase login request.'},400)
+    try:proxy=await asyncio.to_thread(get_capture_proxy,*context,account_id)  # W3DC-01, as capture-from-curl
+    except Exception as exc:return failure(exc)
     import browserbase_login
-    try:job=browserbase_login.start(context[1],account_id)
+    try:job=browserbase_login.start(context[1],account_id,proxy=proxy)
     except browserbase_login.Unconfigured:return response({'ok':False,'code':'browserbase_unconfigured','error':'BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'},503)
     except browserbase_login.Busy:return response({'ok':False,'code':'browserbase_busy','error':'Too many Browserbase logins are running. Try again in a few minutes.'},429)
     return response({'ok':True,**job.public()})

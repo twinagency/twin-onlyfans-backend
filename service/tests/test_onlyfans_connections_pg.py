@@ -245,11 +245,26 @@ def test_first_save_refuses_capture_of_another_owner(database,monkeypatch):
 
 
 def test_capture_proxy_is_the_saved_connection_proxy_in_scope(database,monkeypatch):
-    # W3DC-01: curl paste fetches through the account's saved proxy; none saved -> None (browser-capture rule).
-    settings(monkeypatch);store=Store(database[0]);account=provision(store)
-    assert module.get_capture_proxy(store,TENANT,account) is None
+    # W3DC-01 via the real route + PG: curl paste builds through the saved connection's proxy (None if none saved);
+    # unreadable sealed config (409) or a connection from another binding (404) refuses before any build/fetch.
+    settings(monkeypatch);store=Store(database[0]);account=provision(store);builds=[]
+    for k,v in {'ONLYFANS_PROCESS_ROLE':'api','ONLYFANS_CONNECTION_TOKEN':'synthetic-connect','ONLYFANS_CONNECTION_TENANT':TENANT}.items():monkeypatch.setenv(k,v)
+    import session_bootstrap
+    monkeypatch.setattr(session_bootstrap,'build_connection_capture',lambda curl,**k:builds.append(k['proxy']) or {'capture':{},'xHash':'h','ownerId':OWNER})
+    app=FastAPI();app.include_router(router);app.state.control_store=store;client=TestClient(app)
+    post=lambda:client.post('/onlyfans/connection/v1/accounts/'+account+'/capture-from-curl',headers={'Authorization':'Bearer synthetic-connect',HEADER:SCHEMA},json={'curl':'synthetic'}).status_code
+    assert post()==200 and builds==[None]
     save(store,account,data())
-    assert module.get_capture_proxy(store,TENANT,account)==data()['proxyUrl']
+    assert post()==200 and builds==[None,data()['proxyUrl']]
+    with Session(database[1]) as session,session.begin():
+        row=session.get(OfProviderConnection,account);original=row.sealed_config;row.sealed_config='corrupt'
+    assert post()==409 and len(builds)==2
+    with Session(database[1]) as session,session.begin():
+        session.get(OfProviderConnection,account).sealed_config=original
+        runtime=session.get(OfRuntime,account);old=session.get(OfCreatorBinding,runtime.binding_id);old.revoked_at=utcnow();session.flush()
+        new=OfCreatorBinding(**{**{c.key:getattr(old,c.key) for c in OfCreatorBinding.__table__.columns},'id':'binding-rebound','revoked_at':None})
+        session.add(new);session.flush();runtime.binding_id=new.id
+    assert post()==404 and len(builds)==2
     with pytest.raises(Refused,match='scope unavailable'):module.get_capture_proxy(store,'tenant-other',account)
     store.close()
 

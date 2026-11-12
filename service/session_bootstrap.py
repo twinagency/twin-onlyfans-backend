@@ -499,7 +499,7 @@ def from_curl(curl_text: str, *,
 
 def build_connection_capture(curl_text: str, *,
                              static_param_override: str | None = None,
-                             account: str, proxy: str | None = None) -> dict:
+                             account: str, proxy: str | None) -> dict:
     """Derive a dashboard connection capture from a single DevTools curl.
 
     Pure derivation twin of `from_curl` — parses the curl, resolves
@@ -520,14 +520,14 @@ def build_connection_capture(curl_text: str, *,
 
 def build_connection_capture_from_request(parsed: dict, *,
                                           static_param_override: str | None = None,
-                                          account: str, proxy: str | None = None) -> dict:
+                                          account: str, proxy: str | None) -> dict:
     """`build_connection_capture` on an already-parsed request (parse_curl's
     shape) — the Browserbase login feeds its browser capture in here.
 
     The capture must belong to one OnlyFans login: `user-id` == `auth_id`
     cookie, and == the owner of `account` (`of-<owner>`). OnlyFans assets are
-    fetched like a browser capture: curl_cffi through `proxy` (the account's
-    assigned proxy, None when it has none), never urllib/env proxies."""
+    fetched with curl_cffi through `proxy` (required: the saved connection's
+    proxy, or None when none is saved), never urllib/env proxies."""
     from onlyfans_runtime.browser_capture import fetch_asset
     h = parsed["headers"]
     required = ("user-id", "x-bc", "x-of-rev", "sign", "time", "user-agent")

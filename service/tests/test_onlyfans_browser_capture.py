@@ -24,7 +24,7 @@ def assets(monkeypatch):
     calls = []
     def asset(kind, **kwargs):
         calls.append((kind, kwargs)); return CHUNK if kind == "rules" else "synthetic-hash"
-    monkeypatch.setattr(browser,"_asset",asset)
+    monkeypatch.setattr(browser,"fetch_asset",asset)
     return calls
 
 def test_real_signer_conversion_and_fixed_provider_inputs(monkeypatch):
@@ -70,7 +70,7 @@ def test_asset_loader_has_no_redirect_retry_cookie_or_arbitrary_url(monkeypatch)
             calls.append((url,kwargs));kwargs["content_callback"](b"synthetic")
             return types.SimpleNamespace(status_code=200,headers={"content-encoding":"identity"})
     monkeypatch.setitem(sys.modules,"curl_cffi",types.SimpleNamespace(requests=types.SimpleNamespace(Session=Client)))
-    assert browser._asset("hash",owner=123,rev="rev",user_agent="agent",proxy=None)=="synthetic"
+    assert browser.fetch_asset("hash",owner=123,rev="rev",user_agent="agent",proxy=None)=="synthetic"
     url,kw=calls[0];assert url=="https://cdn2.onlyfans.com/hash/?u=123"
     assert kw["allow_redirects"] is False and kw["discard_cookies"] is True and "Cookie" not in kw["headers"]
-    with pytest.raises(Refused):browser._asset("arbitrary",owner=123,rev="rev",user_agent="agent",proxy=None)
+    with pytest.raises(Refused):browser.fetch_asset("arbitrary",owner=123,rev="rev",user_agent="agent",proxy=None)

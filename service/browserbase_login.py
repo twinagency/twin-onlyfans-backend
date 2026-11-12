@@ -122,6 +122,7 @@ class Job:
     account: str
     created_at: float
     expires_at: float
+    proxy: str | None = field(repr=False)  # saved connection proxy for the asset fetches (W3DC-01)
     state: str = STARTING
     error: str | None = None
     live_view_url: str | None = None
@@ -210,7 +211,7 @@ def configured() -> bool:
     return bool(os.environ.get("BROWSERBASE_API_KEY") and os.environ.get("BROWSERBASE_PROJECT_ID"))
 
 
-def start(tenant: str, account: str) -> Job:
+def start(tenant: str, account: str, *, proxy: str | None) -> Job:
     """The active job for (tenant, account), else a new one on a daemon thread."""
     if not configured():
         raise Unconfigured()
@@ -222,7 +223,7 @@ def start(tenant: str, account: str) -> Job:
         if existing is None and not busy:
             now = time.time()
             existing = Job(id=uuid.uuid4().hex, tenant=tenant, account=account,
-                           created_at=now, expires_at=now + JOB_WINDOW_S)
+                           created_at=now, expires_at=now + JOB_WINDOW_S, proxy=proxy)
             _jobs[existing.id] = existing
             fresh = True
         else:
@@ -417,7 +418,7 @@ def _capture(job: Job, page, context) -> dict:
         ua = ""
     parsed = request_from_capture(cap, cookies, ua)
     try:
-        return session_bootstrap.build_connection_capture_from_request(parsed, account=job.account)
+        return session_bootstrap.build_connection_capture_from_request(parsed, account=job.account, proxy=job.proxy)
     except session_bootstrap.CurlParseError as e:
         raise RuntimeError(f"Logged in, but the capture could not be read: {e}") from None
 

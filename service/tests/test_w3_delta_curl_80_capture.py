@@ -55,20 +55,20 @@ def wire(monkeypatch):
 def test_auth_id_cookie_must_match_user_id(wire):
     # browser_capture.validate_browser_payload requires auth_id == owner; the curl path must too.
     with pytest.raises(sb.OwnerMismatch):
-        sb.build_connection_capture(curl("-b 'auth_id=999; sess=FAKE'"), account="of-123")
+        sb.build_connection_capture(curl("-b 'auth_id=999; sess=FAKE'"), account="of-123", proxy=None)
     assert wire == []
 
 
 def test_curl_of_another_owner_refused_for_account(wire):
     with pytest.raises(sb.OwnerMismatch):
-        sb.build_connection_capture(curl(), account="of-999")
+        sb.build_connection_capture(curl(), account="of-999", proxy=None)
     assert wire == []
-    assert sb.build_connection_capture(curl(), account="of-123")["ownerId"] == OWNER
+    assert sb.build_connection_capture(curl(), account="of-123", proxy=None)["ownerId"] == OWNER
 
 
 def test_missing_auth_id_is_a_parse_error_not_a_mismatch(wire):
     with pytest.raises(sb.CurlParseError, match="no auth_id") as e:
-        sb.build_connection_capture(curl("-b 'sess=FAKE'"), account="of-123")
+        sb.build_connection_capture(curl("-b 'sess=FAKE'"), account="of-123", proxy=None)
     assert not isinstance(e.value, sb.OwnerMismatch)
 
 
@@ -119,7 +119,7 @@ def test_no_direct_urllib_egress_to_onlyfans(wire, monkeypatch):
     assert [u for _, u, _ in wire] == ["https://cdn2.onlyfans.com/hash/?u=123",
                                        "https://static2.onlyfans.com/static/prod/f/synthetic-rev/2313.js"]
     for _, _, kw in wire:
-        assert (kw["proxy"], kw["trust_env"], kw["allow_redirects"], kw["impersonate"]) == (PROXY, False, False, "chrome")
+        assert (kw["proxy"], kw["trust_env"], kw["allow_redirects"], kw["impersonate"], kw["timeout"]) == (PROXY, False, False, "chrome", 8)
 
 
 def test_unreadable_account_proxy_refuses_without_fetch(wire, monkeypatch):
@@ -132,5 +132,21 @@ def test_unreadable_account_proxy_refuses_without_fetch(wire, monkeypatch):
 def test_x_of_rev_validated_before_url(wire):
     # W3DC-07: x-of-rev must match the browser-capture rule before it reaches a URL.
     with pytest.raises(sb.CurlParseError):
-        sb.build_connection_capture(curl(rev="../../evil"), account="of-123")
+        sb.build_connection_capture(curl(rev="../../evil"), account="of-123", proxy=None)
     assert not any(".." in u for _, u, _ in wire), f"unvalidated x-of-rev reached URL: {wire}"
+
+
+def test_asset_fetch_is_byte_capped(wire, monkeypatch):
+    # F2-08: an oversized X-Hash body is refused, not buffered (cap 4096 bytes).
+    from onlyfans_runtime.browser_capture import fetch_asset
+    from onlyfans_runtime.store import Refused
+    monkeypatch.setitem(globals(), "_body", lambda url: b"h" * 4097)
+    with pytest.raises(Refused):
+        fetch_asset("hash", owner=123, rev="synthetic-rev", user_agent="Synthetic browser", proxy=PROXY)
+
+
+def test_capture_build_requires_explicit_proxy():
+    # F2-02: no default proxy, so a new caller cannot silently go direct.
+    import inspect
+    for f in (sb.build_connection_capture, sb.build_connection_capture_from_request):
+        assert inspect.signature(f).parameters["proxy"].default is inspect.Parameter.empty, f

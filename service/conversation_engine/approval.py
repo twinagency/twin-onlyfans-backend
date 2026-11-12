@@ -596,12 +596,12 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
                 'offer_reference': reference,
                 'price_information': _price_information(s, runtime, source.body),
                 'offer_grants': _offer_grants(s, runtime, request.fan_id), **terms_mode_view(s, runtime)}, profile=profile)
-            problems = edit_problems([part.strip() for part in parts], context)
-            if problems:
-                raise Refused('edited draft violates creator or pilot rules: ' + problems[0])
             proposal = SyntheticProposal(body=parts[0].strip(), action=head.action,
                                          parts=tuple(t.strip() for t in parts[1:]) if head.action == 'reply' else (),
                                          offer_grant_id=head.offer_grant_id)
+            problems = edit_problems([part.strip() for part in parts], context, proposal)
+            if problems:
+                raise Refused('edited draft violates creator or pilot rules: ' + problems[0])
             if head.action == 'offer' and len(parts) != 1:
                 raise Refused('an offer draft has one part')
             prices = {offer['priceCents'] for offer in reference['offers']}

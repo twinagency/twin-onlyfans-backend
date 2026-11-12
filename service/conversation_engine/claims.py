@@ -13,6 +13,12 @@ is accepted only when it names an item the fan verifiably owns, a price must
 equal an approved price, and a content quantity must equal the payload (or a
 fact already recorded in the conversation). Neither is a perfect classifier:
 real-model grounding still has to be measured separately.
+
+Product truth. A card's lead-in (an `offer` proposal, or an operator edit of one) is held to the ONE grant it selected, and
+only to that grant: every asserted mention of a media noun states the card's kind, every stated count must be the grant's own
+count of that kind, a duration needs a stated duration, an amount must be the grant's price. Another grant, an earlier card,
+the catalogue and price listings authorize nothing for it. The model judge, the plan backstop and the operator edit all call
+this one module.
 """
 import re
 from dataclasses import dataclass
@@ -32,16 +38,42 @@ class Grounding:
     # price/grant/card referent, or a request about content or its price) only draft clauses that name a product are checked.
     product_context: bool = False
     media_kinds: frozenset = frozenset()       # 'picture' / 'video' kinds the scoped referent(s) are known to contain
-    durations: frozenset = frozenset()         # seconds; no snapshot carries a duration today, so none can be stated
+    durations: frozenset = frozenset()         # seconds; absent facts never authorize a duration
+    # An offer card is attached to this text: its ONE selected authorized grant is the only authority for what the text may say
+    # about the product (kind, count, duration, price). Nothing else in the snapshot (another grant, an earlier card, the
+    # catalogue, a price listing) authorizes it. `media_quantities` is {(picture|video|other, count)}, zeros included.
+    offer_bound: bool = False
+    media_quantities: frozenset = frozenset()
+
+
+def selected_offer(snapshot, proposal):
+    """The exact authorized grant an offer proposal names, or None. Never a text-ranked neighbour, never a guess."""
+    if proposal is None or getattr(proposal, 'action', 'reply') != 'offer':
+        return None
+    wanted = getattr(proposal, 'offer_grant_id', None)
+    matches = [g for g in snapshot.get('offer_grants') or [] if isinstance(g, dict) and g.get('grantId') == wanted]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _price_facts(grant):
+    """Cents a text may state about this grant: its approved price, and the standard price only of an approved discount."""
+    out = set()
+    if grant.get('currency') == 'USD':
+        if type(grant.get('priceCents')) is int and grant['priceCents'] > 0:
+            out.add(grant['priceCents'])
+        if grant.get('discountApproved') is True and type(grant.get('standardCents')) is int and grant['standardCents'] > 0:
+            out.add(grant['standardCents'])
+    return out
 
 
 def grounding_from_snapshot(snapshot, proposal=None):
     """Build Grounding from a writer snapshot. `offer_grants`/`verified_purchases` exist only for a real model."""
-    quantities = set()
-    grants = snapshot.get('offer_grants') or []
-    wanted = getattr(proposal, 'offer_grant_id', None)
-    if proposal is not None and getattr(proposal, 'action', 'reply') == 'offer':
-        grants = [g for g in grants if g.get('grantId') == wanted]
+    quantities, media_quantities = set(), set()
+    offering = proposal is not None and getattr(proposal, 'action', 'reply') == 'offer'
+    # A real-model snapshot carries its authorized grants; a synthetic fixture does not, and keeps the legacy (unbound) checks.
+    bound = offering and 'offer_grants' in snapshot
+    selected = selected_offer(snapshot, proposal) if bound else None
+    grants = ([selected] if selected is not None else []) if bound else snapshot.get('offer_grants') or []
     for grant in grants:
         if type(grant.get('mediaCount')) is int and grant['mediaCount'] > 0:
             quantities.add(grant['mediaCount'])
@@ -50,10 +82,13 @@ def grounding_from_snapshot(snapshot, proposal=None):
             for key in ('total', 'pictures', 'videos'):
                 if type(media.get(key)) is int and media[key] > 0:
                     quantities.add(media[key])
-    for row in snapshot.get('history') or []:
+            for kind, key in (('picture', 'pictures'), ('video', 'videos'), ('other', 'total')):
+                if type(media.get(key)) is int and media[key] >= 0:
+                    media_quantities.add((kind, media[key]))
+    for row in ([] if bound else snapshot.get('history') or []):
         if row.get('direction') == 'out' and type(row.get('media_count')) is int and row['media_count'] > 0:
             quantities.add(row['media_count'])
-    for item in (snapshot.get('catalogue_search') or {}).get('items') or []:
+    for item in ([] if bound else (snapshot.get('catalogue_search') or {}).get('items') or []):
         if item.get('mediaIds'):
             quantities.add(len(item['mediaIds']))
     labels = tuple(str(p.get('label') or '') for p in (snapshot.get('verified_purchases') or []) if isinstance(p, dict))
@@ -66,12 +101,15 @@ def grounding_from_snapshot(snapshot, proposal=None):
         # an already resolved card reference can ground contextual "it".
         media_reference = (any(not _negated(clause, start) for clause, start in mentions)
                            if mentions else bool((snapshot.get('offer_reference') or {}).get('offers')))
-    prices = frozenset(g['priceCents'] for g in [*(snapshot.get('offer_grants') or []), *(snapshot.get('price_information') or [])]
-                       if isinstance(g, dict) and type(g.get('priceCents')) is int
-                       and g['priceCents'] > 0 and g.get('currency') == 'USD')
-    # An approved discount card may also name the standard amount it is lower than; a standard card names only its own amount.
-    prices |= frozenset(g['standardCents'] for g in grants if isinstance(g, dict) and g.get('discountApproved') is True
-                        and type(g.get('standardCents')) is int and g['standardCents'] > 0 and g.get('currency') == 'USD')
+    if bound:
+        prices = frozenset(_price_facts(selected)) if selected is not None else frozenset()
+    else:
+        prices = frozenset(g['priceCents'] for g in [*(snapshot.get('offer_grants') or []), *(snapshot.get('price_information') or [])]
+                           if isinstance(g, dict) and type(g.get('priceCents')) is int
+                           and g['priceCents'] > 0 and g.get('currency') == 'USD')
+        # An approved discount card may also name the standard amount it is lower than; a standard card names only its own amount.
+        prices |= frozenset(g['standardCents'] for g in grants if isinstance(g, dict) and g.get('discountApproved') is True
+                            and type(g.get('standardCents')) is int and g['standardCents'] > 0 and g.get('currency') == 'USD')
     access_labels = tuple(card['label'] for card in (snapshot.get('offer_reference') or {}).get('cards') or []
                           if isinstance(card, dict) and isinstance(card.get('label'), str)
                           and card.get('sendState') == 'accepted' and card.get('accessState') == 'confirmed'
@@ -81,7 +119,6 @@ def grounding_from_snapshot(snapshot, proposal=None):
                  *[p for p in snapshot.get('price_information') or [] if isinstance(p, dict)],
                  *[o for o in (snapshot.get('offer_reference') or {}).get('offers') or [] if isinstance(o, dict)],
                  *[c for c in (snapshot.get('offer_reference') or {}).get('cards') or [] if isinstance(c, dict)]]
-    offering = proposal is not None and getattr(proposal, 'action', 'reply') == 'offer'
     if offering:
         # The attached card is grounded by its selected grant only. Another
         # quoted/catalogue product cannot justify describing these photos as video.
@@ -98,16 +135,17 @@ def grounding_from_snapshot(snapshot, proposal=None):
             if isinstance(ref.get(field), str):
                 kinds.update(_kinds_in(ref[field]))
     from .writer_context import is_price_question
-    product_context = bool(referents) or media_reference is True or is_price_question(message)
+    product_context = bool(referents) or media_reference is True or is_price_question(message) or bound
     return Grounding(frozenset(quantities), labels, media_reference, prices, access_labels,
-                     product_context, frozenset(kinds), frozenset(durations))
+                     product_context, frozenset(kinds), frozenset(durations),
+                     offer_bound=bound, media_quantities=frozenset(media_quantities))
 
 
 _NUMBER_WORDS = {'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8,
                  'nine': 9, 'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15,
                  'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19, 'twenty': 20, 'thirty': 30,
                  'forty': 40, 'fifty': 50, 'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90,
-                 'hundred': 100}
+                 'hundred': 100, 'dozen': 12}
 _NUMBER_RX = r"(?:\d+|" + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True)) + r")"
 
 _PRICE = re.compile(r"(?:[$£€]\s*\d|\b(?:usd|aud|eur|gbp|cad)\b\s*\$?\s*\d|\d\s*(?:usd|aud|eur|gbp|cad|dollars?|bucks|credits?|stars?)\b"
@@ -230,7 +268,8 @@ def _pitch_clauses(text):
 _CONTENT_NOUN = r"(?:pics?|pictures?|photos?|photographs?|videos?|vids?|clips?|images?|selfies|snaps?|shots|reels?|gifs?|media|files|stills|sets)"
 _FILLER = r"(?!(?:for|the|a|an|of|to|in|on|at|and|or|with|from|is|are|was|were|that|this|it)\b)"
 # A count of content: a bare number (not part of a price such as "$5" or "6.00") then optional adjectives then a content noun.
-_QUANTITY = re.compile(r"(?<![\d.,$\u00a3\u20ac])\b(" + _NUMBER_RX + r")(?:\s+(?:more|extra|new|other|different))?\s+(?:" + _FILLER + r"[a-z]+\s+){0,2}?" + _CONTENT_NOUN + r"\b", re.I)
+_COUNT_NOUN = _CONTENT_NOUN[:-1] + r"|items?|pieces?|movies?|films?)"
+_QUANTITY = re.compile(r"(?<![\d.,$\u00a3\u20ac])\b(" + _NUMBER_RX + r")(?:\s+(?:more|extra|new|other|different))?\s+(?:" + _FILLER + r"[a-z]+\s+){0,2}?" + _COUNT_NOUN + r"\b", re.I)
 
 
 # Nouns that are content only sometimes: "2 shots of tequila", "3 sets at the gym". They count as a content quantity unless
@@ -246,21 +285,30 @@ def non_media_quantity(clause, noun):
     return bool(_AMBIGUOUS_NOUN.match(noun) and _NON_MEDIA_CONTEXT.search(clause))
 
 
-def _quantity_claims(text):
-    for clause, _question in _clauses(text):
+def content_quantity_claims(text):
+    """(count, kind) for every 'N <content noun>' statement (kind: picture|video|other).
+
+    The ONE count grammar: the model judge, the plan backstop and the operator edit all read it, so they cannot disagree."""
+    for clause, _question in _clauses(text.replace('\u2019', "'")):
         for match in _QUANTITY.finditer(clause):
-            if non_media_quantity(clause, match.group(0).split()[-1]):
+            noun = match.group(0).split()[-1]
+            if non_media_quantity(clause, noun):
                 continue
             raw = match.group(1).lower()
             number = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
             # "one" is the ordinary pronoun/determiner far more often than a count; only digits or a noun right after it count
-            if raw == 'one' and not re.match(r"one\s+(?:" + _FILLER + r"\w+\s+)?" + _CONTENT_NOUN + r"\b", match.group(0), re.I):
+            if raw == 'one' and not re.match(r"one\s+(?:" + _FILLER + r"\w+\s+)?" + _COUNT_NOUN + r"\b", match.group(0), re.I):
                 continue
             if re.search(r"\b(?:minutes?|mins?|seconds?|secs?|hours?|hrs?|days?|weeks?|months?|years?)\b", match.group(0), re.I):
                 continue   # a duration ("a 10 minute video") is not a count of items
             if _negated(clause, match.start()):
                 continue
-            yield number
+            yield number, _kind_of(noun)
+
+
+def _quantity_claims(text):
+    for number, _kind in content_quantity_claims(text):
+        yield number
 
 
 # --- product wording: price without a currency, media type and duration ----------------------------------------
@@ -270,7 +318,7 @@ def _quantity_claims(text):
 # snapshot: nothing here supplies a missing fact. A negated, quoted, attributed, conditional or questioning clause is
 # not a claim.
 _KIND_WORDS = {'picture': r"(?:pics?|pictures?|photos?|photographs?|images?|selfies|stills?)",
-               'video': r"(?:videos?|vids?|clips?|reels?|gifs?)"}
+               'video': r"(?:videos?|vids?|clips?|reels?|gifs?|movies?|films?|footage)"}
 _ANY_KIND = '(?:' + '|'.join(_KIND_WORDS.values()) + ')'
 _WORD_ALT = '|'.join(sorted(_NUMBER_WORDS, key=len, reverse=True))
 _NUM = r"(\d+(?:[.,]\d{1,2})?|(?:" + _WORD_ALT + r")(?:[\s-]+(?:" + _WORD_ALT + r"))?)"
@@ -280,24 +328,25 @@ _NOT_A_PRICE = (r"(?![\d.,]*\d)(?!\s*(?:%|percent|times?|more|of\b|" + _TIME_UNI
 _PRICE_VERB = r"(?:costs?|costing|priced|prices?|charges?|charged|pays?|paying|goes\s+for|going\s+for|sells?\s+for|sold\s+for)"
 _BARE_PRICES = (
     re.compile(r"\b" + _PRICE_VERB + r"\b(?:\s+(?:is|was|at|of|just|only|about|around|like|you|me))*\s+" + _NUM + r"\b" + _NOT_A_PRICE, re.I),
-    re.compile(r"\b" + _ANY_KIND + r"\s+(?:is|are|was)\s+(?:only\s+|just\s+)?" + _NUM + r"\b" + _NOT_A_PRICE, re.I),
+    re.compile(r"\b" + _ANY_KIND + r"\s+(?:is|are|was|were)\s+(?:only\s+|just\s+)?" + _NUM + r"\b" + _NOT_A_PRICE, re.I),
     re.compile(r"\b" + _NUM + r"\s+(?:for|per)\s+(?:the|a|an|this|that|each|one|it|them|both|all)\b", re.I),
 )
 _ATTRIBUTED = re.compile(r"\b(?:you|u|he|she|they)\s+(?:said|say|says|mentioned|wrote|thought|think|thinks|heard|told\s+me|asked|read|saw|claimed)\b"
                          r"|\b(?:said|says|saying|quote|quoted)\b", re.I)
-_HYPOTHETICAL = re.compile(r"\b(?:were|imagine|suppose|pretend|hypothetical(?:ly)?|wish)\b", re.I)
+_HYPOTHETICAL = re.compile(r"\b(?:imagine|suppose|pretend|hypothetical(?:ly)?|wish)\b|\b(?:if|as\s+if|as\s+though)\b[^.!?]*\bwere\b", re.I)
 _PRODUCT_SUBJECT = re.compile(r"\b(?:it|this|that|these|those|they|one|prices?)\b|\b" + _ANY_KIND + r"\b", re.I)
-_TYPE_CLAIM = re.compile(r"\b(?:it|this|that|they|these|those)(?:'s|'re|\s+is|\s+are|\s+was|\s+will\s+be)\s+"
-                         r"(?:just\s+|only\s+|actually\s+|really\s+)?(?:(?:a|an|the|one|my)\s+)?"
-                         r"(?:(?!(?:not|no|never|a|an|the)\b)[\w-]+\s+){0,2}(" + _ANY_KIND + r")\b(?!\s+(?:call|chat|game|games|shoot|tape))", re.I)
-# Presentation and sending phrases assert what the attached product is, even
-# without a copula ("Here you go, a short video clip for you").
-_PRESENTED_TYPE = re.compile(
-    r"\b(?:here(?:'s|\s+is|\s+are|\s+you\s+go)|"
-    r"(?:i(?:'ve|\s+have)?\s+)?(?:send(?:ing)?|sent|attached|got)(?:\s+you)?)"
-    r"[,:\s]+(?:an?\s+|the\s+|some\s+)?"
-    r"(?:(?!(?:not|no|never)\b)[\w-]+\s+){0,3}(" + _ANY_KIND +
-    r")\b(?!\s+(?:call|chat|game|games|shoot|tape))", re.I)
+# What a text says about the product is read structurally, not from a list of sentence frames: every asserted mention of a
+# media noun describes the product it is attached to, wherever it sits in the sentence (copula, imperative, passive, verbless
+# noun phrase, presentation). On an offer card (`offer_bound`) that is every mention. Without a card, a mention counts when it is
+# visibly about the discussed/attached item (a demonstrative or "your" in its noun phrase, a copula whose subject is the item,
+# "here ...", or a recipient: "for you", "you a ..."), so "I took a photo of my coffee" stays ordinary conversation.
+_MEDIA_NOUN = re.compile(r"\b(" + _ANY_KIND + r")\b", re.I)
+_NON_PRODUCT_COMPOUND = re.compile(r"^\s+(?:calls?|chats?|games?|shoots?|tapes?)\b", re.I)
+_DEICTIC = re.compile(r"\b(?:this|that|these|those|your|attached|enclosed)\b", re.I)
+_HERE = re.compile(r"\bhere(?:'s|\s+is|\s+are|\s+you\s+go)?\b", re.I)
+_ITEM_COPULA = re.compile(r"\b(?:it|this|that|they|these|those)(?:'s|'re|\s+(?:is|are|was|were|will\s+be))\b", re.I)
+_RECIPIENT_BEFORE = re.compile(r"\b(?:you|u)\s+(?:an?|some)\s+(?:[\w-]+\s+){0,3}$", re.I)
+_RECIPIENT_AFTER = re.compile(r"^[^,;.!?]{0,40}?\b(?:for|to)\s+(?:you|u)\b", re.I)
 
 _DURATION_CLAIMS = (
     # copula: a length needs "long" or a media noun after it ("it is a ten minute drive" is not a claim about the product)
@@ -314,6 +363,10 @@ def _kinds_in(text):
     return {kind for kind, rx in _KIND_WORDS.items() if re.search(r"\b" + rx + r"\b", text, re.I)}
 
 
+def _kind_of(noun):
+    return next((kind for kind, rx in _KIND_WORDS.items() if re.fullmatch(rx, noun, re.I)), 'other')
+
+
 def _number_value(raw):
     raw = raw.lower().replace(',', '.')
     if raw[0].isdigit():
@@ -322,9 +375,21 @@ def _number_value(raw):
     return sum(_NUMBER_WORDS[w] for w in re.split(r"[\s-]+", raw) if w in _NUMBER_WORDS) * 100
 
 
-def _asserted(clause, question, start):
-    """True when the match at `start` is the writer asserting it (not a question, negation, condition, quote or report)."""
-    if question or _negated(clause, start) or _HYPOTHETICAL.search(clause):
+def _scoped_negation(clause, start):
+    """True when a negation in the window before `start` governs this noun phrase. A demonstrative or "your" after the
+    negation re-anchors the phrase on the attached item ("don't miss this video" still says it is a video)."""
+    window = _window(clause, start)
+    last = None
+    for match in _NEGATION.finditer(window):
+        last = match
+    return last is not None and not _DEICTIC.search(window[last.end():])
+
+
+def _asserted(clause, question, start, *, anchored=False):
+    """True when the match at `start` is the writer asserting it (not a question, negation, condition, quote or report).
+
+    `anchored` (product nouns): negation must scope over the noun phrase itself, not merely occur earlier in the clause."""
+    if question or _HYPOTHETICAL.search(clause) or (_scoped_negation(clause, start) if anchored else _negated(clause, start)):
         return False
     window = _window(clause, start, 8)
     if _CONDITIONAL.search(window) or _ATTRIBUTED.search(window) or clause[:start].count('"') % 2 or clause[:start].count('\u201c') > clause[:start].count('\u201d'):
@@ -345,22 +410,50 @@ def _bare_price_claims(text):
                     yield _number_value(match.group(1))
 
 
-def _media_type_claims(text):
+def _directed(clause, start, end):
+    """True when the media noun at clause[start:end] is visibly about the attached or discussed item."""
+    words = clause[:start].split()
+    head, near = ' '.join(words[-6:]), ' '.join(words[-3:])
+    return bool(_DEICTIC.search(near) or _HERE.search(head) or _ITEM_COPULA.search(head)
+                or _RECIPIENT_BEFORE.search(head + ' ') or _RECIPIENT_AFTER.match(clause[end:]))
+
+
+_PREMODIFIER_DURATION = re.compile(r"(?:^|[^\w.])" + _NUM + r"[\s-]*(" + _TIME_UNIT + r")(?:[\s-]*long)?(?:\s+[a-z-]+){0,2}\s*$", re.I)
+
+
+def _product_mentions(text, bound):
+    """(kind, seconds | None) for every asserted mention of a product media noun that describes the item in question.
+    `seconds` is a duration stated in the same noun phrase ("a ten-minute video")."""
     for clause, question in _clauses(text.replace('\u2019', "'")):
-        for pattern in (_TYPE_CLAIM, _PRESENTED_TYPE):
-            for match in pattern.finditer(clause):
-                if not _NEGATION.search(match.group(0)) and _asserted(clause, question, match.start()):
-                    yield next(kind for kind, rx in _KIND_WORDS.items() if re.fullmatch(rx, match.group(1), re.I))
+        for match in _MEDIA_NOUN.finditer(clause):
+            if _NON_PRODUCT_COMPOUND.match(clause[match.end():]) or not _asserted(clause, question, match.start(), anchored=True):
+                continue
+            if not bound and not _directed(clause, match.start(), match.end()):
+                continue
+            premodifier = _PREMODIFIER_DURATION.search(clause[:match.start()])
+            yield _kind_of(match.group(1)), (_seconds(premodifier) if premodifier else None)
 
 
-def _duration_claims(text):
-    scale = {'s': 1, 'm': 60, 'h': 3600}
+def _seconds(match):
+    value = _number_value(match.group(1)) / 100
+    value *= {'s': 1, 'm': 60, 'h': 3600}[match.group(2)[0].lower()]
+    return int(value) if value == int(value) else value
+
+
+def _media_type_claims(text, bound=False):
+    for kind, _seconds_claimed in _product_mentions(text, bound):
+        yield kind
+
+
+def _duration_claims(text, bound=False):
     for clause, question in _clauses(text.replace('\u2019', "'")):
         for rx in _DURATION_CLAIMS:
             for match in rx.finditer(clause):
                 if not _NEGATION.search(match.group(0)) and _asserted(clause, question, match.start()):
-                    number = _number_value(match.group(1)) // 100
-                    yield number * scale[match.group(2)[0].lower()]
+                    yield _seconds(match)
+    for _kind, seconds in _product_mentions(text, bound):
+        if seconds is not None:
+            yield seconds
 
 
 # The draft itself can introduce a product ("the photo costs four", "it is a ten-minute video") when the fan only said hello.
@@ -380,9 +473,9 @@ def _check_product_wording(texts, grounding, verified_prices):
     for text in texts:
         if any(cents not in verified_prices for cents in _bare_price_claims(text)):
             raise Refused('unsupported price claim in model text')
-        if any(kind not in grounding.media_kinds for kind in _media_type_claims(text)):
+        if any(kind not in grounding.media_kinds for kind in _media_type_claims(text, grounding.offer_bound)):
             raise Refused('unsupported media type claim in model text')
-        if any(seconds not in grounding.durations for seconds in _duration_claims(text)):
+        if any(seconds not in grounding.durations for seconds in _duration_claims(text, grounding.offer_bound)):
             raise Refused('unsupported media duration claim in model text')
 
 
@@ -444,6 +537,11 @@ def _involvement_claims(text):
 
 
 def _check_quantities(texts, grounding):
+    if grounding.offer_bound:
+        # The text rides on one card: each stated count must be that grant's own count of that kind (zeros included).
+        if any((kind, count) not in grounding.media_quantities for text in texts for count, kind in content_quantity_claims(text)):
+            raise Refused('content quantity not supported by the selected offer payload')
+        return
     numbers = [number for text in texts for number in _quantity_claims(text)]
     if numbers and not (set(numbers) <= grounding.quantities or (len(numbers) > 1 and sum(numbers) in grounding.quantities)):
         raise Refused('content quantity not supported by the payload')
@@ -491,6 +589,9 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
     grounding = grounding or Grounding()
     if proposal.action == 'reply':
         verified_prices = set(verified_prices) | set(grounding.current_offer_prices)
+    elif grounding.offer_bound:
+        # Another card's price, an informational listing or an older offer never authorizes an amount in this card's lead-in.
+        verified_prices = set(grounding.current_offer_prices)
     labels = [label for label in (_norm(l) for l in grounding.purchase_labels) if len(label) >= 3]
     access_labels = labels + [label for label in (_norm(l) for l in grounding.access_labels) if len(label) >= 3]
     if any(cents not in verified_prices for cents in proposal.price_claims):
@@ -501,6 +602,9 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
         raise Refused('a pitch must use a verified offer')
     if proposal.pitch and sales_mode == 'paused':
         raise Refused('sales are paused')
+    # A promised custom is the more specific refusal; it is judged before the product facts of the card it rides on.
+    if any(next(_custom_promises(text), None) is not None for text in texts):
+        raise Refused('promises a custom that is not supported')
     _check_quantities(texts, grounding)
     _check_product_wording(texts, grounding, set(verified_prices))
     for text in texts:
@@ -521,8 +625,6 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
             raise Refused('sales are paused')
         if proposal.action == 'reply' and next(_pitch_clauses(text), None) is not None:
             raise Refused('a pitch must use a verified offer')
-        if next(_custom_promises(text), None) is not None:
-            raise Refused('promises a custom that is not supported')
         if next(_involvement_claims(text), None) is not None:
             raise Refused('unsupported claim about who writes or reviews messages')
 

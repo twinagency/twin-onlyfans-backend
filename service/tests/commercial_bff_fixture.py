@@ -10,6 +10,14 @@ from test_real_transport_pg import _item
 from test_onlyfans_text_delivery_pg import TENANT,ACCOUNT
 from db.models import OfCreatorBinding,VaultFolder,VaultFolderItem,VaultItem,CatalogItem
 from db.onlyfans_models import OfRuntime
+from db.onlyfans_catalogue_terms_models import OfCatalogueTerms
+from db.onlyfans_delivery_models import OfDeliveryPolicy as _Policy
+from db.onlyfans_engine_models import OfEnginePilotScope
+from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+from onlyfans_runtime.store import utcnow
+from datetime import timedelta
+from conversation_engine import commercial_lifecycle as lifecycle
+from test_commercial_scope_contract import profile,model,limits,PERMISSIONS
 from onlyfans_read.agency_scope import AgencyScopeMiddleware
 from onlyfans_commands.vault_api import router
 from onlyfans_commands.configuration_api import router as configuration_router
@@ -60,6 +68,28 @@ def fixture():
 def change():
     with Session(store.engine) as s,s.begin():s.get(VaultItem,(ACCOUNT,11)).description="A newly corrected description."
     return {"ok":True}
+
+@app.get("/fixture/promotion-body")
+def promotion_body():
+    """A valid SYNTHETIC commercial.v1 promotion body (fixture profile/model/limits; fans 11-13; text-only; catalogue approval as it stands now)."""
+    approval=lifecycle.catalogue_snapshot(store,TENANT,ACCOUNT,evidence_ref="vault:q14-fixture-approval",valid_until=utcnow()+timedelta(days=7))
+    return {"fans":[11,12,13],"creator_profile":profile(),"delivery_mode":"text_only",
+            "operator":{"actor":"op-session:"+"a"*64,"name":"Fixture Operator","permissions":PERMISSIONS},
+            "model":model(),"limits":limits(),"catalogue":approval}
+@app.get("/fixture/state")
+def state_view():
+    """Durable rows the Q14 test checks: terms, scope, runtime/policy switches, launch-command audit, products."""
+    with Session(store.engine) as s:
+        scope=s.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id==ACCOUNT))
+        policy=s.get(_Policy,ACCOUNT)
+        return {"scope":None if scope is None else {"contractVersion":json.loads(scope.config_json).get("contract_version"),"status":scope.status,"revision":scope.revision},
+                "runtimeEnabled":s.get(OfRuntime,ACCOUNT).enabled,
+                "policy":{"enabled":policy.enabled,"mediaEnabled":policy.media_enabled},
+                "terms":[{"itemId":x.item_id,"revision":x.revision,"status":x.status,"standardPriceCents":x.standard_price_cents,"approvedBy":x.approved_by}
+                         for x in s.scalars(select(OfCatalogueTerms).order_by(OfCatalogueTerms.item_id,OfCatalogueTerms.revision))],
+                "commands":[{"kind":c.kind,"actor":c.actor} for c in s.scalars(select(OfLaunchCommand).where(OfLaunchCommand.account_id==ACCOUNT).order_by(OfLaunchCommand.created_at))],
+                "products":[{"price":p.price_cents,"enabled":p.enabled} for p in s.scalars(select(CatalogItem).order_by(CatalogItem.id))],
+                "providerReads":len(calls)+len(preparation_reads)}
 if __name__=="__main__":
     try:uvicorn.run(app,host="0.0.0.0",port=8787,log_level="warning")
     finally:store.close();db.close()

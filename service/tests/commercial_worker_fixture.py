@@ -72,10 +72,10 @@ class World:
         return item
 
     # ---------------------------------------------------------------- scope
-    def launch(self, *, valid_for=timedelta(days=1), authorization_mode='supervised', after_snapshot=None):
+    def launch(self, *, valid_for=timedelta(days=1), authorization_mode='supervised', after_snapshot=None, facts=()):
         env = self.env
         profile = CreatorProfile(name='Fixture creator', limits=('no meetups',), role_statement='the creator herself',
-                                 offers_permitted=True, approved_item_ids=())
+                                 offers_permitted=True, approved_item_ids=(), facts=tuple(facts))
         self.profile = profile_data(profile)
         self.profiles_path.write_text(json.dumps({self.account: self.profile}))
         valid_until = (utcnow() + valid_for).replace(microsecond=0)
@@ -168,6 +168,10 @@ class World:
             return rows
 
 
+PLAIN = ['Tell me more about that.', 'Happy to hear it.', 'Honestly, that made my day.', 'Sure thing, what else?', 'Okay, noted.',
+         'Alright then, go on.', 'Well, that sounds fun.', 'Hmm, interesting, go on.', 'Ha, fair enough.', 'Right, and then what?']
+
+
 def writer(world, *, choose=None):
     """The fake model. It follows the prompt: offers the APPROVED OFFER only when the fan's words ask for something."""
     seen = world.model_prompts
@@ -181,10 +185,12 @@ def writer(world, *, choose=None):
         asks = re.search(r'\b(show|send|want|buy|unlock|see)\b', latest.lower()) is not None
         if approved and asks:
             proposal = {'body': 'Here you go.', 'action': 'offer', 'offer_grant_id': approved[1], 'pitch': True}
+        elif 'where are you from' in latest.lower() and 'Brisbane' in ' '.join(m['content'] for m in data['messages']):
+            proposal = {'body': 'I am from Brisbane.'}
         elif latest.lower().strip() == 'no thanks':
             proposal = {'body': 'Of course, we can just chat.', 'sales_signal': 'decline'}
         else:
-            proposal = {'body': 'I hear you, tell me more.'}
+            proposal = {'body': PLAIN[len(seen) % len(PLAIN)]}                    # varied openers: the repeated-opener rule is real
         decide = choose or world.choose
         if decide is not None:
             proposal = decide(latest, prompt, approved[1] if approved else None, proposal)

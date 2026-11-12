@@ -22,8 +22,8 @@ def _free_port():
 
 
 def _bound(env_extra):
-    if not shutil.which("node") or not (ROOT / "creator-sign-in" / "node_modules" / "playwright").exists():
-        pytest.skip("node + creator-sign-in/node_modules required")
+    if not shutil.which("node") or not shutil.which("lsof") or not (ROOT / "creator-sign-in" / "node_modules" / "playwright").exists():
+        pytest.skip("node, lsof + creator-sign-in/node_modules required")
     port = _free_port()
     env = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"),
            "ONLYFANS_SIGNIN_TOKEN": "t" * 40, "PORT": str(port), **env_extra}
@@ -51,3 +51,8 @@ def test_signin_binds_loopback_by_default():
 def test_signin_host_env_opts_into_private_network():
     addr = _bound({"HOST": "0.0.0.0"})
     assert addr.startswith("*:"), addr
+
+
+def test_signin_empty_host_stays_loopback():
+    addr = _bound({"HOST": ""})
+    assert addr.startswith("127.0.0.1:"), addr

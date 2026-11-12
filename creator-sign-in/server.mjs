@@ -42,5 +42,5 @@ const server=createServer(async(req,res)=>{
 server.requestTimeout=15000;server.headersTimeout=10000;
 const timer=setInterval(()=>void service.collect(),10000);timer.unref();
 // Loopback unless HOST opts in (Docker: container-private network, compose `expose` only).
-server.listen(Number(process.env.PORT??8479),process.env.HOST??'127.0.0.1',()=>console.log('Private creator sign-in ready'));
+server.listen(Number(process.env.PORT??8479),process.env.HOST||'127.0.0.1',()=>console.log('Private creator sign-in ready'));
 for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{clearInterval(timer);server.close();void service.close().finally(()=>process.exit(0));});

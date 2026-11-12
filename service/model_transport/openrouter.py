@@ -12,6 +12,7 @@ Failure classification (it decides how the ledger counts the call):
                                                     -> ModelOutcomeUnknown (may have been charged: counted as spent)
 """
 import json
+import logging
 from hashlib import sha256
 from decimal import Decimal
 import os
@@ -291,19 +292,28 @@ class OpenRouterClient:
                               follow_redirects=False, trust_env=False) as client:
                 with client.stream('POST', self._url, content=json.dumps(body).encode('utf-8'), headers=headers) as wire:
                     if wire.status_code == 200:
-                        content = wire.read()  # existing success-response contract
+                        wire.read()
+                        response = wire  # HTTPX already decoded and cached the response body.
                     else:
-                        # Stop reading a hostile/oversized error body. Only this bounded buffer reaches the parser.
+                        # Status/Retry-After remain authoritative even if optional error prose cannot be read.
                         content = bytearray()
-                        for chunk in wire.iter_bytes(chunk_size=_MAX_ERROR_BODY + 1):
-                            content.extend(chunk[:_MAX_ERROR_BODY + 1 - len(content)])
-                            if len(content) > _MAX_ERROR_BODY:
-                                break
-                        content = bytes(content)
-                    response = httpx.Response(wire.status_code, headers=wire.headers, content=content)
+                        try:
+                            for chunk in wire.iter_bytes(chunk_size=_MAX_ERROR_BODY + 1):
+                                content.extend(chunk[:_MAX_ERROR_BODY + 1 - len(content)])
+                                if len(content) > _MAX_ERROR_BODY:
+                                    break
+                        except httpx.HTTPError as exc:
+                            logging.getLogger(__name__).warning('Model error body unreadable: %s', type(exc).__name__)
+                            content.clear()
+                        # iter_bytes decoded these bytes; retaining wire encoding would decode them twice.
+                        decoded_headers = wire.headers.copy()
+                        for name in ('content-encoding', 'content-length'):
+                            decoded_headers.pop(name, None)
+                        response = httpx.Response(wire.status_code, headers=decoded_headers, content=bytes(content))
         except _NOT_SENT:
             raise ModelNotSent('request was not sent') from None
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logging.getLogger(__name__).warning('Model response transport failed: %s', type(exc).__name__)
             raise ModelOutcomeUnknown('the request may have reached the provider') from None
         if response.status_code != 200:
             raise ModelHTTPStatus(response.status_code, detail=_failure_detail(response, secret=self._key, messages=request.messages),

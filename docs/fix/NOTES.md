@@ -62,3 +62,16 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F2d risk: check that proxies.load is not reached at import/boot//health, so a raise refuses instead of crashing the relay.
 - F5: cover every writer of stopped/enabled state, red test through the real Activate entrypoint (one case per stopped state), live proof must arm nothing.
 - Ledger: F2 proxy-on-fetch = inferred; F2b = transport-seam tests only. Never "live-confirmed".
+
+## OWN-b merged (#88 → 96609e23)
+- sign-in listens on `HOST || 127.0.0.1`; compose sets HOST=0.0.0.0 (expose-only private net). Red `*:52115` → green 3/3 (m). Local dashboard sign-in host = 127.0.0.1 (m). premerge OK 0 skip (m). Flash: 3 → 2 fixed (empty HOST fail-open, lsof skip), 1 deferred (CI never installs creator-sign-in/node_modules → test skips in CI). Local target ff'd (m).
+
+## Owner 22:2x–22:4x applied
+- OQ-27: relay gate R1–R3 in FIX-QUEUE (after engine/live items). F0 check.sh = next priority (worker running). F4(b) W6HR-1 worker running (owner (c) high priority > Fable order). F5 awaiting premerge + rwl.
+- Worktree cleanup: removed 63 (61 finished rwl lanes + fix-f2b + fix-signin). 3 dirty lanes kept (w2-db-migrations, w2-tests-history, w6-automations-engine-e). rwl/* branches were local-only → backed up first to a verified git bundle under .local-dev/backups (71 heads). No branch deleted (m).
+- Scrub (e): BOTH repos PUBLIC (m): twinagency/twin-onlyfans-backend and BlackPhoenixSlo/inflowwkiller. Exact lines (values in .local-dev/evidence/fix/scrub/scrub-list.json only):
+  - rhythm.py:833-834 (6 account-id literals, "six live accounts") + :483 creator first name — both repos.
+  - media_cotag.py:58 DEFAULT_HANDLE (real personal handle) — both repos.
+  - of_client.py:1976 stories_items docstring (4 id-like literals) — team repo only.
+  - tests: 48 lines / 9 files / 13 distinct id-like literals (6 trivially fake; 0 equal a rhythm account id) — team repo only.
+  - Nothing pushed. History scrub = owner decision (in git since ≤659ea29).

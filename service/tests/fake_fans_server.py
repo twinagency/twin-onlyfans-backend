@@ -12,7 +12,7 @@ ACCT, CREATOR = 'acct_real_fixture', os.environ.get('LIVE_TEST_CREATOR_OF_ID', '
 
 class FakeFans:
     def __init__(self, outcomes=None, vault=None):
-        self.outcomes = list(outcomes or [])   # per POST: accepted|not_sent|unknown|conflict|banned|mismatch|lost
+        self.outcomes = list(outcomes or [])   # per POST: accepted|not_sent|unknown|conflict|banned|mismatch|lost|bad_request|secret_echo|rejected_not_sent_4xx|html_502|malformed_ok|invalid_json_ok
         self.vault = vault or []
         self.posts, self.executions, self.stored = [], {}, {}
         self.next_id = 7001
@@ -27,6 +27,10 @@ class FakeFans:
                 self.send_response(status)
                 self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(raw)))
                 for k, v in (headers or {}).items(): self.send_header(k, v)
+                self.end_headers(); self.wfile.write(raw)
+            def _raw(self, status, raw, ctype):
+                self.send_response(status)
+                self.send_header('Content-Type', ctype); self.send_header('Content-Length', str(len(raw)))
                 self.end_headers(); self.wfile.write(raw)
             def do_GET(self):
                 if self.path == '/api/accounts':
@@ -64,6 +68,20 @@ class FakeFans:
                     return self._json(422, {'error': 'BANNED_WORDS', 'message': 'banned word'})
                 if outcome == 'mismatch':
                     return self._json(422, {'error': 'IDEMPOTENCY_KEY_MISMATCH'})
+                # Evidence-lab outcomes (send-outcome evidence tests): each answers one POST and executes nothing.
+                if outcome == 'bad_request':
+                    return self._json(400, {'error': 'BAD_REQUEST', 'message': 'invalid request'})
+                if outcome == 'secret_echo':     # a 4xx that echoes the credential and the message text
+                    return self._json(422, {'error': 'VALIDATION_FAILED', 'message': 'rejected ' + body['text']
+                                            + ' Authorization: Bearer ' + (self.headers.get('Authorization') or '')[7:]})
+                if outcome in ('rejected_not_sent_422', 'rejected_not_sent_400'):
+                    return self._json(int(outcome[-3:]), {'error': 'BANNED_WORDS', 'request_outcome': 'not_sent'})
+                if outcome == 'html_502':
+                    return self._raw(502, b'<html><body>Bad Gateway ' + b'x' * 600 + b'</body></html>', 'text/html')
+                if outcome == 'malformed_ok':     # 200 whose data.id is not a provider identity
+                    return self._json(200, {'data': {'id': 'not-a-number', 'createdAt': '2026-11-07T00:00:00+00:00'}})
+                if outcome == 'invalid_json_ok':
+                    return self._raw(200, b'<<not json>>', 'application/json')
                 fake.executions[key] = fake.executions.get(key, 0) + 1
                 resp = {'data': {'id': fake.next_id, 'createdAt': '2026-11-07T00:00:00+00:00'}}
                 fake.next_id += 1

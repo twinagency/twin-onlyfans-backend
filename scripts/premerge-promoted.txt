@@ -30,3 +30,4 @@ service/tests/test_w3_delta_curl_80_capture.py::test_legacy_credentialed_proxy_o
 service/tests/test_w3_delta_curl_80_capture.py::test_bootstrap_route_maps_asset_refusal_to_502_without_creds
 service/tests/test_w3_delta_curl_80_capture.py::test_legacy_proxy_lookup_bug_not_relabelled
 service/tests/test_signin_bind_loopback.py
+service/tests/test_check_harness.py

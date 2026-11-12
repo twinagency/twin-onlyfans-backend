@@ -10,6 +10,8 @@
 # (the repository is read through `git archive` only).  Containers use --cpus 1 --memory 1g and are removed on exit.
 #
 # Usage:
+#   Without a suite (or --tests) the invocation is REFUSED before anything is built; only an explicit --build-only builds
+#   without qualifying. Qualification always reports every required group, and exits non-zero while any is missing.
 #   build-candidate.sh <commit> [--tag IMAGE:TAG] [--label NAME] [--suite NAME]... [--tests "tests/a.py tests/b.py"]
 #                      [--build-only] [--no-build] [--dry-run] [--keep-pg]
 #   suites: smoke | smoke-probes | r0 | step4 | step5 | migrations | operator | ops | planc-all | matrix | completion | list
@@ -26,6 +28,8 @@
 #   DEP_REFERENCE_IMAGE  image whose `pip freeze` is compared (information only)  twin-engine-offline-main:20261107-r6
 #   SUITE_TIMEOUT    seconds per suite                    3600
 #   LOAD_WAIT_MAX    seconds to wait for loadavg < 4      900
+#   DASHBOARD_IMAGE  expected Q14 dashboard image digest sha256:<64 hex>  (required for qualification)
+#   DASHBOARD_COMMIT expected Q14 dashboard source commit, 40 hex; must equal that image's revision label (required)
 set -euo pipefail
 
 EXPECTED_HOST=ubuntu-s-4vcpu-8gb-syd1
@@ -57,7 +61,7 @@ suite_files() {
     migrations)   echo "tests/test_commercial_retry_due_lineage_pg.py tests/test_engine_rc_join_pg.py tests/test_history_coverage_schema_pg.py tests/test_plan_c_model_billing_pg.py tests/test_plan_c_grant_migration_pg.py tests/test_plan_c_scope_pg.py tests/test_commercial_terms_migration_pg.py tests/test_commercial_scope_guard_pg.py tests/test_preparation_retry_state_pg.py tests/test_onlyfans_migration_pg.py tests/test_contextual_item_scope_migration.py tests/test_onlyfans_launch_schema_upgrade_pg.py tests/test_tip_evidence_kind_migration_pg.py" ;;
     operator)     echo "tests/test_engine_operator_pg.py tests/test_plan_c_q2_n4_operator_http_pg.py tests/test_plan_c_u3_readiness_pg.py" ;;
     matrix)       echo "tests/test_commercial_matrix_pg.py tests/test_commercial_ten_creators_pg.py tests/test_commercial_import_to_sale_pg.py" ;;   # Step 6; files exist only once committed
-    completion)   echo "tests/test_commercial_completion_pg.py tests/test_commercial_stopped_activation_pg.py tests/conversation_engine/test_claims_semantics.py tests/test_openrouter_decoding.py tests/test_plan_c_unknown_send_evidence_pg.py" ;;
+    completion)   echo "tests/test_commercial_qualification_gate.py tests/test_commercial_completion_pg.py tests/test_commercial_stopped_activation_pg.py tests/conversation_engine/test_claims_semantics.py tests/test_openrouter_decoding.py tests/test_plan_c_unknown_send_evidence_pg.py" ;;
     preparation)  echo "tests/test_commercial_preparation_pg.py tests/test_preparation_retry_state_pg.py tests/test_commercial_classification_refresh_pg.py tests/test_history_import_pg.py" ;;
     normal)       echo "tests/test_commercial_normal_control_journey_pg.py tests/test_commercial_terms_http_pg.py tests/test_commercial_shared_provider_pg.py tests/test_commercial_parallel_workers_pg.py tests/test_plan_c_inflight_readiness.py tests/test_commercial_readiness_budget_pg.py" ;;
     legacy)       echo "tests/test_commercial_progress.py tests/test_commercial_full_path.py tests/test_history_capacity_turns.py" ;;
@@ -68,9 +72,7 @@ suite_files() {
     *) return 1 ;;
   esac
 }
-# NOTE: the delivery/payment group (text delivery, commerce, post-buy receipt, recovery/backup-restore, release
-# package) is deliberately NOT hard-coded here: its final membership is a launch-review decision recorded in
-# RELEASE-PACKET.md.  Pass it with --tests when decided.
+# Required groups cover the frozen release contract; custom tests supplement rather than replace them.
 
 # ---- argument parsing -------------------------------------------------------------------------------------------------
 REQUIRED_SUITES=(completion matrix step4 step5 r0 operator migrations ops preparation normal legacy recovery delivery)
@@ -85,7 +87,7 @@ while [ $# -gt 0 ]; do
     --no-build) NO_BUILD=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --keep-pg) KEEP_PG=1; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
     list) echo "smoke smoke-probes r0 step4 step5 migrations operator matrix completion ops planc-all"; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) [ -z "$COMMIT_ARG" ] || die "one commit only"; COMMIT_ARG=$1; shift ;;
@@ -93,6 +95,11 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$COMMIT_ARG" ] || die "usage: build-candidate.sh <commit> [options]  (see header)"
 for s in "${SUITES[@]:-}"; do [ -z "$s" ] || suite_files "$s" >/dev/null || die "unknown suite '$s'"; done
+if [ "$BUILD_ONLY" = 1 ]; then
+  [ "${#SUITES[@]}" = 0 ] && [ -z "$CUSTOM_TESTS" ] || die "--build-only cannot be combined with qualification suites"
+else
+  [ "${#SUITES[@]}" -gt 0 ] || [ -n "$CUSTOM_TESTS" ] || die "qualification incomplete: no suites requested; use --suite all or explicit --build-only"
+fi
 
 # ---- preconditions (read-only checks) -----------------------------------------------------------------------------------
 [ "$(hostname)" = "$EXPECTED_HOST" ] || die "run on the Work Server ($EXPECTED_HOST), not $(hostname)"
@@ -207,11 +214,9 @@ BUILD_RECORD=$BUILD
 docker image inspect "$TAG" > "$BUILD_RECORD/image-inspect.json"
 { echo "image_id=$IMAGE_ID"; echo "repo_digests=$(docker image inspect "$TAG" --format '{{json .RepoDigests}}')"; } >> "$BUILD_RECORD/manifest.txt"
 
-if [ "$NO_BUILD" = 0 ] || [ -n "$(docker image inspect "$IMAGE_ID" --format '{{index .Config.Labels "io.twin.rollback.revision"}}')" ]; then
-  [ "$(docker image inspect "$IMAGE_ID" --format '{{index .Config.Labels "io.twin.rollback.revision"}}')" = "$ROLLBACK_FULL" ] || die "rollback revision mismatch"
-  docker run --rm --network none --read-only --entrypoint sh "$IMAGE_ID" -c 'cd /opt/compatible-rollback && find service -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum' > "$BUILD_RECORD/rollback-image-files.sha256"
-  diff -q "$BUILD_RECORD/rollback-files.sha256" "$BUILD_RECORD/rollback-image-files.sha256" || die "rollback code differs from its commit"
-fi
+[ "$(docker image inspect "$IMAGE_ID" --format '{{index .Config.Labels "io.twin.rollback.revision"}}')" = "$ROLLBACK_FULL" ] || die "rollback revision mismatch"
+docker run --rm --network none --read-only --entrypoint sh "$IMAGE_ID" -c 'cd /opt/compatible-rollback && find service -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum' > "$BUILD_RECORD/rollback-image-files.sha256"
+diff -q "$BUILD_RECORD/rollback-files.sha256" "$BUILD_RECORD/rollback-image-files.sha256" || die "rollback code differs from its commit"
 
 # ---- verify the artifact: image tree == commit tree, tools present, dependencies ------------------------------------------
 IMG_RUN=(docker run --rm --network none --pull never --cpus 1 --memory 1g --pids-limit 256 --cap-drop ALL --security-opt no-new-privileges --read-only --user 1000:1000 --tmpfs /tmp:rw,nosuid,size=256m -e HOME=/tmp)
@@ -224,13 +229,13 @@ else
 fi
 "${IMG_RUN[@]}" --entrypoint sh "$IMAGE_ID" -c 'cd /opt/r0-baseline && find service -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum' > "$BUILD_RECORD/baseline-image-files.sha256"
 diff -q "$BUILD_RECORD/baseline-files.sha256" "$BUILD_RECORD/baseline-image-files.sha256" >/dev/null || die "baseline reader differs from requested commit"
-"${IMG_RUN[@]}" --entrypoint sh "$IMAGE_ID" -c 'pg_dump --version; pg_restore --version; psql --version; python --version; ls -d /opt/r0-baseline/service /opt/test-packages/pytest /app/ops/plan-c-supervision' > "$BUILD_RECORD/tools.txt" 2>&1 || die "required image tools are missing"
+"${IMG_RUN[@]}" --entrypoint sh "$IMAGE_ID" -c 'set -eu; pg_dump --version; pg_restore --version; psql --version; python --version; ls -d /opt/r0-baseline/service /opt/test-packages/pytest /app/ops/plan-c-supervision' > "$BUILD_RECORD/tools.txt" 2>&1 || die "required image tools are missing"
 PG_DUMP_VERSION=$(grep -m1 '^pg_dump' "$BUILD_RECORD/tools.txt" || true)
 echo "pg_dump=${PG_DUMP_VERSION:-ABSENT}" | tee -a "$BUILD_RECORD/manifest.txt"
 "${IMG_RUN[@]}" --entrypoint python "$IMAGE_ID" -m pip freeze > "$BUILD_RECORD/pip-freeze.txt" 2>&1 || die "dependency inventory failed"
 "${IMG_RUN[@]}" --entrypoint python "$IMAGE_ID" -m pip check > "$BUILD_RECORD/pip-check.txt" 2>&1 || die "image dependencies are inconsistent"
 if docker image inspect "$DEP_REFERENCE_IMAGE" >/dev/null 2>&1; then
-  docker run --rm --pull never --entrypoint python "$DEP_REFERENCE_IMAGE" -m pip freeze > "$BUILD_RECORD/pip-freeze-reference.txt" 2>&1 || true
+  docker run --rm --network none --pull never --entrypoint python "$DEP_REFERENCE_IMAGE" -m pip freeze > "$BUILD_RECORD/pip-freeze-reference.txt" 2>&1 || true
   diff "$BUILD_RECORD/pip-freeze-reference.txt" "$BUILD_RECORD/pip-freeze.txt" > "$BUILD_RECORD/pip-freeze.diff" || true
   echo "pip_freeze_vs_reference_diff_lines=$(wc -l < "$BUILD_RECORD/pip-freeze.diff") (reference $DEP_REFERENCE_IMAGE; information only)" >> "$BUILD_RECORD/manifest.txt"
 fi
@@ -238,7 +243,7 @@ fi
 [ "$BUILD_ONLY" = 0 ] || { echo "built $TAG = $IMAGE_ID"; exit 0; }
 
 # ---- suites ------------------------------------------------------------------------------------------------------------
-[ "${#SUITES[@]}" -gt 0 ] || [ -n "$CUSTOM_TESTS" ] || { echo "built $TAG = $IMAGE_ID (no suite requested)"; exit 0; }
+
 wait_for_load
 docker network create --internal "$RUN_NET" >/dev/null
 PG_IMAGE=$(docker image inspect "$PG_IMAGE" --format '{{.Id}}')
@@ -254,7 +259,10 @@ run_group() {   # name, then pytest args
   local name=$1; shift
   local log=$BUILD_RECORD/suite-$name.log rc=0 run_user=1000:1000
   local caps=()
-  [ "$name" != ops ] || { run_user=0:0; caps=(--cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE); }
+  # ops tests build a root-owned 0600 marker (CHOWN/FOWNER/DAC_OVERRIDE) and then fork into the unprivileged worker
+  # identity (setgroups/setgid/setuid -> SETUID/SETGID) to prove what THAT identity can read or write. Only this
+  # test container gets them: nothing is added for production workers and every other group stays 1000:1000, no caps.
+  [ "$name" != ops ] || { run_user=0:0; caps=(--cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID); }
   { echo "IMAGE=$IMAGE_ID"; echo "COMMIT=$FULL"; echo "GROUP=$name"; echo "OVERLAY=none (no -v mounts of source, tests, ops, baseline, packages or pg tools)"; echo "ARGS=$*"; } > "$log"
   set +e
   timeout "$SUITE_TIMEOUT" docker run --rm --name "$RUN_T" --pull never --cpus 1 --memory 1g --pids-limit 256 --cap-drop ALL "${caps[@]}" \
@@ -304,13 +312,27 @@ for required in "${REQUIRED_SUITES[@]}"; do
     printf '%s\t%s\t%s\t%s\n' "$required" INCOMPLETE "required group omitted" - | tee -a "$RESULTS"
   fi
 done
-# Q14 must run against a frozen dashboard, BFF/backend and PostgreSQL.
-if [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
+# Q14 must run against a frozen dashboard, BFF/backend and PostgreSQL. The expected dashboard artifact is an explicit
+# input (DASHBOARD_IMAGE digest + DASHBOARD_COMMIT) that THIS host verifies from its own image store; the receipt is
+# only accepted when it names exactly that backend/dashboard pair. A receipt can never choose its own dashboard.
+browser_problem=""
+if [ -z "${DASHBOARD_IMAGE:-}" ] || [ -z "${DASHBOARD_COMMIT:-}" ]; then
+  browser_problem="Q14 expected dashboard image/commit not supplied"
+elif ! [[ "$DASHBOARD_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$DASHBOARD_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  browser_problem="Q14 expected dashboard image/commit must be an immutable digest and a full commit"
+elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{.Id}}' 2>/dev/null || true)" != "$DASHBOARD_IMAGE" ]; then
+  browser_problem="Q14 expected dashboard image is not in the local image store"
+elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" != "$DASHBOARD_COMMIT" ]; then
+  browser_problem="Q14 dashboard image revision label differs from DASHBOARD_COMMIT"
+elif [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
+  browser_problem="Q14 exact-artifact browser receipt missing"
+fi
+if [ -n "$browser_problem" ]; then
   FAILED=1
-  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 exact-artifact browser receipt missing" - | tee -a "$RESULTS"
-elif ! "${IMG_RUN[@]}" -v "$BROWSER_QUALIFICATION_RECEIPT:/browser-receipt.json:ro" --entrypoint python "$IMAGE_ID" /app/ops/verify-browser-receipt.py /browser-receipt.json "$IMAGE_ID" > "$BUILD_RECORD/browser-receipt-check.log" 2>&1; then
+  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "$browser_problem" - | tee -a "$RESULTS"
+elif ! "${IMG_RUN[@]}" -v "$BROWSER_QUALIFICATION_RECEIPT:/browser-receipt.json:ro" --entrypoint python "$IMAGE_ID" /app/ops/verify-browser-receipt.py /browser-receipt.json "$IMAGE_ID" "$DASHBOARD_IMAGE" "$DASHBOARD_COMMIT" > "$BUILD_RECORD/browser-receipt-check.log" 2>&1; then
   FAILED=1
-  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 receipt invalid or image mismatch" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
+  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 receipt invalid or backend/dashboard artifact mismatch" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
 else
   printf '%s\t%s\t%s\t%s\n' browser 0 "Q14 exact-artifact receipt verified" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
 fi

@@ -1,7 +1,9 @@
-"""U3 (plan Step 3): scope-aware readiness through intake, ticks, /readyz and the ACTUAL pinned host guard.
+"""U3 (plan Step 3): scope-aware readiness through intake, ticks, /readyz and the ACTUAL pinned guard.
 
 Real here: signed HTTP intake, the worker loop and /readyz, PostgreSQL scope/holds, ops/plan-c-supervision/supervisor.py
-check()/run(), gated_worker.permitted, and guard_core.py loaded from the byte-pinned host copy (sha256 asserted).
+check()/run(), gated_worker.permitted, and guard_core.py loaded from the byte-pinned release-owned copy (sha256 asserted).
+The historical host guard (c2be833f) is retained as tests/fixtures/host_guard_core_c2be833f.py and proven equivalent
+apart from the optional credit_limit in test_plan_c_guard_compat.py; see that file for the decision record.
 Mocked (labelled): provider webhook-health listing, FansAPI usage/credits, sender-process identity, the root-owned
 receiver /readyz, and the docker-exec psql read (replaced by the same query on the lab DB).
 """
@@ -33,7 +35,9 @@ from test_plan_c_text_activation_pg import stopped_text  # noqa: F401
 
 SUP = Path(__file__).resolve().parents[2] / 'ops' / 'plan-c-supervision'
 PINNED = SUP / 'guard_core.py'
-PINNED_SHA256 = 'c2be833f7191bf5a94f3c1f841e09effac62cf5a0b03b751663545e9af905797'
+# Release-owned guard (a815e8e): the byte-pinned host guard c2be833f plus the optional credit_limit keyword that the
+# supervisor passes (reviewed per-account early stop). The historical bytes keep their own pin in test_plan_c_guard_compat.py.
+PINNED_SHA256 = '8a06770e214e7b69847ebb0f65f0b2481c4467fd1102a9084a98489ebd11e04b'
 
 
 def _load(name, path, **modules):
@@ -54,7 +58,7 @@ def _load(name, path, **modules):
 
 @pytest.fixture(scope='module')
 def guard():
-    assert hashlib.sha256(PINNED.read_bytes()).hexdigest() == PINNED_SHA256, 'pinned host guard bytes changed'
+    assert hashlib.sha256(PINNED.read_bytes()).hexdigest() == PINNED_SHA256, 'release-owned guard bytes changed'
     return _load('u3_pinned_guard_core', PINNED)
 
 

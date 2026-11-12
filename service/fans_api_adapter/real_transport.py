@@ -218,6 +218,13 @@ class FansApiRealTransport:
         # kept (bounded and sanitized) on the attempt row before the authority records the hold; without it the hold
         # reads as a bare "invalid receipt" and nobody can tell a timeout from a conflict from a malformed 200.
         self._retain_evidence(authority, tenant_id, grant, result, self.sent_calls - before)
+        if result.http_status == 429:
+            # Pacing only. The send stays unknown and held (returning None below); raising ProviderThrottled would
+            # instead record NotAccepted, i.e. claim the 429 proved the message was not sent.
+            try:
+                authority.apply_provider_pacing(tenant_id, grant.account_id, retry_after=result.retry_after)
+            except Exception:  # noqa: BLE001 - a failed cooldown write must not change the uncertain outcome
+                pass
         return None
 
     @staticmethod
@@ -225,6 +232,8 @@ class FansApiRealTransport:
         evidence = dict(result.evidence) if type(result.evidence) is dict else {
             'outcome': result.state, 'http_status': result.http_status, 'trace_id': result.trace_id}
         evidence['posts'] = posts
+        if result.http_status == 429 and result.retry_after is not None:
+            evidence['retry_after'] = result.retry_after
         try:
             authority.retain_send_evidence(tenant_id, grant, evidence)
         except Exception:  # noqa: BLE001 - evidence is auxiliary: it must never change how the outcome is handled

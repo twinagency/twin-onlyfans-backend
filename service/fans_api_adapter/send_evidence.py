@@ -165,7 +165,7 @@ _PROVIDER_FIELDS = {   # key -> (type, max length of a str)
     'body_bytes': (int, 0), 'trace_id': (str, 128), 'original_trace_id': (str, 128), 'replayed': (bool, 0),
     'posts': (int, 0), 'error_code': (str, 64), 'error_type': (str, 64), 'request_outcome': (str, 16),
     'message': (str, MESSAGE_MAX), 'message_id_present': (bool, 0), 'message_id': (str, 19), 'created_at_state': (str, 16),
-    'provider_created_at': (str, 40), 'failed_field': (str, 16),
+    'provider_created_at': (str, 40), 'failed_field': (str, 16), 'retry_after': (int, 0),
 }
 
 

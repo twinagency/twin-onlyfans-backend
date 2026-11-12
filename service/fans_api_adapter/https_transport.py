@@ -43,6 +43,10 @@ class FansHttpsTransport:
             with client.stream(method, url, headers=request_headers, content=body,
                                follow_redirects=False) as response:
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+                    if response.status_code == 429:
+                        # Pacing only: the status line and Retry-After are plain headers, so an encoded 429 can still
+                        # start the cooldown. The encoded body itself is never read or decoded.
+                        return Response(429, b"", dict(response.headers))
                     raise ValueError("encoded provider response refused")
                 chunks, size = [], 0
                 for chunk in response.iter_raw():

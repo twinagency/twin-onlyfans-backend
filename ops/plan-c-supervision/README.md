@@ -102,11 +102,16 @@ older than30 monotonic seconds fails before STATE publication. The existing10s
 cadence,45s wire lease,90s watchdog/start timeout and30s start grace are unchanged.
 A third recovery preserves BOTH prior immutable histories and does not activate.
 
-Scope-aware sender readiness and the host guard (U3). The host guard is UNCHANGED:
-supervision-v11/guard_core.py, sha256 c2be833f7191bf5a94f3c1f841e09effac62cf5a0b03b751663545e9af905797 (early stop 300, Jesse 2026-11-10; previous 5aef81d2 = 250).
-guard_core.py is the release-owned guard imported directly by the supervisor and its tests
-(service/tests/test_plan_c_u3_readiness_pg.py asserts the hash); it is not an install source and the
-host copy is never edited independently. The guard still requires the sender /readyz to report
+Scope-aware sender readiness and the guard (U3). Guard decision (2026-11-13): the host guard
+supervision-v11/guard_core.py, sha256 c2be833f7191bf5a94f3c1f841e09effac62cf5a0b03b751663545e9af905797 (early stop 300,
+Jesse 2026-11-10; previous 5aef81d2 = 250), is retained byte-for-byte as service/tests/fixtures/host_guard_core_c2be833f.py.
+The release-owned guard_core.py (sha256 8a06770e214e7b69847ebb0f65f0b2481c4467fd1102a9084a98489ebd11e04b) differs only by
+the optional credit_limit=300 keyword credit_estimate gained in a815e8e so each account can carry its reviewed early stop
+(validated: malformed or non-positive limits refuse). GuardFailure, require_health and require_fresh are AST-identical and
+the default behaviour matches the host guard over a grid; service/tests/test_plan_c_guard_compat.py proves this and
+service/tests/test_plan_c_u3_readiness_pg.py pins the release-owned bytes. The host copy is never edited independently.
+guard_core.py is the release-owned guard imported directly by the supervisor and its tests; it is not an install source.
+The guard still requires the sender /readyz to report
 ok=true, mode=active, code=ready and sendingReady=true. What changed is the worker's definition of
 sendingReady (service/plan_c_worker.py): it is false for loop failure, stale loop, refused scope or
 budget state, and for an ACCOUNT-WIDE evidence hold (unknown, malformed, conflicting, unbound-account

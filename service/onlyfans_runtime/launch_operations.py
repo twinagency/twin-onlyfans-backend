@@ -81,7 +81,7 @@ def account_state(s, runtime):
 
 
 def operator_stopped(s, runtime):
-    """True while this binding's latest account control is pause/emergency_stop; only resume clears it.
+    """True while this binding's latest account control is pause/emergency_stop; Activate cannot clear it.
     Ordered by the recorded control revision (account_state's count), not by timestamps that can tie."""
     results = [json.loads(raw) for raw in s.scalars(select(OfLaunchCommand.result_json).where(
         OfLaunchCommand.account_id == runtime.account_id,

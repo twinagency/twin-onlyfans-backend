@@ -3,7 +3,7 @@
 Real PostgreSQL (throwaway), synthetic connectors only; no network. Declared bypasses:
   - pilot case: native credentials saved by connections.save_connection, then status='verified' set by ORM (stand-in for
     the live identity verify call);
-  - resume case: launch_operations._readiness is patched to ready (resume's other prerequisites run for real).
+  - resume cases: launch_operations._readiness is patched to ready (resume's other prerequisites run for real).
 """
 import pytest
 from fastapi import FastAPI
@@ -49,7 +49,7 @@ def test_w2or04_dashboard_activate_cannot_widen_an_active_text_only_commercial_s
         row.status, row.verified_at, revision = 'verified', utcnow(), row.revision
     before = _snapshot(w.store, ACCOUNT)
     assert before[2][1:3] == ('fansapi', False)   # text-only scope precondition
-    with pytest.raises(Refused, match='scope governs'):
+    with pytest.raises(Refused, match='pilot'):
         change(w.store, ACCOUNT, 'activate', revision, '4' * 64,
                {'limitUnits': 10000, 'throttleSeconds': 30, 'mediaEnabled': True})
     assert _snapshot(w.store, ACCOUNT) == before
@@ -70,19 +70,56 @@ def test_w2or04_activate_refuses_a_preparation_scope(database, monkeypatch):
         store.close()
 
 
-# ---- W3RCA-02: Activate cannot undo an operator stop ----
+# ---- W3RCA-02 / F5-01: Activate writes the policy but cannot undo an operator stop; resume stays the way back ----
+
+def _ready(monkeypatch):
+    monkeypatch.setattr(launch_operations, '_readiness', lambda *a, **k: {'readyToEnable': True})
+
+
+def _state(store, account):
+    with Session(store.engine) as s:
+        policy = s.get(OfDeliveryPolicy, account)
+        return s.get(OfRuntime, account).enabled, policy.enabled, policy.transport_kind, policy.limit_units
+
 
 @pytest.mark.parametrize('action', ['pause', 'emergency_stop'])
-def test_w3rca02_activate_after_a_stop_is_refused_and_changes_nothing(database, monkeypatch, action):
+def test_w3rca02_activate_after_a_stop_writes_policy_but_runtime_stays_off(database, monkeypatch, action):
     store, account, _ = verified(database, monkeypatch)
     try:
         assert change(store, account, 'activate', 1, 'c' * 64, LIMITS) == 2
         _control(store, account, action, 'd' * 64)
-        before = _snapshot(store, account)
-        assert before[0] is False
-        with pytest.raises(Refused, match='resume'):
-            change(store, account, 'activate', 2, 'e' * 64, LIMITS)
-        assert _snapshot(store, account) == before
+        assert change(store, account, 'activate', 2, 'e' * 64, {**LIMITS, 'limitUnits': 9}) == 3
+        assert _state(store, account) == (False, True, 'native', 9)
+    finally:
+        store.close()
+
+
+def test_f501_pause_then_credential_replacement_then_activate_is_recoverable_by_resume(database, monkeypatch):
+    from onlyfans_runtime.connections import get_connection, load_worker_accounts
+    store, account, payload = verified(database, monkeypatch)
+    try:
+        assert change(store, account, 'activate', 1, 'c' * 64, LIMITS) == 2
+        _control(store, account, 'pause', 'd' * 64)
+        assert save(store, account, payload, revision=2, key='e' * 64) == 3   # disables the policy
+        assert load_worker_accounts(store, TENANT) == []                      # real verify (mocked identity call)
+        connection = get_connection(store, TENANT, account)
+        assert connection['status'] == 'verified'
+        change(store, account, 'activate', connection['revision'], 'f' * 64, LIMITS)
+        assert _state(store, account)[:2] == (False, True)
+        _ready(monkeypatch)
+        assert _control(store, account, 'resume', '1' * 64)['enabled'] is True
+    finally:
+        store.close()
+
+
+def test_f501_stop_before_first_activation_then_activate_is_recoverable_by_resume(database, monkeypatch):
+    store, account, _ = verified(database, monkeypatch)
+    try:
+        _control(store, account, 'emergency_stop', 'd' * 64)
+        assert change(store, account, 'activate', 1, 'c' * 64, LIMITS) == 2
+        assert _state(store, account)[:2] == (False, True)
+        _ready(monkeypatch)
+        assert _control(store, account, 'resume', 'e' * 64)['enabled'] is True
     finally:
         store.close()
 
@@ -92,7 +129,7 @@ def test_w3rca02_activate_after_pause_then_resume_is_allowed(database, monkeypat
     try:
         assert change(store, account, 'activate', 1, 'c' * 64, LIMITS) == 2
         _control(store, account, 'pause', 'd' * 64)
-        monkeypatch.setattr(launch_operations, '_readiness', lambda *a, **k: {'readyToEnable': True})
+        _ready(monkeypatch)
         assert _control(store, account, 'resume', 'e' * 64)['enabled'] is True
         assert change(store, account, 'activate', 2, 'f' * 64, {**LIMITS, 'limitUnits': 9}) == 3
         with Session(store.engine) as s:
@@ -112,13 +149,12 @@ def test_never_stopped_scopeless_verified_account_still_activates(database, monk
         store.close()
 
 
-def test_w3rca02_connection_api_activate_after_pause_is_409_and_changes_nothing(database, monkeypatch):
+def test_w3rca02_connection_api_activate_after_pause_is_200_and_runtime_stays_off(database, monkeypatch):
     from onlyfans_commands.connection_api import HEADER, SCHEMA, router
     store, account, _ = verified(database, monkeypatch)
     try:
         assert change(store, account, 'activate', 1, 'c' * 64, LIMITS) == 2
         _control(store, account, 'pause', 'd' * 64)
-        before = _snapshot(store, account)
         for key, value in {'ONLYFANS_PROCESS_ROLE': 'api', 'ONLYFANS_CONNECTION_TOKEN': 'synthetic-connect',
                            'ONLYFANS_CONNECTION_TENANT': TENANT}.items():
             monkeypatch.setenv(key, value)
@@ -126,7 +162,7 @@ def test_w3rca02_connection_api_activate_after_pause_is_409_and_changes_nothing(
         reply = TestClient(app).post('/onlyfans/connection/v1/accounts/' + account,
             headers={'Authorization': 'Bearer synthetic-connect', HEADER: SCHEMA},
             json={'action': 'activate', 'payload': LIMITS, 'expectedRevision': 2, 'commandKey': 'e' * 64, 'actor': ACTOR})
-        assert reply.status_code == 409 and reply.json()['code'] == 'connection_conflict', reply.text
-        assert _snapshot(store, account) == before
+        assert reply.status_code == 200 and reply.json()['recordedRevision'] == 3, reply.text
+        assert _state(store, account)[:2] == (False, True)
     finally:
         store.close()

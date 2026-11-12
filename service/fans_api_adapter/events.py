@@ -76,6 +76,17 @@ def _pilot_fan_allowed(s, runtime, raw, event):
     return fan is None or int(fan) in config['fans']
 
 
+def _outside_price(payload):
+    """The provider's own price on an outside (creator-account) message, in whole cents; 0 when it carries none. A coexistence
+    account records what the provider said instead of calling a staff card free; a malformed price is Refused (held, not guessed)."""
+    price = payload.get('price')
+    if price in (None, 0) and type(price) is not bool:
+        return 0
+    if type(price) is bool:
+        raise Refused('outside send price is malformed')
+    return ev.cents(price)
+
+
 class FansEventIntake:
     def __init__(self, store, *, human_grace_seconds=30, pair_window_seconds=1800, mismatch_settle_seconds=240):
         self.store, self.engine = store, store.engine
@@ -93,7 +104,7 @@ class FansEventIntake:
             raise Refused('webhook authentication or identity failed')
         body = _parse(raw_body)
         event = body.get('event')
-        if event not in SUPPORTED:
+        if event not in SUPPORTED and event != 'tips.received':
             return {'outcome': 'ignored', 'event': str(event)[:80]}
         digest = sha256(raw_body).hexdigest()
         now = utcnow()
@@ -113,6 +124,13 @@ class FansEventIntake:
                 if not _pilot_fan_allowed(s, runtime, raw_body, event):
                     raise Refused('pilot fan scope changed before intake')
             account, epoch = connection.account_id, connection.epoch
+            if event == 'tips.received':
+                # Step 5.2: only a COMMERCIAL scope accounts for tips. Every other scope (legacy trial pilot, preparation,
+                # synthetic lab) keeps the earlier behaviour: the event is not projected here.
+                from conversation_engine.tips import commercial as tips_commercial
+                from db.onlyfans_models import OfRuntime
+                if not tips_commercial(s, s.get(OfRuntime, account)):
+                    return {'outcome': 'ignored', 'event': event}
             existing = s.get(OfFansWebhook, (account, epoch, event_key))
             from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
             conflict = s.scalar(select(OfEnginePilotWebhookDigest.payload_sha256).where(
@@ -345,6 +363,8 @@ class FansEventIntake:
             return self._subscription_lifecycle(event, payload, link)
         if event == 'messages.ppv.unlocked':
             return self._unlock(s, payload, raw, connection, now, after)
+        if event == 'tips.received':
+            return self._tip(s, payload, raw, connection, link, now)
         if event == 'transactions.new':
             return self._transaction(s, payload, raw, connection, now, after, source='webhook')
         if event == 'chargebacks.new':
@@ -559,6 +579,26 @@ class FansEventIntake:
         self._drive_after(connection.account_id, fan_id, after)
         return ('held', 'conflicting_duplicate') if outcome == 'conflict' else ('projected', 'unlock_' + outcome)
 
+    def _tip(self, s, payload, raw, connection, link, now):
+        """A voluntary tip: provider-confirmed money from one audience fan, deduplicated on the provider's own tip identity.
+
+        Only evidence that establishes a tip is accounted (`conversation_engine.tips.validate`); the gross amount is kept exactly. A
+        redelivery, a changed event key or a replay is the same fact (no second row, no second thanks); the same tip identity with
+        different money is a conflict that stays held and blocks only this fan. A tip is not a purchase: no unlock pairing, no grant,
+        no access, no message, no request and no send is created here; the thanks rides the next real reply (tips.snapshot_facts)."""
+        from conversation_engine import tips
+        from db.onlyfans_models import OfRuntime
+        runtime = s.get(OfRuntime, connection.account_id)
+        if not tips.commercial(s, runtime):
+            return 'ignored', 'tips_not_accounted_for_this_scope'
+        tip = tips.validate(payload, creator_id=link.creator_id)
+        if tip.fan_id not in tips.audience(s, runtime):
+            return 'ignored', 'tip_fan_outside_audience'
+        _, outcome = ev.add(s, connection.account_id, dedupe=f'tip:{tip.tip_id}', kind=tips.KIND, source='webhook',
+            event_key=raw.event_key, fan_id=tip.fan_id, txid=tip.tip_id, amount=tip.amount_cents, occurred=tip.occurred,
+            raw_sha256=raw.payload_sha256, now=now)
+        return ('held', 'conflicting_duplicate') if outcome == 'conflict' else ('projected', 'tip_' + outcome)
+
     def _transaction(self, s, payload, raw, connection, now, after, *, source):
         account = connection.account_id
         kind = payload.get('type')
@@ -619,6 +659,9 @@ class FansEventIntake:
             pilot, pilot_config = current_pilot(s, s.get(OfRuntime, connection.account_id))
             owned = (owner is not None and owner.mode == 'active') or (
                 pilot is not None and fan_id in pilot_config['fans'])
+            if owned and self._coexist_queued(s, connection, fan_id, message_id, payload, raw, now):
+                # Step 5.1 (coexistence account, audience fan): recorded as outside context, not a hold. See _coexist_queued.
+                return 'projected', 'queued_send_outside_context_recorded'
             if owned:
                 row, outcome = ev.add(s, connection.account_id, dedupe=f'sent:{message_id}', kind='human_sent',
                     source='webhook', event_key=raw.event_key, fan_id=fan_id, message_id=message_id,
@@ -639,6 +682,45 @@ class FansEventIntake:
         row.reason = 'awaiting_classification' if outcome == 'new' else row.reason
         after.append(lambda: self.classify_sent(account, fan_id))
         return 'projected', 'sent_' + outcome
+
+    def _coexist_queued(self, s, connection, fan_id, message_id, payload, raw, now):
+        """A scheduled/mass send reached an audience fan of a COEXISTENCE account. Returns True when it was handled as context.
+
+        It is recorded in the conversation as outside activity (never ours: no intent, grant or proof), withdraws that fan's unsent
+        drafts so the next plan starts from the current chat, and holds nothing. Left to the existing hold (False) when coexistence is
+        off, the fan is outside the audience, our own send to this fan is unresolved, the payload cannot be recorded, or the message id
+        already carries conflicting evidence. Other fans, other creators and every other event type are unaffected."""
+        from conversation_engine import coexistence
+        from db.onlyfans_models import OfRuntime
+        runtime = s.get(OfRuntime, connection.account_id)
+        if not coexistence.enabled(s, runtime, fan_id) or coexistence.unresolved_own_send(s, runtime, fan_id):
+            return False
+        prior = s.scalar(select(OfFansEvidence).where(OfFansEvidence.account_id == connection.account_id,
+            OfFansEvidence.dedupe_key == f'sent:{message_id}').limit(1))
+        if prior is None and not self._record_outside(s, connection, fan_id, message_id, payload, now):
+            return False
+        row, outcome = ev.add(s, connection.account_id, dedupe=f'sent:{message_id}', kind='human_sent', source='webhook',
+            event_key=raw.event_key, fan_id=fan_id, message_id=message_id, occurred=ev.stamp(payload.get('createdAt')),
+            raw_sha256=raw.payload_sha256, now=now)
+        if outcome == 'conflict':
+            return False
+        if outcome == 'new':
+            row.status, row.reason = 'applied', coexistence.QUEUED_RECORDED
+            coexistence.withdraw_unsent(s, connection.account_id, fan_id)
+        return True
+
+    def _record_outside(self, s, connection, fan_id, message_id, payload, now):
+        """Put a creator-account message this engine did not send into canonical history through the existing immutable ingress.
+        Returns False when it cannot be recorded now (malformed, or the shared inbox is full): the caller keeps its hold."""
+        binding = s.get(OfCreatorBinding, connection.binding_id)
+        text = strip_html(payload.get('text') or '')
+        media = tuple(ev.numeric(m.get('id')) for m in payload.get('media') or () if type(m) is dict and 'id' in m)
+        try:
+            message = Event(fan_id, message_id, payload['createdAt'], 'out', text, media, _outside_price(payload)).normalized()
+        except (Refused, KeyError):
+            return False
+        runtime = self.store._runtime(s, binding.tenant_id, connection.account_id)
+        return self.store._record(s, runtime, message, message.payload(), 'ws', now) != 'backpressure'
 
     @staticmethod
     def _card_fact(s, account, fan_id, message_id, payload, now):
@@ -678,7 +760,12 @@ class FansEventIntake:
                 return
 
     def classify_sent(self, account, fan_id):
-        """Turn unexplained creator-account sends into takeover evidence, once safely past our own sends."""
+        """Turn unexplained creator-account sends into takeover evidence, once safely past our own sends.
+
+        On a coexistence account (conversation_engine.coexistence) the same classification records the send as outside context
+        instead of requesting a takeover. Limit, not solved here: an outside tool does not take our locks, so while OUR send to this
+        fan is in flight (dispatching/unknown) its outside evidence stays pending rather than being classified, and an outside reply
+        can still reach the fan at the same moment as ours. We detect it afterwards; we never claim exclusive control of the chat."""
         now = utcnow()
         takeovers = []
         with Session(self.engine) as s, s.begin():
@@ -728,6 +815,8 @@ class FansEventIntake:
             binding = s.get(OfCreatorBinding, runtime.binding_id)
             if binding is None:
                 return
+            from conversation_engine import coexistence
+            coexist = coexistence.enabled(s, runtime, fan_id)
             raw = s.scalar(select(OfFansWebhook.raw_body).join(OfFansConnection, and_(
                 OfFansConnection.account_id == OfFansWebhook.account_id,
                 OfFansConnection.epoch == OfFansWebhook.epoch)).where(OfFansWebhook.account_id == account,
@@ -738,12 +827,22 @@ class FansEventIntake:
                 text = strip_html(payload.get('text') or '')
                 media = tuple(ev.numeric(m.get('id')) for m in payload.get('media') or () if type(m) is dict and 'id' in m)
                 try:
-                    message = Event(fan_id, row.message_id, payload['createdAt'], 'out', text, media, 0).normalized()
+                    message = Event(fan_id, row.message_id, payload['createdAt'], 'out', text, media,
+                                    _outside_price(payload) if coexist else 0).normalized()
                 except (Refused, KeyError):
                     message = None  # history stays repairable; the takeover evidence itself stands
                 if message is not None:
-                    self.store._record(s, self.store._runtime(s, binding.tenant_id, account), message,
-                                       message.payload(), 'ws', now)
+                    recorded = self.store._record(s, self.store._runtime(s, binding.tenant_id, account), message,
+                                                  message.payload(), 'ws', now)
+                    if coexist and recorded == 'backpressure':
+                        row.reason, row.updated_at = 'context_backpressure', now   # stays pending: retried, never applied unseen
+                        return
+                elif coexist:
+                    row.status, row.reason, row.updated_at = 'held', 'outside_send_unrecordable', now
+                    return
+            elif coexist:
+                row.status, row.reason, row.updated_at = 'held', 'outside_send_raw_unavailable', now
+                return
             state = s.get(OfConversationState, (account, fan_id))
             tenant = binding.tenant_id
             binding_id = runtime.binding_id
@@ -752,7 +851,11 @@ class FansEventIntake:
         with Session(self.engine) as s:
             from conversation_engine.pilot_scope import trial_takeover_exception
             excepted = trial_takeover_exception(s, account, binding_id, fan_id)
-        if excepted and not already:
+        if coexist and not already:
+            # Step 5.1: an explicit, per-account commercial setting. The send is context attributed to the outside; no takeover is
+            # requested. An explicit takeover already in force (`already`) is untouched and wins; stop/no-contact never change.
+            result = coexistence.OUTSIDE_RECORDED
+        elif excepted and not already:
             # Owner-recorded temporary trial exception: evidence and history above are kept; no takeover request.
             result = 'outside_send_recorded_trial_exception'
         elif already:
@@ -772,6 +875,8 @@ class FansEventIntake:
         with Session(self.engine) as s, s.begin():
             row = s.get(OfFansEvidence, (account, evidence_id))
             row.status, row.reason, row.updated_at = 'applied', result, now
+            if result == coexistence.OUTSIDE_RECORDED:
+                coexistence.withdraw_unsent(s, account, fan_id)   # freshness: unsent drafts are replanned from the current chat
 
     def reproject_pending(self, account):
         """Re-drive deliveries whose projection did not finish (crash, backpressure, retried webhook)."""

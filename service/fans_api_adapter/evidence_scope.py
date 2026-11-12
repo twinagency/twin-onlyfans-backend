@@ -14,6 +14,7 @@ _EVENTS = {
     'transaction': {'transactions.new'},
     'chargeback': {'chargebacks.new', 'transactions.new'},
     'human_sent': {'messages.sent'},
+    'tip': {'tips.received'},
 }
 
 

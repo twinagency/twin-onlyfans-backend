@@ -228,6 +228,7 @@ class PromptContext:
     max_texts: int = 4
     commercial: bool = True           # False in text-only delivery mode: no offer, contract or sales-state instructions
     terms_mode: str = ''              # 'commercial.v1' for approved-terms accounts (variant/bundle wording); '' = legacy bytes
+    tip_facts: tuple = ()             # provider-confirmed, unacknowledged tips of THIS fan ({tip_id, amount_cents}); () = none
 
 
 @dataclass(frozen=True)
@@ -479,11 +480,16 @@ def _history_rows(snapshot, budget):
         if row.get('id') == current_id:
             continue
         who = 'FAN' if row['direction'] == 'in' else 'HER'
+        if row['direction'] == 'out' and row.get('origin') == 'outside_engine':
+            # Staff coexistence: sent outside this system, sender not established. It is context for the chat, never her own voice.
+            who = 'OUTSIDE (sent outside this system; sender not established)'
         text = (row.get('body') or '').strip()
         if row['direction'] == 'in' and (row.get('media_count') or 0) > 0:
             text = (text + ' ' if text else '') + _attachment_fact(row['media_count'], bool(text))
         if row['direction'] == 'out' and (row.get('media_count') or row.get('price_cents')):
-            if (row.get('price_cents') or 0) > 0:
+            if row.get('origin') == 'outside_engine':
+                label = '[media or paid card sent outside this system; price, contents and access unknown to you]'
+            elif (row.get('price_cents') or 0) > 0:
                 cards = [card for card in (snapshot.get('offer_reference') or {}).get('cards', [])
                          if str(card.get('messageId')) == str(row.get('id')) and card.get('sendState') == 'accepted']
                 card = cards[0] if len(cards) == 1 else None
@@ -600,4 +606,5 @@ def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, bud
         purchases=tuple(p['label'] for p in purchases[:budget.purchases]) if isinstance(purchases, list) else None,
         identity_line=identity_line, recent_questions=recent_her_questions(snapshot),
         examples=tuple(examples), fix=tuple(fix), prefixed=prefixed,
-        commercial=snapshot.get('delivery_mode') != 'text_only', terms_mode=snapshot.get('terms_mode', ''))
+        commercial=snapshot.get('delivery_mode') != 'text_only', terms_mode=snapshot.get('terms_mode', ''),
+        tip_facts=tuple(snapshot.get('tip_facts') or ()))

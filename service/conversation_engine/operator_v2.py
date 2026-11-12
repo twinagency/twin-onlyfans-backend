@@ -596,7 +596,9 @@ def unresolved(store, tenant, account, actor=None):
         unscoped_provider_evidence = False
         stale = utcnow() - STALE_PENDING
         for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
-                OfFansEvidence.kind.in_(('transaction', 'chargeback')), OfFansEvidence.status.in_(('pending', 'held')),
+                OfFansEvidence.kind.in_(('transaction', 'chargeback', 'tip')),
+                # a pending tip is established fact awaiting its thanks, not unlinked money: only a HELD (conflicting) tip is listed
+                (OfFansEvidence.status == 'held') | ((OfFansEvidence.status == 'pending') & (OfFansEvidence.kind != 'tip')),
                 OfFansEvidence.peer_id.is_(None), OfFansEvidence.intent_id.is_(None),
                 True if allowed is None else OfFansEvidence.fan_id.in_(allowed))
                 .order_by(OfFansEvidence.created_at).limit(200)):
@@ -612,6 +614,9 @@ def unresolved(store, tenant, account, actor=None):
             detail = (f'{row.kind}{amount} for fan {row.fan_id} is unlinked ({row.reason or row.status}). ')
             detail += ('It does not automatically revoke access or adjust a purchase.' if row.kind == 'chargeback'
                        else 'It is not attributed to a message or treated as settled by this view.')
+            if row.kind == 'tip':
+                detail = (f'Tip{amount} for fan {row.fan_id} conflicts with an earlier report of the same provider tip '
+                          f'({row.reason or row.status}). It stays held, blocks only this fan, and is not a purchase or access.')
             items.append(_item('unlinked_transaction', row.evidence_id, 'operator',
                                'review_and_reconcile' if row.status == 'held' else 'review_unlinked_financial_evidence',
                                detail, cid, revision, row.created_at, evidenceId=row.evidence_id))
@@ -1240,7 +1245,7 @@ def reconcile(store, tenant, account, item_id, body):
                 outcome = 'dismissed'
             elif kind in ('unlinked_transaction', 'unreconciled_access'):
                 row = s.get(OfFansEvidence, (account, ident), with_for_update=True)
-                expected = ('transaction', 'chargeback') if kind == 'unlinked_transaction' else ('unlock',)
+                expected = ('transaction', 'chargeback', 'tip') if kind == 'unlinked_transaction' else ('unlock',)
                 from fans_api_adapter.evidence_scope import webhook_binding
                 owner = s.get(OfEngineOwner, (account, row.fan_id)) if row is not None else None
                 if (row is None or row.kind not in expected or webhook_binding(s, row) != binding

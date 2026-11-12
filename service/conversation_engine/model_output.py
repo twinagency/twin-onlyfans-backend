@@ -477,6 +477,36 @@ def _effective_sales_mode(snapshot, proposal):
     return mode
 
 
+# Step 5.2 (settled rule 8): tips are voluntary. The writer never asks for one and never promises a reward, discount, content or
+# access for one; it may thank for a tip only when the application's snapshot established it (`tip_facts`).
+_TIP_ASK = re.compile(
+    r"\b(?:tip\s+me|(?:send|give|leave|drop|throw|slide)\s+(?:me\s+)?(?:a\s+|some\s+|your\s+)?(?:little\s+|small\s+|nice\s+|quick\s+)?tips?|"
+    r"spoil\s+me|(?:love|want|like|need|deserve|hoping\s+for|waiting\s+for)\s+(?:a\s+|some\s+)?(?:little\s+|small\s+)?tips?\b|"
+    r"(?:a|some)\s+(?:little\s+|small\s+)?tips?\s+(?:would|could|will|might)|tips?\s+(?:keep|help|make|are\s+(?:always\s+)?(?:appreciated|welcome|how))|"
+    r"(?:how|where)\s+(?:can|do)\s+(?:you|u|i)\s+tip|tip\s+(?:jar|menu)|tipping\s+(?:is|keeps|helps))", re.I)
+_TIP_PROMISE = re.compile(
+    r"\b(?:discounts?|(?:free|bonus|extra|special)\s+(?:pics?|photos?|pictures?|videos?|clips?|content|sets?|access|stuff|treat)|"
+    r"something\s+special|special\s+something|(?:i\s+)?owe\s+you|earned|rewards?|as\s+a\s+thank\s+you|treat\s+you|"
+    r"(?:send|give|show)\s+you\s+(?:a|some|something|more)|unlock|you\s+get\s+a|on\s+the\s+house|make\s+it\s+up\s+to\s+you)\b", re.I)
+_TIP_CLAIM = re.compile(
+    r"\b(?:thank(?:s|\s+you)?\b[^.!?\n]{0,40}\b(?:tip|tips|tipping|tipped)\b|(?:your|that|the|this)\s+(?:lovely\s+|sweet\s+|generous\s+)?tips?\b(?!\s+of\b)|"
+    r"you\s+(?:just\s+)?tipped|tipping\s+me|(?:got|received|saw)\s+(?:your|the)\s+tip)", re.I)
+
+
+def tip_problems(texts, snapshot):
+    """Rules for tips on generated text and human edits. `snapshot` carries `tip_facts` only when a tip is established."""
+    joined = ' '.join(texts)
+    problems = []
+    if _TIP_ASK.search(joined):
+        problems.append('asks for a tip; tips are voluntary and she never asks for one')
+    if (snapshot or {}).get('tip_facts'):
+        if _TIP_PROMISE.search(joined):
+            problems.append('promises a reward, discount, content or access for a tip; a tip is thanked and buys nothing')
+    elif _TIP_CLAIM.search(joined):
+        problems.append('claims a tip that is not established by a provider-confirmed tip fact')
+    return problems
+
+
 def creator_problems(texts, ctx):
     """Creator and platform checks shared by generated text and operator edits."""
     problems = []
@@ -498,6 +528,7 @@ def creator_problems(texts, ctx):
     fan_texts += [row.get('body') or '' for row in snapshot.get('history') or [] if row.get('direction') == 'in'][-6:]
     problems.extend(creator_fact_problems(texts, profile, fan_texts))
     problems.extend(_sexual_problems(texts, ctx))
+    problems.extend(tip_problems(texts, snapshot))
     low = joined.lower()
     for term in getattr(profile, 'private_terms', ()) or ():
         if term and re.search(r'\b' + re.escape(term.lower()) + r'\b', low):

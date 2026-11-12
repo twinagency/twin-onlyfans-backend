@@ -183,6 +183,8 @@ def completed(s, intent):
     decision.status, decision.updated_at = 'completed', utcnow()
     from .approval import consume_in_session
     consume_in_session(s, decision)
+    from .tips import finalize as finalize_tips
+    finalize_tips(s, decision)          # a tip this accepted send thanked is now acknowledged, once
     request = s.get(OfEngineRequest, (intent.account_id, decision.request_id))
     if request.status in {'handover_pending', 'handover_accepted'}:
         request.next_step = 'review_receipt'

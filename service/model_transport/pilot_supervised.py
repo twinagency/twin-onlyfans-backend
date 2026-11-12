@@ -48,12 +48,16 @@ def _known_irrelevant(raw):
     return classify_raw(raw).cls == IRRELEVANT
 
 
-def _scope(raw, allowed_fans):
+def _scope(raw, allowed_fans, *, tip_creator=None):
     """(outside_the_engine_path, hold) from the shared classification contract.
 
     Only a verified-irrelevant event, an event for a fan outside the pilot, or a supported event
     inside the pilot avoids a hold. A MATERIAL event holds only when it names a pilot fan (the
     hold is scoped to that fan when read); everything unknown or malformed holds the account.
+
+    `tip_creator` is the creator id of a COMMERCIAL scope. For it only, a `tips.received` that establishes a real tip from an
+    audience fan (conversation_engine.tips.validate) enters the normal intake; evidence that does not establish one keeps the
+    MATERIAL hold of that fan. Any other scope passes None and every tip stays exactly as before.
     """
     try:
         _, fan = _event_fan(raw)
@@ -65,6 +69,13 @@ def _scope(raw, allowed_fans):
     from fans_api_adapter.event_scope import classify_raw, MATERIAL
     verdict = classify_raw(raw)
     if verdict.cls == MATERIAL:
+        if tip_creator is not None and verdict.event == 'tips.received' and verdict.fan in allowed_fans:
+            from conversation_engine.tips import validate as validate_tip
+            try:
+                validate_tip(parse_event(raw)['payload'], creator_id=tip_creator)
+                return False, False
+            except Refused:
+                pass
         return True, verdict.fan in allowed_fans
     return True, True
 
@@ -197,6 +208,7 @@ class SupervisedPilot:
             runtime = self.worker.engine.store._runtime(s, self.tenant, self.account, lock=False)
             _, config = require(s, runtime)
             allowed_fans = frozenset(config['fans'])
+            tip_creator = config['creator_id'] if config.get('contract_version') == 'commercial.v1' else None
         # HTTP intake persists and projects receipt-time barriers only. The existing
         # durable poller owns generation/sending; no request-local background work.
         planning = False
@@ -206,7 +218,7 @@ class SupervisedPilot:
                 planning = True
             except Refused:
                 pass
-        outside, malformed = _scope(raw, allowed_fans)
+        outside, malformed = _scope(raw, allowed_fans, tip_creator=tip_creator)
         if outside:
             if self._record_outside_digest(raw, event_key, signature=signature, safety_hold=malformed):
                 return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
@@ -298,7 +310,8 @@ class SupervisedPilot:
                 OfEngineDecision.account_id == self.account, OfEngineDecision.binding_id == runtime.binding_id,
                 OfEngineDecision.fan_id.in_(self.allowed_fans), OfEngineDecision.status == 'queued',
                 OfEngineDecision.intent_id.is_not(None),
-                OfEngineApproval.authorization_mode == 'autonomous',
+                or_(OfEngineApproval.authorization_mode == 'autonomous',
+                    OfEngineApproval.invalidation_reason == 'outside_activity'),     # Step 5.1, either authorization mode
                 OfEngineApproval.status.in_(('invalidated', 'expired'))).distinct().limit(limit)).all()
         for decision_id, intent_id in invalid_queued:
             self.validate()
@@ -335,10 +348,13 @@ class SupervisedPilot:
                 OfEngineApproval.account_id == request.account_id,
                 OfEngineApproval.request_id == request.request_id,
                 OfEngineApproval.binding_id == runtime.binding_id,
-                OfEngineApproval.authorization_mode == 'autonomous',
                 OfEngineApproval.status.in_(('invalidated', 'expired')),
-                OfEngineApproval.invalidation_reason.in_(
-                    ('memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'unsent_cancelled', 'ttl'))).exists()
+                or_(and_(OfEngineApproval.authorization_mode == 'autonomous',
+                         OfEngineApproval.invalidation_reason.in_(
+                             ('memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'unsent_cancelled', 'ttl'))),
+                    # Step 5.1: a coexistence account's outside reply withdrew the unsent draft; in EITHER authorization mode the
+                    # request is replanned from the current conversation (a new draft still needs its own approval).
+                    OfEngineApproval.invalidation_reason == 'outside_activity')).exists()
             ready = select(OfEngineDecision.decision_id).where(
                 OfEngineDecision.account_id == request.account_id,
                 OfEngineDecision.request_id == request.request_id,
@@ -396,7 +412,9 @@ class SupervisedPilot:
                         OfEngineApproval.request_id == request.request_id).order_by(
                             OfEngineApproval.generation.desc(), OfEngineApproval.version.desc()).limit(1))
                     if latest_approval is not None:
-                        if (latest_approval.authorization_mode != 'autonomous'
+                        outside_replan = (latest_approval.status == 'invalidated'
+                                          and latest_approval.invalidation_reason == 'outside_activity')
+                        if not outside_replan and (latest_approval.authorization_mode != 'autonomous'
                                 or latest_approval.status not in ('invalidated', 'expired')
                                 or latest_approval.invalidation_reason not in (
                                     'memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'unsent_cancelled', 'ttl')
@@ -489,7 +507,8 @@ class IntakeOnlyPilot:
         with Session(self.store.engine) as s:
             runtime=self.store._runtime(s,self.tenant,self.account,lock=False)
             _,config=require(s,runtime)
-        outside,malformed=_scope(raw,frozenset(config['fans']))
+        outside,malformed=_scope(raw,frozenset(config['fans']),
+            tip_creator=config['creator_id'] if config.get('contract_version')=='commercial.v1' else None)
         if outside:
             conflict=_record_outside_digest(self.store,self.tenant,self.account,raw,event_key,signature=signature,secret=self.secret,safety_hold=malformed)
             return {'outcome':'quarantined' if conflict else 'outside_pilot_scope','planning':'held'}

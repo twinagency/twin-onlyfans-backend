@@ -230,6 +230,11 @@ def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B), ch
         wire.chats[fan] = [chat_page([])]
     read_everything(store, database, account, wire, tuple(fans))
     recover(store, account, tuple(fans))          # the text-only launch also needs the per-fan recovery the legacy path records
+    # The existing offline knob (also used by stopped_text) that says per-fan history is current for the sender; the delivery gate
+    # otherwise waits for the account-wide sync loop, which these offline worlds do not run.
+    import os
+    current = [part for part in os.environ.get('ONLYFANS_FAN_CURRENT_OVERRIDE', '').split(',') if part]
+    monkeypatch.setenv('ONLYFANS_FAN_CURRENT_OVERRIDE', ','.join(current + [f'{account}:{fan}' for fan in fans]))
     unblock(database[1], account, cfg['creator_id'])
     w = World()
     w.index = i

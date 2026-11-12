@@ -17,6 +17,7 @@ from db.onlyfans_delivery_models import OfTextIntent
 from db.onlyfans_engine_models import (OfEngineAccessEvidence, OfEngineApproval, OfEngineDecision, OfEngineOfferGrant,
                                        OfEnginePilotWebhookDigest, OfEngineRequest)
 from db.onlyfans_fans_intake_models import OfFansEvidence
+from onlyfans_runtime.store import Refused
 from test_commercial_preparation_pg import TENANT
 from test_onlyfans_foundation_pg import database  # noqa: F401
 from coexistence_fixture import FAN_A, FAN_B, OPERATOR, build_world, key
@@ -92,6 +93,36 @@ def test_the_outside_text_is_never_offered_back_as_an_approved_writing_example(m
     assert 'APPROVED EXAMPLES OF HER VOICE' not in prompt
 
 
+def test_an_outside_paid_card_is_recorded_with_the_provider_price_and_is_never_called_free_or_ours(make):
+    w = make()
+    w.launch(coexist=True)
+    w.mid += 1
+    card = w.sent(w.mid, FAN_A, 'something for you')
+    card['payload'].update(price=7, media=[{'id': 777}])
+    w.deliver(card)
+    w.tick()
+    with Session(w.database[1]) as s:
+        from db.models import Message
+        row = s.get(Message, (w.account, FAN_A, w.mid))
+        assert (row.direction, row.price_cents, row.media_count) == ('out', 700, 1)
+    w.say('what is this?')
+    prompt = w.model_prompts[-1]
+    assert 'sent outside this system; price, contents and access unknown' in prompt and 'free media' not in prompt
+    assert w.rows(OfTextIntent) == [] and w.rows(OfEngineOfferGrant) == [], 'a staff card is never our card, grant or proof'
+
+
+def test_an_outside_send_that_cannot_be_recorded_honestly_is_held_for_that_fan_only(make):
+    w = make()
+    w.launch(coexist=True)
+    w.mid += 1
+    card = w.sent(w.mid, FAN_A, 'broken price')
+    card['payload']['price'] = 'seven dollars'
+    w.deliver(card)
+    ev = evidence_of(w, w.mid)
+    assert (ev.status, ev.reason) == ('held', 'outside_send_unrecordable')
+    assert w.block(FAN_A) == 'pilot_evidence_pending' and w.block(FAN_B) is None
+
+
 # --------------------------------------------------------------------------------------------- before our wire
 def test_an_outside_reply_before_our_wire_cancels_the_stale_draft_and_replans_from_current_context(make):
     w = make()
@@ -127,6 +158,18 @@ def test_an_already_approved_but_unsent_draft_is_never_sent_after_an_outside_rep
     assert all(i.status in ('cancelled',) for i in intents)
     w.tick(1)
     assert w.approvals()[-1].status == 'awaiting' and w.approvals()[-1].generation == 1
+
+
+def test_autonomous_mode_replans_the_same_way_and_sends_exactly_one_reply(make):
+    w = make()
+    w.launch(coexist=True, authorization_mode='autonomous')
+    staged, mid = w.say('hello there')
+    assert w.posts() == [] and w.approvals()[-1].status == 'awaiting'
+    staff(w, FAN_A, 'I am answering this one myself, one second')
+    w.tick(4)
+    assert len(w.posts()) == 1, w.posts()                               # the replanned draft only; the stale one never went out
+    assert 'I am answering this one myself' in w.model_prompts[-1]
+    assert {d.generation: d.status for d in w.rows(OfEngineDecision)} == {0: 'cancelled', 1: 'completed'}
 
 
 def test_a_correction_before_our_wire_triggers_the_same_replanning(make):
@@ -235,9 +278,10 @@ def test_known_queue_and_broadcast_events_are_context_when_coexistence_is_on(mak
 def test_a_queued_send_to_a_fan_outside_the_audience_stays_ignored_either_way(make):
     w = make()
     w.launch(coexist=True)
-    mid = staff(w, 999001, 'blast to someone else', queued=True)
-    assert w.projections()[f'evt-1-{w.n}'] == ('ignored', 'queued_broadcast')
-    assert w.block(FAN_A) is None and w.evidence('human_sent', 999001) == []
+    w.mid += 1
+    result = w.deliver(w.sent(w.mid, 999001, 'blast to someone else', queued=True))
+    assert result['outcome'] == 'outside_pilot_scope'                 # never enters the engine path, never holds anyone
+    assert w.block(FAN_A) is None and w.block(FAN_B) is None and w.evidence('human_sent', 999001) == []
 
 
 # --------------------------------------------------------------------------------------------- unknown / malformed / conflicting / auth stay held
@@ -269,7 +313,9 @@ def test_an_undocumented_event_type_stays_held_with_coexistence_on(make):
 def test_authentication_events_still_stop_sending_with_coexistence_on(make):
     w = make()
     w.launch(coexist=True)
-    w.deliver({'event': 'accounts.authentication_failed', 'account_id': w.provider, 'payload': {'onlyfans_id': w.creator}}, event_key='auth-1')
+    with pytest.raises(Refused, match='enabled fansapi'):               # the worker stops itself once the provider says authentication failed
+        w.deliver({'event': 'accounts.authentication_failed', 'account_id': w.provider, 'payload': {'onlyfans_id': w.creator}},
+                  event_key='auth-1')
     assert w.block(FAN_A) is not None and w.block(FAN_B) is not None
     w.say('hello there')
     assert w.posts() == []

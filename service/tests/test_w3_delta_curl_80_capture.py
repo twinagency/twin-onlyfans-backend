@@ -21,8 +21,8 @@ T = 1762900000000
 PROXY = "http://synthetic:proxy-secret@proxy.example:8080"
 
 
-def curl(cookies="-b 'auth_id=123; sess=FAKE'", *, rev="synthetic-rev", x_hash=" -H 'x-hash: synthetic-hash'"):
-    s = sign(URL, OWNER, RULES, T)["sign"]
+def curl(cookies="-b 'auth_id=123; sess=FAKE'", *, rev="synthetic-rev", x_hash=" -H 'x-hash: synthetic-hash'", sign_value=None):
+    s = sign_value or sign(URL, OWNER, RULES, T)["sign"]
     return (f"curl '{URL}' -H 'user-id: 123' -H 'x-bc: synthetic-bc' -H 'x-of-rev: {rev}'"
             f" -H 'sign: {s}' -H 'time: {T}' -H 'user-agent: Synthetic browser'"
             f" -H 'x-relay-static-param: synthetic-static'{x_hash} {cookies}")
@@ -150,3 +150,33 @@ def test_capture_build_requires_explicit_proxy():
     import inspect
     for f in (sb.build_connection_capture, sb.build_connection_capture_from_request):
         assert inspect.signature(f).parameters["proxy"].default is inspect.Parameter.empty, f
+
+
+@pytest.mark.parametrize("bad", ["FAKESIGNSECRET", "synthetic:" + "a" * 40 + ":NOTHEXSECRET:test"])
+def test_sign_value_not_echoed_in_error(wire, bad):
+    # W3DC-06: malformed Sign / non-hex checksum errors state the problem, never the value.
+    for build in (lambda c: sb.build_connection_capture(c, account="of-123", proxy=None), sb.from_curl):
+        with pytest.raises(sb.CurlParseError) as e:
+            build(curl(sign_value=bad))
+        assert "SECRET" not in str(e.value) and "Sign" in str(e.value), str(e.value)
+
+
+def test_cookie_header_form_not_silently_dropped(wire):
+    # W3DC-04: Firefox "Copy as cURL" sends -H 'Cookie: ...' instead of -b.
+    out = sb.build_connection_capture(curl("-H 'Cookie: auth_id=123; sess=FAKE'"), account="of-123", proxy=None)
+    assert {c["name"]: c["value"] for c in out["capture"]["cookies"]} == {"auth_id": "123", "sess": "FAKE"}
+
+
+def test_cookie_flag_wins_over_cookie_header(wire):
+    parsed = sb.parse_curl(curl("-H 'Cookie: auth_id=999; sess=HDR' -b 'auth_id=123; sess=FAKE'"))
+    assert {c["name"]: c["value"] for c in parsed["cookies"]} == {"auth_id": "123", "sess": "FAKE"}
+    assert "cookie" not in parsed["headers"]
+
+
+def test_sign_start_mismatch_not_echoed(wire):
+    c = curl("-H 'x-relay-sign-start: SECRETSTART' -b 'auth_id=123; sess=FAKE'")
+    for build in (lambda c: sb.build_connection_capture(c, account="of-123", proxy=None), sb.from_curl):
+        with pytest.raises(sb.CurlParseError) as e:
+            build(c)
+        msg = str(e.value)
+        assert "x-relay-sign-start disagrees" in msg and "SECRET" not in msg and "synthetic" not in msg, msg

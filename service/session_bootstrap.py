@@ -241,6 +241,26 @@ def _check_owner(account: str, user_id: str, cookies: list) -> None:
         raise CurlParseError(str(e)) from None
 
 
+def _sign_sample(sign: str, start_hint: str | None, end_hint: str | None,
+                 url: str, time_ms: str, user_id: str) -> tuple[str, str, dict]:
+    """Split Sign "start:sha1:hexchecksum:end" into (start, end, verify sample).
+    The extension's x-relay-sign-start/end are cross-checks: a mismatch means
+    inconsistent page state. Errors never carry the captured values."""
+    parts = sign.split(":")
+    if len(parts) != 4:
+        raise CurlParseError("Sign header malformed (need 4 colon parts)")
+    start, sha1Hex, hexchecksum, end = parts
+    for label, supplied, wire in (("start", start_hint, start), ("end", end_hint, end)):
+        if supplied and supplied != wire:
+            raise CurlParseError(f"x-relay-sign-{label} disagrees with the Sign header — page state is inconsistent")
+    try:
+        checksum_value = abs(int(hexchecksum, 16))
+    except ValueError:
+        raise CurlParseError("Sign checksum portion is not hex") from None
+    return start, end, {"sha1Hex": sha1Hex, "checksumValue": checksum_value,
+                        "url": url, "time": time_ms, "user_id": user_id}
+
+
 def parse_curl(curl_text: str) -> dict:
     """Parse a `curl ...` command (the kind DevTools generates).
 
@@ -313,6 +333,9 @@ def parse_curl(curl_text: str) -> dict:
     if not url:
         raise CurlParseError("no URL found in command")
 
+    # Firefox "Copy as cURL" sends cookies as -H 'Cookie: ...'; -b wins if both.
+    hdr_cookies = headers.pop("cookie", "")
+    cookies_raw = cookies_raw or hdr_cookies
     cookies: list[dict] = []
     if cookies_raw:
         for pair in cookies_raw.split(";"):
@@ -377,31 +400,8 @@ def from_curl(curl_text: str, *,
     curl_sign_start   = h.get("x-relay-sign-start")
     curl_sign_end     = h.get("x-relay-sign-end")
 
-    # Parse Sign: "start:sha1:hexchecksum:end"
-    parts = sign.split(":")
-    if len(parts) != 4:
-        raise CurlParseError(f"Sign header malformed (need 4 colon-separated parts): {sign!r}")
-    start, sha1Hex, hexchecksum, end = parts
-    # The extension-supplied start/end act as cross-checks — if they
-    # disagree with what's on the wire, the page state is inconsistent
-    # and we'd rather fail loudly here than write a broken session.
-    if curl_sign_start and curl_sign_start != start:
-        raise CurlParseError(
-            f"x-relay-sign-start ({curl_sign_start!r}) does not match the "
-            f"start in the Sign header ({start!r}) — page state is inconsistent"
-        )
-    if curl_sign_end and curl_sign_end != end:
-        raise CurlParseError(
-            f"x-relay-sign-end ({curl_sign_end!r}) does not match the "
-            f"end in the Sign header ({end!r}) — page state is inconsistent"
-        )
-    try:
-        checksum_value = abs(int(hexchecksum, 16))
-    except ValueError as e:
-        raise CurlParseError(f"hex checksum portion is not hex: {hexchecksum!r}") from e
-
-    sample = {"sha1Hex": sha1Hex, "checksumValue": checksum_value,
-              "url": parsed["url"], "time": time_ms, "user_id": user_id}
+    start, end, sample = _sign_sample(sign, curl_sign_start, curl_sign_end,
+                                      parsed["url"], time_ms, user_id)
 
     # ── Get static_param ─────────────────────────────────────
     # Priority:
@@ -552,20 +552,8 @@ def build_connection_capture_from_request(parsed: dict, *,
         x_hash = fetch_asset("hash", **asset).strip()
         if not re.fullmatch(r"[\x21-\x7e]{8,512}", x_hash):
             raise RuntimeError("OnlyFans returned no usable X-Hash for this account.")
-    parts = sign.split(":")
-    if len(parts) != 4:
-        raise CurlParseError(f"Sign header malformed (need 4 colon parts): {sign!r}")
-    start, sha1Hex, hexchecksum, end = parts
-    for label, supplied, wire in (("start", h.get("x-relay-sign-start"), start),
-                                  ("end", h.get("x-relay-sign-end"), end)):
-        if supplied and supplied != wire:
-            raise CurlParseError(f"x-relay-sign-{label} disagrees with the Sign header — page state is inconsistent")
-    try:
-        checksum_value = abs(int(hexchecksum, 16))
-    except ValueError as e:
-        raise CurlParseError(f"hex checksum portion is not hex: {hexchecksum!r}") from e
-    sample = {"sha1Hex": sha1Hex, "checksumValue": checksum_value,
-              "url": parsed["url"], "time": time_ms, "user_id": user_id}
+    start, end, sample = _sign_sample(sign, h.get("x-relay-sign-start"), h.get("x-relay-sign-end"),
+                                      parsed["url"], time_ms, user_id)
     static_param = static_param_override or h.get("x-relay-static-param") or _lookup_static_param_for_rev(x_of_rev)
     if not static_param:
         raise CurlParseError(

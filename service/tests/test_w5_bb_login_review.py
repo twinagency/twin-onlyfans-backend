@@ -24,3 +24,13 @@ def test_w5bb1_curl_route_refuses_another_owner(client, world):
     r = client.post(url % t.OTHER, headers=t.H, json={'curl': curl})
     assert r.status_code == 409 and r.json()['code'] == 'owner_mismatch' and 'capture' not in r.json()
     assert client.post(url % t.ACCOUNT, headers=t.H, json={'curl': curl}).json()['ownerId'] == int(t.UID)
+
+
+def test_w5bb4_malformed_sign_not_echoed(client, world, monkeypatch, caplog):
+    bad = 'SIGNEDMATERIALabcdefghABCDEFGH'  # no chars that collide with synthetic cookie values
+    monkeypatch.setitem(t.CAPTURE['headers'], 'sign', bad)
+    job = client.post(t.base(), headers=t.H, json={}).json()['jobId']
+    r = t.wait_state(client, job, {'done', 'failed'})
+    assert r['state'] == 'failed'
+    assert bad not in (r.get('error') or '') and bad not in caplog.text
+    assert 'Sign header malformed' in r['error']

@@ -99,3 +99,8 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F0c (#90): 3 env-gated release-rehearsal tests → premerge-known-red (still run by full; run-service-tests.py never reads the list, grep). premerge OK 0 skipped 3 known-red (measured). Unblocks the check.sh fast gate for F5/F4. Flash solo review re-run (1st interrupted).
 - Re-sort: started on Opus, stopped per 00:0xZ; handed to Flash (delegate, worktree, read-only; PG :55650 /tmp/pg-triage). Opus leftovers: PG stopped+removed; /tmp/fix-dedupe detached worktree kept (4 untracked scratch test copies, not backed up → rule: keep).
 - Target check: only our 6 merges since a253c84c; claude/commercial-final-20261113 + commercial-integration-4 do NOT contain target (mb e8e90954) → target unchanged.
+
+## F0c merged (#90 → 29f28729), 2026-11-12T23:45Z
+- Flash solo: MERGE; lows: unconditional deselect (→F0b), "full runs them" overstated → reworded. check.sh fast GREEN 32s (measured).
+- F5 rebased on 29f28729; first fast run RED rc=143 = external SIGTERM at 60s (F4 premerge died same moment; inferred external kill, no test failure). Rerunning. F4 worker resumed with check.sh fast gate.
+- Merges: 7. Fable consult due at 8.

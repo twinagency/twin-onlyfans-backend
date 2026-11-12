@@ -4,3 +4,8 @@
 service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence
 # a253c84c: script, owner fence refuses before the suite asserts
 service/tests/test_native_pilot_runtime.py onlyfans_runtime.store.Refused: engine_owner_lookup_failed
+# 9124b50d + 96609e23 (measured): env-gated release rehearsal, not a gate test. Needs ONLYFANS_COMPATIBLE_ROLLBACK_DIR
+# (older release checkout) / ONLYFANS_TEST_DASHBOARD (installed paired dashboard, 330 s demo). Still run by check.sh full. F0b.
+service/tests/test_onlyfans_release_package_pg.py::test_schema_compatible_rollback_preserves_evidence_with_commands_closed
+service/tests/test_onlyfans_release_rehearsal_pg.py::test_one_command_demo_smoke_runs_current_screens_and_removes_its_database
+service/tests/test_onlyfans_release_rehearsal_pg.py::test_one_command_demo_removes_its_database_after_frontend_start_failure

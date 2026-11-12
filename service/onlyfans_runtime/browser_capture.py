@@ -17,6 +17,7 @@ from .provider_connector import NativeProviderConnector, _header, _deadline, ses
 from .store import Refused
 
 SCHEMA = "of-browser.v1"
+REV = r"[A-Za-z0-9_-]{1,128}"  # OnlyFans x-of-rev; the one rule (also session_bootstrap)
 
 
 def validate_browser_payload(payload, *, fresh=True):
@@ -36,7 +37,7 @@ def validate_browser_payload(payload, *, fresh=True):
             raise ValueError()
         h = b["headers"]
         if (type(h) is not dict or set(h) != {"user_id", "user_agent", "x_bc", "x_of_rev", "x_hash"}
-                or h["user_id"] != str(owner) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", h["x_of_rev"])):
+                or h["user_id"] != str(owner) or not re.fullmatch(REV, h["x_of_rev"])):
             raise ValueError()
         for name in ("user_agent", "x_bc", "x_of_rev"):
             _header(h[name], name)

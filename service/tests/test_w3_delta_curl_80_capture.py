@@ -241,3 +241,42 @@ def test_legacy_uses_capped_fetcher_not_urllib(legacy):
         sb.from_curl(curl())
     assert legacy.urlopen == []
     assert legacy.fetched == [("rules", dict(owner="123", rev="synthetic-rev", user_agent="Synthetic browser", proxy=None))]
+
+
+def test_legacy_bad_user_id_refused_before_fetch(legacy):
+    # F2b-01: from_curl shares the twin's user-id rule (the id becomes an account dir name).
+    bad = curl("-b 'auth_id=../123; sess=FAKE'").replace("user-id: 123", "user-id: ../123")
+    with pytest.raises(sb.CurlParseError):
+        sb.from_curl(bad)
+    assert legacy.fetched == [] and legacy.urlopen == []
+
+
+CRED = {"label": "p1", "scheme": "http", "host": "proxy.example", "port": 8080,
+        "username": "synthetic", "password": "proxy-secret"}
+
+
+def test_legacy_credentialed_proxy_on_the_wire(wire, monkeypatch):
+    # F2b-04: real fetch_asset, curl_cffi faked: the credentialed proxy URL reaches the
+    # transport exactly, no redirects/env proxies, and it is the only transport call.
+    import proxies
+    monkeypatch.setattr(proxies, "get_for_account", lambda aid: CRED)
+    def stop(*a, **k): raise _Stop()
+    monkeypatch.setattr(sb, "derive_rules_from_chunk", stop)  # no session writes
+    with pytest.raises(_Stop):
+        sb.from_curl(curl())
+    assert [(t, u) for t, u, _ in wire] == [("curl_cffi", "https://static2.onlyfans.com/static/prod/f/synthetic-rev/2313.js")]
+    kw = wire[0][2]
+    assert (kw["proxy"], kw["trust_env"], kw["allow_redirects"], kw["impersonate"]) == (PROXY, False, False, "chrome")
+
+
+def test_bootstrap_route_maps_asset_refusal_to_502_without_creds(wire, monkeypatch):
+    # F2b-03: fetch_asset Refused (here: over the byte cap) -> 502, constant detail, no proxy URL.
+    from fastapi import HTTPException
+    import proxies
+    import server
+    monkeypatch.setattr(proxies, "get_for_account", lambda aid: CRED)
+    monkeypatch.setitem(globals(), "_body", lambda url: b"x" * (2 * 1024 * 1024 + 1))
+    with pytest.raises(HTTPException) as e:
+        server.bootstrap_session(server._BootstrapBody(mode="paste-curl", curl=curl()))
+    assert e.value.status_code == 502, e.value.detail
+    assert "Proxies" in e.value.detail and "proxy-secret" not in e.value.detail and "synthetic" not in e.value.detail

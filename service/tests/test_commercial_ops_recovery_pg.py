@@ -171,6 +171,64 @@ def test_rollback_is_guarded_the_previous_release_refuses_this_schema_and_the_do
         cstore.close(); broker.close(); store.close(); other.close()
 
 
+def test_positive_compatible_code_rollback_accepts_the_committed_schema_and_changes_nothing(database, tmp_path, monkeypatch):
+    """The POSITIVE counterpart of the guarded-rollback test. /opt/compatible-rollback (e79380f) is the previous-release CODE whose reader
+    accepts revision 0138, so rolling the code back never needs a schema downgrade (which would discard commercial evidence).
+    On the populated, emergency-stopped commercial database: the compatible reader accepts the committed revision and its own schema
+    check passes; its API serves the read projections for BOTH the commercial account and the release-package account; its mutation
+    surface stays closed; and not one row (public or broker) changes. The current release still passes its own schema check afterwards."""
+    import subprocess
+    import sys
+    import httpx
+    from test_onlyfans_http_pg import port, process, wait_http
+    legacy = Path(os.environ["ONLYFANS_COMPATIBLE_ROLLBACK_DIR"]).resolve()
+    assert (legacy / "service/onlyfans_app.py").is_file()
+    url, engine = database
+    store, other, broker = populated(database, monkeypatch)
+    cstore, account, cfg, promoted = launchable(database, 1)
+    try:
+        live = activate(cstore, account, promoted["revision"], 600)
+        ids = add_sends(engine, cstore, account)
+        with Session(engine) as s:
+            fingerprint = account_state(s, cstore._runtime(s, TENANT, account))["fingerprint"]
+        stopped = control_account(cstore, TENANT, account, action="emergency_stop", command_key=key(611), actor=ACTOR,
+                                  reason="Q15 emergency stop before code rollback", expected_fingerprint=fingerprint)
+        assert stopped["recorded"] and scope_state(engine, account)["status"] == "stopped"
+        before, proxy_before = rows(engine), proxy_rows(engine)
+        assert {"accepted", "unknown"} <= {r["status"] for r in before["of_text_intent"]} and before["of_commerce_evidence"]
+        # 1. the compatible reader accepts the committed schema (the previous release refused it in the test above)
+        env = {k: v for k, v in os.environ.items() if k in {"PATH", "TMP", "TEMP"}}
+        env.update(PYTHON_DOTENV_DISABLED="1", PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1", PYTHONPATH=f"{legacy}{os.pathsep}{legacy / "service"}",
+                   DATABASE_URL=url, R0_TEST_DB=url, ONLYFANS_PROCESS_ROLE="worker", TWIN_FASTT_CONFIG_ISOLATED="1")
+        reader = subprocess.run([sys.executable, "-c", "import os; from sqlalchemy import create_engine; from db.schema import check_schema, HEAD; "
+            "print('reader head', HEAD); c=create_engine(os.environ['R0_TEST_DB']).connect(); check_schema(c); print('reader accepts the schema')"],
+            cwd=str(legacy), env=env, capture_output=True, text=True, timeout=60)   # its migrations import the repo-root `service` package
+        assert reader.returncode == 0, reader.stderr
+        assert f"reader head {HEAD}" in reader.stdout and "reader accepts the schema" in reader.stdout
+        # 2. its API serves read projections for the commercial account and the release-package account; mutations stay closed
+        for tenant, name in ((TENANT, account), ("tenant-a", "acc-a")):
+            api_env = {**env, "ONLYFANS_PROCESS_ROLE": "api", "ONLYFANS_API_TOKEN": "synthetic-rollback-read-token", "ONLYFANS_API_TENANT": tenant}
+            api_port = port()
+            base = f"http://127.0.0.1:{api_port}/onlyfans/api/v1"
+            headers = {"Authorization": "Bearer synthetic-rollback-read-token", "X-OnlyFans-Schema-Version": "of-preview.v2"}
+            with process([sys.executable, "-m", "uvicorn", "onlyfans_app:app", "--app-dir", "service", "--host", "127.0.0.1", "--port", str(api_port)],
+                         cwd=legacy, env=api_env, log=tmp_path / f"rollback-{name}.log") as child:
+                wait_http(f"http://127.0.0.1:{api_port}/healthz", child)
+                with httpx.Client(trust_env=False, timeout=20) as client:
+                    for path in ("/ready", "/accounts", f"/accounts/{name}/operations"):
+                        response = client.get(base + path, headers=headers)
+                        assert response.status_code == 200, (name, path, response.text)
+                    assert client.post(base + f"/accounts/{name}/campaigns", headers=headers, json={}).status_code in (400, 401, 403, 404, 405)
+        # 3. nothing changed anywhere, and the current release still accepts its own schema
+        assert rows(engine) == before and proxy_rows(engine) == proxy_before
+        by_status = {r[0]: r for r in intent_rows(engine, account)}
+        assert by_status[ids["unknown"]][1] == "unknown" and by_status[ids["accepted"]][1] == "accepted"
+        with engine.connect() as c:
+            check_schema(c)
+    finally:
+        cstore.close(); broker.close(); store.close(); other.close()
+
+
 # ---------------------------------------------------------------------------------------------- receive-only composition
 spec = importlib.util.spec_from_file_location("plan_c_explicit_receiver_q15", Path(__file__).resolve().parents[2] / "ops/plan-c-supervision/receive_only.py")
 receiver = importlib.util.module_from_spec(spec)

@@ -28,7 +28,8 @@ and write the root-owned supervision-v11/reviewed-recovery-release.json with
 {"image":"sha256:<reviewed image>","commit":"<reviewed full commit>"}.
 This is a release pin, not a replacement for independent review.
 
-Run resolve_monitor_incident.py under the existing restricted host credential
+Run resolve_monitor_incident.py (a preview by default; add --apply to audit and publish,
+see the last section) under the existing restricted host credential
 owner. It collects fresh evidence, invokes the exact image's existing DB audit
 owner, preserves the credit high-water value and only then publishes the
 incident-specific resolution receipt. Original incident bytes and append-only
@@ -38,7 +39,7 @@ records a distinct held marker; resolver and failure writer share a lock.
 
 If the process crashes after audit but before publication, inspect the retained
 attempt, then explicitly run:
-  resolve_monitor_incident.py --resume /srv/projects/twin-plan-c-pilot-20261109/evidence/<exact-attempt>
+  resolve_monitor_incident.py --apply --resume /srv/projects/twin-plan-c-pilot-20261109/evidence/<exact-attempt>
 The DB command is idempotent; stale unaudited evidence is refused. A repeat after
 successful publication makes no new provider call. No automatic retries exist.
 
@@ -161,3 +162,40 @@ reducing the external baseline is a new budget authorization. Fixture transports
 may omit this file. Missing/invalid real configuration refuses provider requests,
 activation and planning. The monitor remains an additional detection boundary,
 not a substitute for transaction-level admission.
+
+
+### Stopped monitor recovery and conflicting event review
+
+Identity. Monitor recovery reads the same reviewed per-account supervision configuration as the supervisor
+(account, binding, connection epoch, provider account, explicit fans). The evidence collector compares that
+configuration with the persisted runtime binding, active connection and scope fan list and refuses on any
+difference (`scope-identity.json` is retained in the evidence). The database audit receives the same identity,
+re-checks it against the rows it locks (`record_resolution(expected_identity=...)`), and validates the receipt's
+binding and epoch against the persisted runtime and active connection. Nothing assigns legacy constants: the
+three pinned v1 incidents remain limited to their original legacy identity, every other account uses the
+class/evidence receipts (v2, and v3 for readiness_unavailable).
+
+Order of operations when a conflicting message event key falls inside the monitor interval (stopped scope):
+
+1. Inspect the conflicting key: `resolve_conflicting_webhook.py` without `--apply` is a true dry run (writes nothing).
+2. Review it with `--apply` only if it is an eligible non-audience `messages.sent` / `messages.received` conflict
+   (every variant is an outside-fan message with retained or operator-supplied exact bytes). One key, one revision,
+   one actor, one evidence statement, one command key. Both payload variants stay retained, unmerged. Only that
+   key's hold is released; money, ownership, in-scope fan, projected/quarantined keys and every other conflict stay held.
+3. Only then validate/resolve the monitor interval. Interval validation refuses an unreviewed conflicting key and
+   says to review it first. A later variant under the key restores the hold and invalidates the review.
+
+`resolve_monitor_incident.py` has no dry run. Its default (or `--preview`) collects and retains evidence and validates
+it in the reviewed image; it audits nothing, publishes nothing and does not touch budget state. It prints
+`"result":"preview"` with `audited`, `published` and `applied` false. `--apply` (alone, or with `--resume <evidence
+directory>` to apply exactly the previewed evidence) audits in the database and publishes the resolution, and prints
+`"applied":true`. Resume checks source hashes and the current incident identity before audit; retries preserve
+command identity. `--dry-run` is refused.
+
+For readiness_unavailable supply an operator evidence reference and name exactly all unresolved sends. The v3 receipt
+requires a bounded interval (at most 24 hours from the last confirmed healthy instant), exact journal stop evidence (one
+stop line of this class), a stopped scope, an absent sender, the operator evidence reference and the exact list of
+unresolved sends. Naming a send acknowledges it; it does not resolve, retire or retry it. The receipt carries a caveat
+that the original readiness HTTP status, code and body were not retained; no specific response is stated.
+Current v2/v3 receipts cannot enable sending, settle an unknown send or release application holds.
+Unknown-send retirement remains a separate owner policy and is not authorized by monitor recovery.

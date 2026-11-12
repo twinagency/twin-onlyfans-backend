@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 from fans_api_adapter.event_scope import classify_raw, SUPPORTED, IRRELEVANT, MATERIAL
 from fans_api_adapter.queue_review import reviewed_queue_delivery
+from conversation_engine.conflicting_webhook import reviewed_conflicting_delivery
 import re
-from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec,CLASSES
+from incident_state import (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec,CLASSES,READINESS,READINESS_CAVEAT,
+    journal_class,evidence_reference_ok,named_sends_ok)
 from delivery_history import canon,sha,retry_index,retry_state
 FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
@@ -25,7 +27,42 @@ def configure_current():
 
 if os.environ.get('TWIN_SUPERVISOR_CONFIG'):
     configure_current()
+elif os.environ.get('TWIN_SUPERVISION_CONTEXT'):
+    context=json.loads(os.environ['TWIN_SUPERVISION_CONTEXT'])
+    if context:
+        if (set(context)!={'account','binding','epoch','providerAccount','fans','publicUrl'}
+                or type(context['epoch']) is not int or context['epoch']<1
+                or type(context['fans']) is not list or not 1<=len(context['fans'])<=100
+                or any(type(x) is not int or x<=0 for x in context['fans'])
+                or len(set(context['fans']))!=len(context['fans'])
+                or any(type(context[k]) is not str or not context[k] for k in ('account','binding','providerAccount','publicUrl'))):
+            raise RuntimeError('explicit account supervision context required')
+        import incident_state
+        incident_state.ACCOUNT=context['account'];incident_state.BINDING=context['binding'];incident_state.EPOCH=context['epoch']
+        FANS=frozenset(context['fans']);PROVIDER=context['providerAccount'];URL=context['publicUrl']
+        REQUIRED_PILOT_RECEIPT=None
 
+def _readiness(root,manifest):
+    """readiness_unavailable needs more than a clean interval: the journal, the sender, the scope and every
+    unresolved send are re-proved here from retained bytes, and the operator's attestation must match them."""
+    try:
+        journal=(root/'journal.txt').read_bytes()
+        sends=json.loads((root/'unresolved-sends.json').read_bytes())
+        attestation=json.loads((root/'operator-attestation.json').read_bytes())
+    except (OSError,ValueError):
+        raise RuntimeError('readiness evidence is missing') from None
+    if journal_class(journal)!=READINESS:
+        raise RuntimeError('journal does not show exactly the readiness stop')
+    if manifest.get('sender_absent') is not True or manifest.get('scope_status')!='stopped':
+        raise RuntimeError('sender must be absent and the scope stopped')
+    if (type(attestation) is not dict or set(attestation)!={'evidence_reference','named_sends','cause_caveat'}
+            or not evidence_reference_ok(attestation['evidence_reference']) or not named_sends_ok(attestation['named_sends'])
+            or attestation['cause_caveat']!=READINESS_CAVEAT):
+        raise RuntimeError('operator attestation is missing or weakened')
+    if not named_sends_ok(sends) or sends!=attestation['named_sends']:
+        raise RuntimeError('unresolved sends are not exactly the sends the operator named')
+    return {'cause_caveat':READINESS_CAVEAT,'evidence_reference':attestation['evidence_reference'],'unresolved_sends':sends,
+            'journal_stop':READINESS,'sender_absent':True,'scope_status':'stopped'}
 
 def validate(root):
     root=Path(root)
@@ -76,6 +113,7 @@ def validate(root):
         full_rows={canon(r) for r in rows}
         if any(canon(r) not in full_rows for r in recent['data']):
             raise RuntimeError('incident window has unmatched reported delivery')
+    readiness=_readiness(root,manifest) if class_based and manifest.get('classification')==READINESS else None
     receipts={r['key']:r for r in local['receipts']}
     findings=[];matched=[];superseded=[]
     ok_index=retry_index(rows,lambda r:r.get('succeeded') is True and type(r.get('status_code')) is int
@@ -97,6 +135,10 @@ def validate(root):
             findings.append({'event_key':key,'event':payload['event'],'disposition':'audited_queue_group_review',
                              'limitation':'operator reviewed provider queue and both fan histories; no send authority'})
             continue
+        if reviewed_conflicting_delivery(local,key,payload,PROVIDER,FANS):
+            findings.append({'event_key':key,'event':payload['event'],'disposition':'audited_conflicting_event_review',
+                             'limitation':'operator reviewed every retained variant as an outside-fan message; no send authority'})
+            continue
         if verdict.cls not in (SUPPORTED,IRRELEVANT,MATERIAL):raise RuntimeError('provider event is malformed or not classified')
         event,fan=verdict.event,verdict.fan
         if row.get('event')!=event:raise RuntimeError('provider event changed')
@@ -109,6 +151,11 @@ def validate(root):
             matched.append({'event_key':key,'raw_sha256':receipt['hash'],'projection':receipt['projection']})
             continue
         digests=[d for d in local['digests'] if d['key']==key]
+        if len({d['hash'] for d in digests})>1:
+            # Order matters: an eligible conflicting key is inspected and reviewed while stopped FIRST; only then can the interval validate.
+            raise RuntimeError('conflicting provider event key %s has no audited conflicting-event review covering every retained variant: '
+                'inspect and review it first (resolve_conflicting_webhook.py; money, ownership and trial-fan conflicts stay held), '
+                'then validate the monitor interval'%str(key)[:80])
         if len(digests)!=1 or digests[0]['hold'] is not False:
             raise RuntimeError('digest evidence is missing or conflicting')
         if verdict.cls==IRRELEVANT:
@@ -126,11 +173,13 @@ def validate(root):
         raise RuntimeError('current accounts require class-based incident evidence')
     elif REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
         raise RuntimeError('known prior pilot receipt missing from full monitor window' if current_case else 'known post-incident pilot receipt missing from provider interval')
-    return {'interval_valid_for_bounded_scope':True,'matched_receipts':matched,'superseded_failed_attempts':superseded,
+    return {**({'readiness':readiness} if readiness is not None else {}),
+            'interval_valid_for_bounded_scope':True,'matched_receipts':matched,'superseded_failed_attempts':superseded,
             'outside_scope_limitations':findings,'full_event_continuity_claimed':False,
             **({'reported_incident_window_count':manifest['incident_delivery_count'],
                 'anchor_context':'known prior receipt predates this incident','original_failure_subcause':'not retained'} if current_case else {})}
 
 if __name__=='__main__':
-    configure_current()
+    # The identity was already taken at import from TWIN_SUPERVISOR_CONFIG or from the resolver's TWIN_SUPERVISION_CONTEXT.
+    # The validator container receives only the context, so main must not demand the configuration file again.
     print(json.dumps(validate('/proof'),sort_keys=True))

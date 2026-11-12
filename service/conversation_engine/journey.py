@@ -228,7 +228,9 @@ def pilot_purchase_scope(s, runtime, fan_id, message):
     from .catalogue import normalize
     from db.models import CatalogItem
     pilot, config = current(s, runtime)
-    # A commercial scope has no pinned product until the catalogue contract exists: no purchase request matches.
+    if (pilot is not None and pilot.status == 'active' and 'product' not in config and fan_id in config['fans']
+            and message is not None and message.fan_id == fan_id):
+        return commercial_purchase_scope(s, runtime, fan_id, message)       # commercial.v1: the approved catalogue, not a pinned product
     if (pilot is None or pilot.status != 'active' or 'product' not in config or config['authorization_mode'] != 'autonomous'
             or fan_id not in config['fans'] or message is None or message.fan_id != fan_id):
         return ()
@@ -251,6 +253,43 @@ def pilot_purchase_scope(s, runtime, fan_id, message):
     if not re.fullmatch(prefix + r' (?:the |this |that |your |a )?' + noun + r'(?: please)?', value):
         return ()
     return (str(config['product']['id']),)
+
+
+_COMMERCIAL_REQUEST = re.compile(
+    r"(?:i (?:want|would like|am ready) to (?:buy|purchase|get)|can i (?:buy|purchase|get|see)|i(?:'ll| will) (?:take|buy|get)"
+    r"|i want|i(?:'d| would) like|(?:please )?(?:(?:can|could|would) you )?(?:send|show)(?: me)?)"
+    r" (?:the |this |that |your |a |an )?(?P<rest>[a-z0-9 ]{2,80})")
+
+
+def commercial_purchase_scope(s, runtime, fan_id, message):
+    """Item ids of the ONE approved product a clear, current, specific request names; () otherwise.
+
+    Input interpretation only (the same narrow stance as the legacy pilot): a whole-message request such as "I want the pool video"
+    or "send me the weekend bundle" that the fan-scoped shortlist resolves to exactly one eligible approved product. A quotation,
+    a hypothetical, a bare kind ("a photo") or a request that fits several products equally is not an explicit scope, so it can
+    neither reopen a paused sale nor settle which product to charge. The caller still checks the live request, controls,
+    history coverage, ownership and the delivery authority; nothing here grants a card.
+    """
+    from .catalogue import search_scoped
+    value = _norm(message.body).rstrip(' .!?')
+    while value and unicodedata.category(value[-1]) in {'So', 'Sk', 'Mn', 'Cf'}:
+        value = value[:-1].rstrip(' .!?')
+    value = re.sub(r'^(?:ok(?:ay)?|actually|so)[, ]+', '', value)
+    value = re.sub(r'^actually[, ]+', '', value)
+    found = _COMMERCIAL_REQUEST.fullmatch(re.sub(r' please$', '', value))
+    if found is None:
+        return ()
+    try:
+        view = search_scoped(s, runtime, fan_id, found.group('rest'))
+    except Refused:
+        return ()
+    from .catalogue_select import interpret
+    from .catalogue import normalize as _normalize, _STOP
+    named = interpret([t for t in dict.fromkeys(_normalize(found.group('rest')).split()) if len(t) > 1 and t not in _STOP])[0]
+    items = view.get('items', []) if view.get('state') == 'matches' else []
+    if not named or len(items) != 1:
+        return ()
+    return (str(items[0]['itemId']),)
 
 
 def live_current_request(s, runtime, fan_id, message):

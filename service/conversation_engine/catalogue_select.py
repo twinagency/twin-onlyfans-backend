@@ -40,6 +40,17 @@ def interpret(tokens):
     return rest, (sorted(kinds) if kinds else None)
 
 
+def names_a_product(view, body):
+    """True when the request itself names a product (words beyond a bare kind such as 'photo'), as opposed to browsing a kind."""
+    from .catalogue import normalize
+    from .catalogue import _STOP
+    query = body
+    if view.get('contextUsed'):
+        return True                                    # an anaphoric reference ("that one") is resolved to an earlier named request
+    tokens = [t for t in dict.fromkeys(normalize(query).split()) if len(t) > 1 and t not in _STOP]
+    return bool(interpret(tokens)[0])
+
+
 def _tsquery(tokens):
     clean = [re.sub(r'[^\w]', '', t) for t in tokens]
     return ' | '.join(f"'{t}'" for t in clean if t)

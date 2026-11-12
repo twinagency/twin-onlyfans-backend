@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from db.models import Message
+from db.models import ContentOffer, Message
 from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_engine_models import OfEngineAccessEvidence, OfEngineDecision, OfEngineOfferGrant, OfEngineOwner, OfEngineRequest
 from onlyfans_runtime.media_delivery import assert_unowned, catalog_terms
@@ -365,6 +365,44 @@ def terms_successor(s, runtime, owner, prior, policy, *, variant=None):
     return successor
 
 
+def active_engine_offer(s, runtime, owner, fan_id, *, exclude_intent_id=None):
+    """The ONE live engine offer of this chat, or None (rule: one active engine offer per chat).
+
+    A card is live while its send is in flight (queued / dispatching / unknown), or it was accepted, its offer record is still
+    open/unlocked, the provider has not confirmed access to it, it was not deleted, and no later decline/reopening of the sale
+    closed it. Closed cards stay retained evidence (frozen terms, exact price, message id, unlock reference); they simply no
+    longer count against a new offer. Returns {'itemId', 'intentId', 'sendState'} or None.
+    """
+    from .offers import _cards
+    boundary = None
+    if owner is not None and owner.sales_mode in ('paused', 'reopened_scoped') and owner.sales_source_message_id is not None:
+        source = s.get(Message, (runtime.account_id, fan_id, owner.sales_source_message_id))
+        boundary = source.created_at if source is not None else None
+    rows = s.execute(select(OfTextIntent, OfEngineDecision).join(OfEngineDecision,
+        (OfEngineDecision.account_id == OfTextIntent.account_id) & (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(
+        OfTextIntent.account_id == runtime.account_id, OfTextIntent.fan_id == fan_id, OfTextIntent.binding_id == runtime.binding_id,
+        OfEngineDecision.action == 'offer', OfTextIntent.status.in_(('queued', 'dispatching', 'accepted', 'unknown')))
+        .order_by(OfTextIntent.created_at.desc()).limit(20)).all()
+    for intent, decision in rows:
+        if intent.intent_id == exclude_intent_id:
+            continue
+        if intent.status != 'accepted':
+            return {'itemId': decision.catalog_item_id, 'intentId': intent.intent_id, 'sendState': intent.status}
+        if boundary is not None and intent.created_at <= boundary:
+            continue                                   # the sale was closed (declined / reopened) after this card
+        offer = s.get(ContentOffer, intent.offer_id) if intent.offer_id is not None else None
+        message = s.get(Message, (runtime.account_id, fan_id, intent.provider_message_id)) if intent.provider_message_id else None
+        if offer is None or offer.status not in ('open', 'unlocked') or message is None or message.is_unsent:
+            continue
+        access = s.scalar(select(OfEngineAccessEvidence.status).where(
+            OfEngineAccessEvidence.account_id == runtime.account_id, OfEngineAccessEvidence.intent_id == intent.intent_id,
+            OfEngineAccessEvidence.applied.is_(True)).order_by(OfEngineAccessEvidence.occurred_at.desc()).limit(1))
+        if access == 'confirmed':
+            continue                                   # he opened it: that sale is resolved
+        return {'itemId': decision.catalog_item_id, 'intentId': intent.intent_id, 'sendState': 'accepted'}
+    return None
+
+
 def prepare_commercial_offer(store, tenant, account, fan_id, message_id, *, coverage_ref, valid_until):
     """Standing-permission preparation for a commercial account: the product comes from the fan-scoped shortlist, the amount from
     application rules, the grant from the same authority as every other card. No per-fan grant is injected.
@@ -394,9 +432,17 @@ def prepare_commercial_offer(store, tenant, account, fan_id, message_id, *, cove
                 or message is None or message.direction != 'in' or message.is_unsent):
             return {'state': 'unavailable', 'reason': 'offer_not_authorized'}
         view = search_context(s, runtime, fan_id, message)
-        item_id = next((int(i['itemId']) for i in view.get('items', []) if _sales_permits(owner, int(i['itemId']))), None)
+        permitted = [int(i['itemId']) for i in view.get('items', []) if _sales_permits(owner, int(i['itemId']))]
+        item_id = permitted[0] if permitted else None
         if view['state'] != 'matches' or item_id is None:
             return {'state': 'none', 'reason': view['state']}
+        from .catalogue_select import names_a_product
+        if len(permitted) > 1 and names_a_product(view, message.body):
+            # He named something that fits several approved products equally: no card is charged on a guess.
+            return {'state': 'ambiguous', 'itemIds': [str(i) for i in permitted]}
+        live_offer = active_engine_offer(s, runtime, owner, fan_id)
+        if live_offer is not None and live_offer['itemId'] != item_id:
+            return {'state': 'active_offer', 'itemId': str(live_offer['itemId'])}
         cards = match(s, runtime, fan_id, message.body, include_cards=True).get('cards', [])
         if any(card['itemId'] == str(item_id) and card['sendState'] in ('queued', 'dispatching', 'accepted', 'unknown') for card in cards):
             return {'state': 'existing_card', 'itemId': str(item_id)}
@@ -523,6 +569,10 @@ def verified_terms(s, runtime, owner, grant, *, intent_id=None, lock=True):
     from onlyfans_runtime.quote import request_exists
     if request_exists(s, runtime.account_id, owner.fan_id, terms):
         raise Refused('an existing offer needs review')
+    if terms.get('commercial') is not None:
+        live_offer = active_engine_offer(s, runtime, owner, owner.fan_id, exclude_intent_id=intent_id)
+        if live_offer is not None and live_offer['itemId'] != grant.item_id:
+            raise Refused('another offer is active in this chat')
     return terms
 
 

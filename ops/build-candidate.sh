@@ -308,6 +308,11 @@ done
 if [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
   FAILED=1
   printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 exact-artifact browser receipt missing" - | tee -a "$RESULTS"
+elif ! "${IMG_RUN[@]}" -v "$BROWSER_QUALIFICATION_RECEIPT:/browser-receipt.json:ro" --entrypoint python "$IMAGE_ID" /app/ops/verify-browser-receipt.py /browser-receipt.json "$IMAGE_ID" > "$BUILD_RECORD/browser-receipt-check.log" 2>&1; then
+  FAILED=1
+  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 receipt invalid or image mismatch" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
+else
+  printf '%s\t%s\t%s\t%s\n' browser 0 "Q14 exact-artifact receipt verified" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
 fi
 printf 'qualification_exit=%s\n' "$FAILED" >> "$BUILD_RECORD/manifest.txt"
 echo "done: $TAG = $IMAGE_ID ; records in $BUILD_RECORD ; exit=$FAILED"

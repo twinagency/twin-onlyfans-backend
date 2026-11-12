@@ -13,7 +13,12 @@
 #   Without a suite (or --tests) the invocation is REFUSED before anything is built; only an explicit --build-only builds
 #   without qualifying. Qualification always reports every required group, and exits non-zero while any is missing.
 #   build-candidate.sh <commit> [--tag IMAGE:TAG] [--label NAME] [--suite NAME]... [--tests "tests/a.py tests/b.py"]
-#                      [--build-only] [--no-build] [--dry-run] [--keep-pg]
+#                      [--build-only] [--no-build] [--dry-run] [--keep-pg] [--shard] [--combine RECORD_DIR]...
+#   Sharding (speed only, same evidence): `--no-build --shard --suite X ...` runs just the named groups on the EXACT image (it re-verifies
+#   the image against the commit exactly as a full run does; DOCKER_HOST may point at another host that holds the same image id) and can
+#   never qualify: it skips the "every required group" and browser checks and exits with its own groups' result. `--combine DIR` (repeat
+#   once per shard record) then applies the unchanged completeness rules to the shard records: every required group present with exit 0
+#   and no skip, every shard on the SAME image id, plus the browser receipt check. Only that combining run can exit 0 for a sharded release.
 #   suites: smoke | smoke-probes | r0 | step4 | step5 | migrations | operator | ops | planc-all | matrix | completion | list
 #   Example (the trial recorded in RELEASE-PACKET.md):
 #     build-candidate.sh 48e007a --tag twin-commercial-candidate:48e007a-trial --label trial --suite smoke
@@ -59,14 +64,14 @@ suite_files() {
     step4)        echo "tests/test_commercial_normal_worker_pg.py tests/test_commercial_sale_rules_pg.py tests/test_commercial_unlock_pg.py tests/test_commercial_composed_pg.py" ;;
     step5)        echo "tests/test_coexistence_scope_contract.py tests/test_coexistence_staff_pg.py tests/test_voluntary_tips_pg.py tests/test_tip_evidence_kind_migration_pg.py" ;;
     migrations)   echo "tests/test_commercial_retry_due_lineage_pg.py tests/test_engine_rc_join_pg.py tests/test_history_coverage_schema_pg.py tests/test_plan_c_model_billing_pg.py tests/test_plan_c_grant_migration_pg.py tests/test_plan_c_scope_pg.py tests/test_commercial_terms_migration_pg.py tests/test_commercial_scope_guard_pg.py tests/test_preparation_retry_state_pg.py tests/test_onlyfans_migration_pg.py tests/test_contextual_item_scope_migration.py tests/test_onlyfans_launch_schema_upgrade_pg.py tests/test_tip_evidence_kind_migration_pg.py tests/test_commercial_q15_populated_upgrade_pg.py" ;;
-    operator)     echo "tests/test_engine_operator_pg.py tests/test_plan_c_q2_n4_operator_http_pg.py tests/test_plan_c_u3_readiness_pg.py" ;;
+    operator)     echo "tests/test_engine_operator_pg.py tests/test_plan_c_q2_n4_operator_http_pg.py tests/test_plan_c_u3_readiness_pg.py tests/test_engine_approval_api_pg.py tests/test_plan_c_guard_compat.py tests/test_plan_c_conflict_review_commercial_pg.py tests/test_plan_c_monitor_identity_agreement_pg.py tests/test_plan_c_monitor_readiness_pg.py tests/test_plan_c_monitor_scoped_identity_pg.py" ;;
     matrix)       echo "tests/test_commercial_matrix_pg.py tests/test_commercial_ten_creators_pg.py tests/test_commercial_import_to_sale_pg.py" ;;   # Step 6; files exist only once committed
-    completion)   echo "tests/test_commercial_qualification_gate.py tests/test_commercial_completion_pg.py tests/test_commercial_stopped_activation_pg.py tests/conversation_engine/test_claims_semantics.py tests/test_openrouter_decoding.py tests/test_plan_c_unknown_send_evidence_pg.py" ;;
-    preparation)  echo "tests/test_commercial_preparation_pg.py tests/test_preparation_retry_state_pg.py tests/test_commercial_classification_refresh_pg.py tests/test_history_import_pg.py" ;;
+    completion)   echo "tests/test_commercial_qualification_gate.py tests/test_commercial_completion_pg.py tests/test_commercial_stopped_activation_pg.py tests/conversation_engine/test_claims_semantics.py tests/conversation_engine/test_claims_root_contract.py tests/conversation_engine/test_claims_structural_authority.py tests/conversation_engine/test_claims_scoped_assertions.py tests/conversation_engine/test_model_units.py tests/test_engine_model_probes_pg.py tests/test_openrouter_decoding.py tests/test_plan_c_unknown_send_evidence_pg.py" ;;
+    preparation)  echo "tests/test_commercial_preparation_pg.py tests/test_preparation_retry_state_pg.py tests/test_commercial_classification_refresh_pg.py tests/test_history_import_pg.py tests/test_history_roots_pg.py tests/test_history_ownership_pg.py" ;;
     normal)       echo "tests/test_commercial_normal_control_journey_pg.py tests/test_commercial_terms_http_pg.py tests/test_commercial_shared_provider_pg.py tests/test_commercial_parallel_workers_pg.py tests/test_plan_c_inflight_readiness.py tests/test_commercial_readiness_budget_pg.py" ;;
     legacy)       echo "tests/test_commercial_progress.py tests/test_commercial_full_path.py tests/test_history_capacity_turns.py" ;;   # + legacy-isolated, see LEGACY_ISOLATED
     recovery)     echo "tests/test_commercial_ops_recovery_pg.py tests/test_onlyfans_release_package_pg.py tests/test_onlyfans_recovery_pg.py" ;;
-    delivery)     echo "tests/test_onlyfans_text_delivery_pg.py tests/test_concurrent_delivery_pg.py tests/test_plan_c_compressed_retry_pg.py tests/test_plan_c_auth_recovery_pg.py tests/test_plan_c_conflicting_webhook_pg.py" ;;
+    delivery)     echo "tests/test_onlyfans_text_delivery_pg.py tests/test_concurrent_delivery_pg.py tests/test_plan_c_compressed_retry_pg.py tests/test_plan_c_auth_recovery_pg.py tests/test_plan_c_conflicting_webhook_pg.py tests/test_plan_c_rate_limit_unknown_pg.py" ;;
     ops)          echo "OPS" ;;       # handled specially: pytest in /app/ops/plan-c-supervision
     planc-all)    echo "PLANC_ALL" ;; # every tests/test_plan_c_*.py present in the image
     *) return 1 ;;
@@ -80,7 +85,7 @@ LEGACY_ISOLATED="tests/test_r2_complete_answers.py tests/test_plan_c_sim_pg.py"
 
 # ---- argument parsing -------------------------------------------------------------------------------------------------
 REQUIRED_SUITES=(completion matrix step4 step5 r0 operator migrations ops preparation normal legacy recovery delivery)
-COMMIT_ARG=""; TAG=""; LABEL=""; SUITES=(); CUSTOM_TESTS=""; BUILD_ONLY=0; NO_BUILD=0; DRY=0; KEEP_PG=0
+COMMIT_ARG=""; TAG=""; LABEL=""; SUITES=(); CUSTOM_TESTS=""; BUILD_ONLY=0; NO_BUILD=0; DRY=0; KEEP_PG=0; SHARD=0; COMBINE_DIRS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --tag) TAG=$2; shift 2 ;;
@@ -91,7 +96,9 @@ while [ $# -gt 0 ]; do
     --no-build) NO_BUILD=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --keep-pg) KEEP_PG=1; shift ;;
-    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+    --shard) SHARD=1; shift ;;
+    --combine) COMBINE_DIRS+=("$2"); shift 2 ;;
+    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
     list) echo "smoke smoke-probes r0 step4 step5 migrations operator matrix completion ops planc-all"; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) [ -z "$COMMIT_ARG" ] || die "one commit only"; COMMIT_ARG=$1; shift ;;
@@ -99,7 +106,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$COMMIT_ARG" ] || die "usage: build-candidate.sh <commit> [options]  (see header)"
 for s in "${SUITES[@]:-}"; do [ -z "$s" ] || suite_files "$s" >/dev/null || die "unknown suite '$s'"; done
-if [ "$BUILD_ONLY" = 1 ]; then
+if [ "${#COMBINE_DIRS[@]}" -gt 0 ]; then
+  [ "$SHARD" = 0 ] && [ "$BUILD_ONLY" = 0 ] && [ "${#SUITES[@]}" = 0 ] && [ -z "$CUSTOM_TESTS" ] && [ "$NO_BUILD" = 1 ] || die "--combine runs alone, with --no-build (no suites, no --shard)"
+elif [ "$BUILD_ONLY" = 1 ]; then
   [ "${#SUITES[@]}" = 0 ] && [ -z "$CUSTOM_TESTS" ] || die "--build-only cannot be combined with qualification suites"
 else
   [ "${#SUITES[@]}" -gt 0 ] || [ -n "$CUSTOM_TESTS" ] || die "qualification incomplete: no suites requested; use --suite all or explicit --build-only"
@@ -245,6 +254,32 @@ if docker image inspect "$DEP_REFERENCE_IMAGE" >/dev/null 2>&1; then
 fi
 
 [ "$BUILD_ONLY" = 0 ] || { echo "built $TAG = $IMAGE_ID"; exit 0; }
+echo "docker_host=${DOCKER_HOST:-local}" >> "$BUILD_RECORD/manifest.txt"
+
+if [ "${#COMBINE_DIRS[@]}" -gt 0 ]; then
+  FAILED=0
+  RESULTS=$BUILD_RECORD/results.tsv; printf 'suite\texit\tsummary\tlog\thost\n' > "$RESULTS"
+  for d in "${COMBINE_DIRS[@]}"; do
+    [ -f "$d/manifest.txt" ] && [ -f "$d/results.tsv" ] || { echo "combine: $d has no manifest/results" >&2; FAILED=1; continue; }
+    [ "$(sed -n 's/^image_id=//p' "$d/manifest.txt" | tail -1)" = "$IMAGE_ID" ] || { echo "combine: $d ran on a different image" >&2; FAILED=1; continue; }
+    [ "$(sed -n 's/^source_commit=//p;s/^requested_commit=//p' "$d/manifest.txt" | tail -1)" = "$FULL" ] || { echo "combine: $d is for another commit" >&2; FAILED=1; continue; }
+    grep -q '^qualification_exit=shard:' "$d/manifest.txt" || { echo "combine: $d is not a finished shard record" >&2; FAILED=1; continue; }
+    host=$(sed -n 's/^docker_host=//p' "$d/manifest.txt" | tail -1)
+    tail -n +2 "$d/results.tsv" | awk -F'\t' -v h="$host" -v d="$d" 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,h}' >> "$RESULTS"
+  done
+  for required in "${REQUIRED_SUITES[@]}" legacy-isolated; do
+    n=$(awk -F'\t' -v r="$required" 'NR>1 && $1==r && $2=="0"{c++} END{print c+0}' "$RESULTS")
+    [ "$n" = 1 ] || { FAILED=1; printf '%s\t%s\t%s\t%s\t%s\n' "$required" INCOMPLETE "required group missing, failed or run $n times across shards" - - | tee -a "$RESULTS"; }
+  done
+  if awk -F'\t' 'NR>1 && $2!="0"{bad=1} END{exit !bad}' "$RESULTS"; then FAILED=1; fi
+  for d in "${COMBINE_DIRS[@]}"; do for f in "$d"/suite-*.log; do
+    grep -Eq '[0-9]+ skipped|^INCOMPLETE' "$f" && { echo "combine: $f has skipped/incomplete checks" >&2; FAILED=1; }
+  done; done
+  browser_check
+  printf 'combined_shards=%s\nqualification_exit=%s\n' "${COMBINE_DIRS[*]}" "$FAILED" >> "$BUILD_RECORD/manifest.txt"
+  echo "combined: $TAG = $IMAGE_ID ; records in $BUILD_RECORD ; exit=$FAILED"
+  exit "$FAILED"
+fi
 
 # ---- suites ------------------------------------------------------------------------------------------------------------
 
@@ -310,6 +345,11 @@ if [ -n "$CUSTOM_TESTS" ]; then
   # shellcheck disable=SC2206
   run_group custom $CUSTOM_TESTS
 fi
+if [ "$SHARD" = 1 ]; then
+  printf 'qualification_exit=shard:%s (this record cannot qualify on its own; combine with --combine)\n' "$FAILED" >> "$BUILD_RECORD/manifest.txt"
+  echo "shard done: $TAG = $IMAGE_ID ; records in $BUILD_RECORD ; exit=$FAILED"
+  exit "$FAILED"
+fi
 for required in "${REQUIRED_SUITES[@]}"; do
   found=0
   for chosen in "${SUITES[@]:-}"; do [ "$chosen" != "$required" ] || found=1; done
@@ -321,27 +361,30 @@ done
 # Q14 must run against a frozen dashboard, BFF/backend and PostgreSQL. The expected dashboard artifact is an explicit
 # input (DASHBOARD_IMAGE digest + DASHBOARD_COMMIT) that THIS host verifies from its own image store; the receipt is
 # only accepted when it names exactly that backend/dashboard pair. A receipt can never choose its own dashboard.
-browser_problem=""
-if [ -z "${DASHBOARD_IMAGE:-}" ] || [ -z "${DASHBOARD_COMMIT:-}" ]; then
-  browser_problem="Q14 expected dashboard image/commit not supplied"
-elif ! [[ "$DASHBOARD_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$DASHBOARD_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-  browser_problem="Q14 expected dashboard image/commit must be an immutable digest and a full commit"
-elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{.Id}}' 2>/dev/null || true)" != "$DASHBOARD_IMAGE" ]; then
-  browser_problem="Q14 expected dashboard image is not in the local image store"
-elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" != "$DASHBOARD_COMMIT" ]; then
-  browser_problem="Q14 dashboard image revision label differs from DASHBOARD_COMMIT"
-elif [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
-  browser_problem="Q14 exact-artifact browser receipt missing"
-fi
-if [ -n "$browser_problem" ]; then
-  FAILED=1
-  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "$browser_problem" - | tee -a "$RESULTS"
-elif ! "${IMG_RUN[@]}" -v "$BROWSER_QUALIFICATION_RECEIPT:/browser-receipt.json:ro" --entrypoint python "$IMAGE_ID" /app/ops/verify-browser-receipt.py /browser-receipt.json "$IMAGE_ID" "$DASHBOARD_IMAGE" "$DASHBOARD_COMMIT" > "$BUILD_RECORD/browser-receipt-check.log" 2>&1; then
-  FAILED=1
-  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 receipt invalid or backend/dashboard artifact mismatch" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
-else
-  printf '%s\t%s\t%s\t%s\n' browser 0 "Q14 exact-artifact receipt verified" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
-fi
+browser_check() {
+  browser_problem=""
+  if [ -z "${DASHBOARD_IMAGE:-}" ] || [ -z "${DASHBOARD_COMMIT:-}" ]; then
+    browser_problem="Q14 expected dashboard image/commit not supplied"
+  elif ! [[ "$DASHBOARD_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$DASHBOARD_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    browser_problem="Q14 expected dashboard image/commit must be an immutable digest and a full commit"
+  elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{.Id}}' 2>/dev/null || true)" != "$DASHBOARD_IMAGE" ]; then
+    browser_problem="Q14 expected dashboard image is not in the local image store"
+  elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" != "$DASHBOARD_COMMIT" ]; then
+    browser_problem="Q14 dashboard image revision label differs from DASHBOARD_COMMIT"
+  elif [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
+    browser_problem="Q14 exact-artifact browser receipt missing"
+  fi
+  if [ -n "$browser_problem" ]; then
+    FAILED=1
+    printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "$browser_problem" - | tee -a "$RESULTS"
+  elif ! "${IMG_RUN[@]}" -v "$BROWSER_QUALIFICATION_RECEIPT:/browser-receipt.json:ro" --entrypoint python "$IMAGE_ID" /app/ops/verify-browser-receipt.py /browser-receipt.json "$IMAGE_ID" "$DASHBOARD_IMAGE" "$DASHBOARD_COMMIT" > "$BUILD_RECORD/browser-receipt-check.log" 2>&1; then
+    FAILED=1
+    printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 receipt invalid or backend/dashboard artifact mismatch" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
+  else
+    printf '%s\t%s\t%s\t%s\n' browser 0 "Q14 exact-artifact receipt verified" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
+  fi
+}
+browser_check
 printf 'qualification_exit=%s\n' "$FAILED" >> "$BUILD_RECORD/manifest.txt"
 echo "done: $TAG = $IMAGE_ID ; records in $BUILD_RECORD ; exit=$FAILED"
 exit "$FAILED"

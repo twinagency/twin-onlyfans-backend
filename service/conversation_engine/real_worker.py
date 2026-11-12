@@ -160,9 +160,9 @@ class RealConversationWorker:
         verdict = self.journey.before_plan(tenant, account, fan_id, message_id)
         if verdict['action'] == 'handled':
             return {'outcome': 'handed_to_human', 'reason': verdict['reason']}
-        from .commerce import prepare_pilot_offer
-        prepared = prepare_pilot_offer(store, tenant, account, fan_id, message_id, self.engine)
-        if prepared is not None and prepared['state'] == 'held':
+        from .commerce import prepare_scoped_offer
+        prepared = prepare_scoped_offer(store, tenant, account, fan_id, message_id, self.engine)
+        if prepared is not None and prepared['state'] == 'held' and not prepared.get('commercial'):
             return {'outcome': 'held', **prepared}
         try:
             decision = self.engine.plan(tenant, account, fan_id, message_id)

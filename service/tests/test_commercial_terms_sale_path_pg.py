@@ -23,13 +23,25 @@ from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT, unthrottle
 COVERAGE = 'synthetic:standing-catalogue'
 
 
-def run_turn(store, authority, engine, model, mid, text_, provider_message):
+FAN2 = FAN + 1
+
+
+def second_chat(database):
+    """A second chat of the same account. One engine offer is live per chat, so independent product successes use different chats."""
+    from test_commercial_scope_lifecycle_pg import add_fan
+    add_fan(database[1], ACCOUNT, FAN2)
+
+
+def run_turn(store, authority, engine, model, mid, text_, provider_message, fan=FAN):
     """prepare (application) -> plan (writer proposes the prepared grant) -> queue -> dispatch."""
-    incoming(store, mid, text_)
-    prepared = prepare_commercial_offer(store, TENANT, ACCOUNT, FAN, mid, coverage_ref=COVERAGE, valid_until=valid_for())
+    from test_engine_simulated_journey_pg import event
+    engine.select_simulated(TENANT, ACCOUNT, fan)
+    assert store.record(TENANT, ACCOUNT, event(mid=mid, fan=fan, body=text_)) in {'accepted', 'duplicate'}
+    store.drain(TENANT, ACCOUNT)
+    prepared = prepare_commercial_offer(store, TENANT, ACCOUNT, fan, mid, coverage_ref=COVERAGE, valid_until=valid_for())
     if prepared and prepared.get('state') == 'prepared':
         model.replies[text_] = SyntheticProposal('untrusted', action='offer', offer_grant_id=prepared['grantId'])
-        decision = engine.plan(TENANT, ACCOUNT, FAN, mid)
+        decision = engine.plan(TENANT, ACCOUNT, fan, mid)
         intent = engine.queue(TENANT, ACCOUNT, decision)
         unthrottle(store.engine)
         outcome = authority.dispatch(TENANT, ACCOUNT, intent, FansApiSyntheticTransport(store, TENANT, ACCOUNT,
@@ -40,6 +52,7 @@ def run_turn(store, authority, engine, model, mid, text_, provider_message):
 
 def test_the_normal_path_prepares_its_own_grants_and_sends_exactly_the_approved_amounts(database):
     store, authority, engine, model, red, blue = engine_setup(database)
+    second_chat(database)
     add_vault(database[1], {31: 'image'})
     alpha = add_item(database[1], label='Alpha one', media=[31], price=1200, description='Alpha one, a distinctive approved photograph.')
     approve(store, blue, standard=1200)
@@ -51,8 +64,11 @@ def test_the_normal_path_prepares_its_own_grants_and_sends_exactly_the_approved_
     assert prepared['state'] == 'prepared' and prepared['itemId'] == str(blue) and prepared['variant'] == 'standard'
     assert outcome1 == 'accepted'
 
-    # a different product, and the fan explicitly asks for a cheaper option: the application picks the approved discount amount
-    prepared2, intent2, outcome2 = run_turn(store, authority, engine, model, 2, 'what about the alpha photo, can you do it cheaper?', 9902)
+    # the first chat now has a live card: a second product there is NOT prepared (one active engine offer per chat) ...
+    prepared_x, intent_x, outcome_x = run_turn(store, authority, engine, model, 4, 'what about the alpha photo?', 9904)
+    assert prepared_x == {'state': 'active_offer', 'itemId': str(blue)} and intent_x is None
+    # ... but in a different chat the fan explicitly asks for a cheaper option: the application picks the approved discount amount
+    prepared2, intent2, outcome2 = run_turn(store, authority, engine, model, 2, 'what about the alpha photo, can you do it cheaper?', 9902, fan=FAN2)
     assert prepared2['itemId'] == str(alpha) and prepared2['variant'] == 'discount' and prepared2['priceCents'] == 900
     assert outcome2 == 'accepted'
 
@@ -67,7 +83,7 @@ def test_the_normal_path_prepares_its_own_grants_and_sends_exactly_the_approved_
         assert (second.price_cents, json.loads(second.catalog_snapshot_json)['commercial']['variant']) == (900, 'discount')
         assert json.loads(second.catalog_snapshot_json)['commercial']['standardCents'] == 1200
         assert sorted(o.price_cents for o in s.scalars(select(ContentOffer))) == [900, 1200]      # unlock amounts the receipt will match
-        assert s.scalar(select(func.count()).select_from(OfEngineOfferGrant)) == 2
+        assert s.scalar(select(func.count()).select_from(OfEngineOfferGrant)) == 2          # the refused second offer created no grant
         grants = {g.item_id: json.loads(g.authorization_json)['terms'] for g in s.scalars(select(OfEngineOfferGrant))}
         assert grants[alpha]['variant'] == 'discount' and grants[alpha]['priceCents'] == 900 and grants[blue]['variant'] == 'standard'
     store.close()

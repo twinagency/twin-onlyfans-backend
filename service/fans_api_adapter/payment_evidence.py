@@ -264,6 +264,12 @@ def settle_unlock(store, account, unlock_id, now):
             u = s.get(OfFansEvidence, (account, unlock_id))
             if u is None or u.status != 'pending' or u.intent_id is None or u.reason != 'awaiting_commerce':
                 return u.status if u is not None else 'missing'
+            sent = s.get(OfTextIntent, (account, u.intent_id))
+            if sent is None or sent.projected_at is None:
+                # The card's receipt is accepted but its transcript/offer projection is not written yet (a race or a crash that
+                # recovery will repair). The unlock is real evidence: it stays pending and is applied after the projection,
+                # never held for review because it arrived first.
+                return 'deferred'
         result = _engine_access(store, account, unlock_id, now)
         with Session(store.engine) as s, s.begin():
             u = s.get(OfFansEvidence, (account, unlock_id), with_for_update=True)

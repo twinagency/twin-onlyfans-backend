@@ -139,7 +139,8 @@ class ModelRuntime:
         scope_ids = {str(i['itemId']) for i in (snap.get('catalogue_search') or {}).get('items', [])}
         scope_ids |= {str(g['itemId']) for g in snap.get('offer_grants', [])}
         scope_ids |= {str(x) for x in snap.get('sales_scope', [])}
-        scope_ids = {i for i in scope_ids if profile.may_offer(i)}  # only the creator-approved product(s)
+        from .writer_context import may_offer_item
+        scope_ids = {i for i in scope_ids if may_offer_item(profile, i, snap)}  # only the creator-approved product(s)
         offer = offer_for(snap, profile, snap['current_message']['body'])
         return JudgeContext(snapshot=snap, profile=profile,
                             allowed_grant_ids=frozenset({offer['grantId']} if offer else ()),

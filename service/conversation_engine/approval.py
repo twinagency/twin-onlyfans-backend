@@ -188,13 +188,30 @@ def _build(s, runtime, parts, request, owner, state):
     return _hash(canon), shown, None
 
 
+def offer_scope_current(s, runtime, pilot_config):
+    """Is the scope's sale authority still current for a card? Legacy: the one pinned product. Commercial: the agency's durable
+    catalogue approval (this binding, unexpired). Each card's own frozen terms are re-verified separately by `_build`."""
+    from .pilot_scope import _product_current
+    if 'product' in pilot_config:
+        return _product_current(s, runtime.account_id, pilot_config['product'])
+    from .commerce import commercial_coverage
+    return commercial_coverage(s, runtime, pilot_config)[0] is not None
+
+
 def offer_pin_reason(pilot_config, canon_parts):
-    """Why a draft's offers are outside the scope's pinned product, or None. A commercial scope pins no product yet."""
+    """Why a draft's offers are outside the scope's authority, or None.
+
+    Legacy: outside the one pinned product. Commercial: a card must carry frozen approved terms (the `commercial` block) for the
+    catalogue item it names; a card without them (a legacy-shaped quote) has no authority in a commercial scope."""
     offers = [part for part in canon_parts if part['action'] == 'offer']
     if not offers:
         return None
     if 'product' not in pilot_config:
-        return 'commercial_product_contract_unavailable'
+        for part in offers:
+            terms = part['terms']
+            if (not isinstance(terms.get('commercial'), dict) or terms.get('item', {}).get('id') != part['catalog_item_id']):
+                return 'commercial_product_contract_unavailable'
+        return None
     expected = pilot_config['product']
     for part in offers:
         terms = part['terms']
@@ -225,7 +242,7 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
         if (fan_id not in pilot_config['fans'] or pilot.status == 'stopped'
                 or phase == 'send' and pilot.status != 'active'
                 or not policy_matches(policy, pilot_config, enabled=pilot.status == 'active')
-                or decision.action == 'offer' and ('product' not in pilot_config or not _product_current(s, account, pilot_config['product']))):
+                or decision.action == 'offer' and not offer_scope_current(s, runtime, pilot_config)):
             return 'pilot_scope_unavailable', None, None, None
     from fans_api_adapter.real_transport import real_transport_enabled
     if phase == 'send':   # a draft may be prepared while sending is stopped; nothing can go out until these hold
@@ -567,7 +584,9 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
             profile = active_profile(account, session=s)
             if type(profile) is not CreatorProfile or profile.missing_inputs():
                 raise Refused('creator profile is unavailable for edit validation')
-            if head.action == 'offer' and not profile.may_offer(head.catalog_item_id):
+            from .commercial_scope import terms_mode_view
+            from .writer_context import may_offer_item
+            if head.action == 'offer' and not may_offer_item(profile, head.catalog_item_id, terms_mode_view(s, runtime)):
                 raise Refused('creator has not approved this offer')
             from .engine import _offer_grants, _price_information
             from .offers import match as match_offers

@@ -80,3 +80,7 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F0 b537371d (299 LOC): fast GREEN 28 s wall (worker-m), live GREEN ~1 s. **Incident (m, worker-reported):** while picking endpoints the F0 worker issued ONE manual GET to dashboard `/api/health`, which reads the `clones` table from the Supabase project in twin-dashboard .env (may be prod) and calls Telegram getMe per clone. Read-only, single call, not in harness. Breaks "no prod Supabase" intent → reported to owner; future worker briefs list that route as forbidden.
 - F0 r1 Flash FIX-THEN-MERGE (5: DB ?host= bypass, token in traceback, false GREEN w/o bearer/DB, test not promoted, no-timeout budget). Opus pending.
 - F5 r1 Opus BLOCK / Flash FIX-THEN-MERGE: stop + recapture → unrecoverable (F5-01). Triage /tmp/rwl-f5/FINDINGS.md: A F5-01/03/04, D F5-02 → F5b. Release-test reds (3) = env-gated, identical at base (m) → INFRA.
+
+## F0 r1 review (23:5x)
+- Opus + Flash both FIX-THEN-MERGE on b537371d. Union triaged (/tmp/rwl-f0/FINDINGS.md): safety A = skip→INFRA, partial DOWN→RED, drop CHECK_PREMERGE_CMD seam, strict loopback DB guard (host/hostaddr/service/comma/PG* env), token CR/LF leak; also no-timeout→INFRA, live 180 s cap + statement_timeout, promote test, redirect/proxy tests. Extra tests → F0b if over 300 LOC.
+- Worker resumed with the fixes; dashboard /api/health forbidden in brief.

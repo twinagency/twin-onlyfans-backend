@@ -7,6 +7,8 @@ A missing record is not proof that a fan does not own something. For each media 
   unknown       not provable either way: the card's previews are unknown or its facts disagree, an unlock names a message
                 we never saw, a payment has no unlock to explain it, a purchase was reversed and no person resolved it, or
                 the fan's coverage is not complete (see fans_api_adapter.history_import.fan_state).
+                A provider payment is explained only by identity: a reconciliation that names an opened message, or a
+                person's dismissal. Payments are never matched to cards by count, amount or time.
   clear_as_of   only when the fan's coverage is complete and no evidence names the media; the time is when coverage
                 completed. Later purchases arrive as webhooks and flip the state to owned.
 
@@ -28,6 +30,8 @@ from onlyfans_runtime.store import Refused
 OWNED, UNKNOWN, CLEAR = "owned", "unknown", "clear_as_of"
 # A reversal is resolved when a person dismissed it or the canonical owner applied it.
 _RESOLVED = ("applied", "dismissed")
+# A payment names its message only after the canonical owner recorded that link. A pending row never does.
+_LINKED = ("applied", "paired")
 
 
 @dataclass(frozen=True)
@@ -127,11 +131,14 @@ def derive(s, account, fan_id, media_ids):
         for m in list(owned):
             note(unknown, m, "reversal_unresolved")
         owned = {}
-    # 4. a message payment with no unlock to explain it: we cannot say which media it bought
-    payments = len(set(s.scalars(select(OfFansEvidence.provider_transaction_id).where(OfFansEvidence.account_id == account,
-        OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == "transaction", OfFansEvidence.status != "dismissed"))))
-    if payments > len(explained):
-        fan_level.add("payment_without_unlock")
+    # 4. a message payment nobody tied to an opened card: we cannot say which media it bought. A transaction carries no
+    # message id; it is explained only when its own evidence row names an opened message through a recorded link, or a
+    # person dismissed it. How many cards were opened, what they cost and when they were opened never explain a payment.
+    for payment in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account, OfFansEvidence.fan_id == fan_id,
+            OfFansEvidence.kind == "transaction", OfFansEvidence.status != "dismissed")):
+        if not (payment.status in _LINKED and payment.message_id is not None and payment.message_id in explained):
+            fan_level.add("payment_without_unlock")
+            break
     out = {}
     for m in media:
         refs = tuple(sorted(evidence.get(m, ())))

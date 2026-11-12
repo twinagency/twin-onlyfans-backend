@@ -31,6 +31,7 @@ Result codes: RA = RED-ASSERT, RD = RED-DRIFT, G = GREEN, GG = GUARD-GREEN. Grou
 | L3-07 | W1 fans-api-adapter | major | test_w1_fans_api_adapter_pg (silent new job) | RA (m) | queue | vault_sync.py:172-195 | rest |
 | L3-08 | W1 fans-api-adapter | minor | test_w1_fans_api_adapter_pg (3600 < 7200) | RA (m) | queue | protocol.py:66,77 † | G5 |
 | F1 | W1 model-transport | major | test_w1_model_transport_pg (non-ASCII Retry-After → unknown) | RA (m) | queue | model_transport/openrouter.py:36-48, :74-99 | G5 |
+| F1b | — | W3DC-03 rest: `_adopt_into_account` (Incogniton/Playwright) no auth_id check; enrollment curl branch (sink covers) |
 | F2 | W1 model-transport | major | test_w1_model_transport_pg (open, not handover_pending) | RA (m) | queue | model_runtime.py:221-230, :267-271 | G5 |
 | F3 | W1 model-transport | blocker | test_w1_model_transport_pg ×4 (sk-or-v1 / prompt text persisted) | RA (m) | queue | openrouter.py:57-58; model_runtime.py:288 | G11 |
 | F5 | W1 model-transport | major | test_w1_model_transport_pg (due retry starved) | RA (m) | queue | pilot_supervised.py:375-382 † | G5 |

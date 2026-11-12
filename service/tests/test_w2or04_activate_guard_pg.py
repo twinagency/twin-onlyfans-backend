@@ -70,6 +70,20 @@ def test_w2or04_activate_refuses_a_preparation_scope(database, monkeypatch):
         store.close()
 
 
+def test_f503_activate_cannot_switch_a_scopeless_fansapi_policy_to_native(database, monkeypatch):
+    from onlyfans_runtime.text_delivery import TextAuthority
+    store, account, _ = verified(database, monkeypatch)
+    try:
+        TextAuthority(store).configure(TENANT, account, expected_revision=0, enabled=False, limit_units=0,
+            throttle_seconds=1, media_enabled=False, transport_kind='fansapi', actor=ACTOR, reason='synthetic fansapi')
+        before = _snapshot(store, account)
+        with pytest.raises(Refused, match='delivery mode cannot switch between native and fansapi'):
+            change(store, account, 'activate', 1, 'c' * 64, LIMITS)
+        assert _snapshot(store, account) == before and before[2][1] == 'fansapi'
+    finally:
+        store.close()
+
+
 # ---- W3RCA-02 / F5-01: Activate writes the policy but cannot undo an operator stop; resume stays the way back ----
 
 def _ready(monkeypatch):

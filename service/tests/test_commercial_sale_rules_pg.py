@@ -276,3 +276,67 @@ def test_revoking_the_scope_before_the_wire_cancels_the_unsent_card(world):
     pilot_scope.set_status(world.store, TENANT, world.account, 'stopped', expected_revision=world.scope_revision,
                            command_key=key(0x9101), actor=OPERATOR, reason='operator revokes before the wire')
     nothing_sent(world)
+
+
+# ---------------------------------------------------------------------------------------------------- 4.2 human edit, autonomy, unknown sends
+def test_a_human_edit_cannot_change_the_amount_or_the_contents_of_the_card(world):
+    catalogue(world)
+    world.launch()
+    staged, mid = staged_card(world)
+    info = staged['approval']
+    for text_ in ('Here you go, only $5 today.', 'Here you go, the discount price is USD 9.00 for you.',
+                  'Here are two pictures and a video for you.'):
+        with pytest.raises(Refused):
+            approval.edit(world.store, TENANT, world.account, info['requestId'], info['generation'],
+                          expected_version=info['version'], actor=OPERATOR, parts=[text_])
+    edited = approval.edit(world.store, TENANT, world.account, info['requestId'], info['generation'],
+                           expected_version=info['version'], actor=OPERATOR, parts=['Here it is, hope you enjoy it.'])
+    approval.approve(world.store, TENANT, world.account, edited['requestId'], edited['generation'],
+                     expected_version=edited['version'], actor=OPERATOR)
+    world.unthrottle()
+    send_ok(world, world.pilot.tick())
+    sent = world.cards()[0]['body']
+    assert sent['price'] == 12.0 and sent['mediaFiles'] == ['31'] and sent['text'].startswith('Here it is') and 'USD 12.00' in sent['text']
+
+
+def test_an_autonomous_commercial_scope_sends_the_prepared_card_once_without_a_manual_approval(database, tmp_path, monkeypatch):
+    w = build_world(database, tmp_path, monkeypatch, i=3)
+    try:
+        catalogue(w)
+        w.launch(authorization_mode='autonomous')
+        staged, mid = w.say('show me the beach photo', FAN_A)
+        assert staged['outcome'] == 'awaiting_approval' and w.fans_mock.posts == []
+        w.unthrottle()
+        send_ok(w, w.pilot.tick())
+        assert len(w.cards()) == 1 and w.cards()[0]['body']['price'] == 12.0
+        w.unthrottle()
+        assert w.pilot.tick()['dispatched'] == [] and len(w.cards()) == 1       # a second tick sends nothing more
+    finally:
+        set_active_profiles(None)
+        w.store.close()
+
+
+def test_an_unknown_send_stays_unknown_and_an_unlock_cannot_resolve_or_resend_it(world):
+    catalogue(world)
+    world.launch()
+    staged, mid = staged_card(world)
+    world.approve_turn(staged)
+    world.unthrottle()
+
+    def connection_lost(count):
+        raise TimeoutError('the connection dropped after the provider took the request')
+    world.fans_mock.hooks.append(connection_lost)
+    world.pilot.tick()
+    world.fans_mock.hooks.clear()
+    sent = [i for i in intents(world) if i.price_cents > 0]
+    assert len(sent) == 1 and sent[0].status == 'unknown' and len(world.cards()) == 1
+    world.deliver(world.unlock_event(world.fans_mock.next_id - 1, 12), 'unlock-for-unknown')
+    for _ in range(2):
+        world.unthrottle()
+        world.pilot.tick()
+    sent = [i for i in intents(world) if i.price_cents > 0]
+    assert sent[0].status == 'unknown' and len(world.cards()) == 1              # never resent, never promoted to accepted by an unlock
+    from db.onlyfans_engine_models import OfEngineAccessEvidence
+    from db.onlyfans_fans_intake_models import OfFansEvidence
+    assert world.rows(OfEngineAccessEvidence) == []
+    assert [r.status for r in world.rows(OfFansEvidence, OfFansEvidence.kind == 'unlock')] == ['pending']

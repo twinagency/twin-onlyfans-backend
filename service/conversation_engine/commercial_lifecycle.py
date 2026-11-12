@@ -73,6 +73,28 @@ def check_catalogue(runtime, config):
         raise Refused('commercial catalogue has expired')
 
 
+def catalogue_snapshot(store, tenant, account, *, evidence_ref, valid_until):
+    """The `catalogue` block of a commercial scope: the agency's explicit approval of the catalogue as it stands NOW.
+
+    Read-only. It makes no provider call and approves nothing by itself: the managing agency passes the result to
+    `promote` (or the operator to a stopped `configure`), which is what records the approval. `evidence_ref` names the
+    agency's approval record; `valid_until` is its explicit UTC expiry. The aggregate hash is the commercial catalogue version
+    (live approved terms revisions, aliases and vault state of every approved member); launch refuses a stale one.
+    """
+    from datetime import datetime
+    from .catalogue import _catalogue_version
+    if (type(evidence_ref) is not str or not evidence_ref.startswith('vault:') or not 6 < len(evidence_ref) <= 128
+            or type(valid_until) is not datetime or valid_until.tzinfo is not None or valid_until <= utcnow()):
+        raise Refused('invalid commercial catalogue approval')
+    with Session(store.engine) as s:
+        runtime = store._runtime(s, tenant, account, lock=False)
+        version = _catalogue_version(s, runtime)
+        if version is None:
+            raise Refused('commercial catalogue version is unavailable')
+        return {'account_id': account, 'binding_id': runtime.binding_id, 'complete': True, 'evidence_ref': evidence_ref,
+                'valid_until': valid_until.isoformat(), 'snapshot_hash': version, 'snapshot_kind': contracts.CATALOGUE_KIND}
+
+
 def promote(store, tenant, account, body, *, expected_revision, command_key, actor, reason):
     """Preparation row -> commercial.v1 / configured, in place. Managing agency actor only; grants nothing."""
     preparation._command(command_key, actor, reason)

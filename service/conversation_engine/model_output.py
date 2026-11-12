@@ -193,14 +193,6 @@ _LATER = re.compile(
 _NUMBER_WORDS = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
                  'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15, 'sixteen': 16, 'seventeen': 17,
                  'eighteen': 18, 'nineteen': 19, 'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 'dozen': 12}
-_PICTURE_NOUNS = r"(?:pics?|pictures?|photos?|images?|stills?|shots?|selfies)"
-_VIDEO_NOUNS = r"(?:vids?|videos?|clips?)"
-_OTHER_NOUNS = r"(?:media|items?|pieces?|files?)"
-_TIME_UNITS = {'minute', 'minutes', 'min', 'mins', 'second', 'seconds', 'sec', 'secs', 'hour', 'hours', 'hr', 'hrs',
-               'day', 'days', 'week', 'weeks'}
-# not the cents of a price ("$3.00 for the photo" is a price, not "00 pictures")
-_QUANTITY = re.compile(r"(?<![$\u00a3\u20ac])(?<!\d\.)\b(\d{1,3}|" + '|'.join(_NUMBER_WORDS) + r")\s+(?:(\w+)\s+)??(?:(\w+)\s+)??("
-                       + _PICTURE_NOUNS + '|' + _VIDEO_NOUNS + '|' + _OTHER_NOUNS + r")\b", re.I)
 
 
 def _norm_words(text):
@@ -212,22 +204,11 @@ def _norm_line(text):
 
 
 def quantity_claims(text):
-    """[(count, kind)] for every 'N pictures / N videos / N items' statement in `text` (kind: picture|video|other)."""
-    claims = []
-    for match in _QUANTITY.finditer(text):
-        fillers = {w.lower() for w in match.groups()[1:3] if w}
-        if fillers & _TIME_UNITS:
-            continue  # "a 5 minute video" is a duration, not a count
-        from .claims import non_media_quantity
-        sentence = next((part for part in re.split(r"(?<=[.!?])\s+|\n+", text) if match.group(0) in part), text)
-        if non_media_quantity(sentence, match.group(4)):
-            continue  # "2 shots of tequila" is a drink count, not content
-        raw = match.group(1).lower()
-        count = int(raw) if raw.isdigit() else _NUMBER_WORDS[raw]
-        noun = match.group(4).lower()
-        kind = 'picture' if re.fullmatch(_PICTURE_NOUNS, noun) else 'video' if re.fullmatch(_VIDEO_NOUNS, noun) else 'other'
-        claims.append((count, kind))
-    return claims
+    """[(count, kind)] for every 'N pictures / N videos / N items' statement in `text` (kind: picture|video|other).
+
+    One grammar, owned by claims.py and shared with the plan backstop and the operator edit."""
+    from .claims import content_quantity_claims
+    return list(content_quantity_claims(text))
 
 
 def content_facts(snapshot, offer):
@@ -329,13 +310,24 @@ def _identity_problems(texts, ctx):
     return problems
 
 
+def _authority_offer(snapshot, profile, proposal):
+    """The product facts this text is held to. An offer card is held to the ONE grant the proposal selected (a real-model
+    snapshot carries its authorized grants), never to whichever grant the fan's words happen to rank first. A reply has no
+    selected product, so the text-ranked offer remains its best available referent."""
+    from .claims import selected_offer
+    from .writer_context import offer_for
+    if proposal is not None and proposal.action == 'offer' and 'offer_grants' in snapshot:
+        return selected_offer(snapshot, proposal) or {}
+    return offer_for(snapshot, profile, snapshot['current_message']['body'])
+
+
 def _writing_problems(proposal, ctx, texts):
     from .writer_context import offer_for
     problems, joined = [], ' '.join(texts)
     snapshot = ctx.snapshot
     if _WITHHOLD.search(joined):
         problems.append('makes an answer or item conditional on him answering, tell her something or earning it; answer first')
-    offer = offer_for(snapshot, ctx.profile, snapshot['current_message']['body']) if hasattr(ctx.profile, 'may_offer') else None
+    offer = _authority_offer(snapshot, ctx.profile, proposal) if hasattr(ctx.profile, 'may_offer') else None
     problems.extend(_commercial_terms_problems(joined, texts, snapshot, offer,
         legacy_message='offers a discount, cheaper option or bundle; the price is fixed and there is one product'))
     if _LATER.search(joined):
@@ -543,14 +535,14 @@ def creator_problems(texts, ctx):
     return problems
 
 
-def edit_problems(texts, ctx):
-    """Safety, identity and fixed-sale checks for a human's proposed edit."""
+def edit_problems(texts, ctx, proposal=None):
+    """Safety, identity and fixed-sale checks for a human's proposed edit. `proposal` carries the edited draft's action and
+    selected grant, so an offer lead-in is held to that grant's facts exactly like model output."""
     problems = creator_problems(texts, ctx)
     joined = ' '.join(texts)
     if _WITHHOLD.search(joined):
         problems.append('makes an answer conditional on the fan answering')
-    from .writer_context import offer_for
-    offer = offer_for(ctx.snapshot, ctx.profile, ctx.snapshot['current_message']['body'])
+    offer = _authority_offer(ctx.snapshot, ctx.profile, proposal)
     problems.extend(_commercial_terms_problems(joined, texts, ctx.snapshot, offer, legacy_message='offers a discount, cheaper option or bundle'))
     if _LATER.search(joined):
         problems.append('promises to message later')

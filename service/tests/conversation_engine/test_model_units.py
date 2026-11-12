@@ -366,7 +366,10 @@ def test_judge_rejects_unsupported_commercial_and_invented_content(body, extra, 
 def test_judge_accepts_only_the_granted_offer_and_known_scope_and_verified_price():
     grant = '11111111-1111-1111-1111-111111111111'
     offer = ok('a little beach clip', action='offer', offer_grant_id=grant, pitch=True)
-    assert judge(offer, judge_ctx(grants=[grant])).outcome == 'ok'
+    clip = {'grantId': grant, 'itemId': '5', 'label': 'beach clip', 'media': {'total': 1, 'pictures': 0, 'videos': 1}}
+    # F1b: the granted offer must actually be in the authorized grant list, and be a video for the lead-in to say clip
+    assert judge(offer, judge_ctx(snapshot(offer_grants=[clip]), grants=[grant])).outcome == 'ok'
+    assert judge(offer, judge_ctx(grants=[grant])).outcome == 'invalid'          # allowed id but no grant facts: no product claim
     assert judge(ok('hi', sales_signal='reopen', item_scope=['5']), judge_ctx(scope=['5'])).outcome == 'ok'
     snap = snapshot(offer_reference={'state': 'matched', 'offers': [{'priceCents': 900, 'label': 'beach set'}]})
     assert judge(ok('the beach set was $9.00', price_claims=[900]), judge_ctx(snap)).outcome == 'ok'
@@ -413,7 +416,9 @@ def test_regression_text_says_six_pictures_but_the_card_has_three_media():
     assert reasons(offer_text('it has 6 pics and a clip'), wctx())[0] == 'invalid'
     assert reasons(offer_text('three pics and a video'), wctx())[0] == 'invalid'   # 3 is the total, not the pictures
     assert reasons(offer_text('two pictures and one video, a day at the beach'), wctx())[0] == 'ok'
-    assert reasons(offer_text('a little beach set, a 10 minute video of me'), wctx())[0] == 'ok'  # a duration is not a count
+    outcome, why = reasons(offer_text('a little beach set, a 10 minute video of me'), wctx())
+    # a duration is not a count; F1b: it is an unsupported DURATION claim (the card states none), refused as such
+    assert outcome == 'invalid' and 'quantity' not in why and 'duration' in why
     assert reasons(offer_text('a couple of stills and a clip'), wctx())[0] == 'ok'               # vague, states no number
     assert reasons(ok('i have 12 videos you would love'), wctx(offers=False))[0] == 'invalid'   # no card, so no quantity facts
     sent = her('look at this', media=4)

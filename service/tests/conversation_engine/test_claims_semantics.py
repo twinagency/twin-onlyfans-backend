@@ -135,8 +135,13 @@ def test_grounding_from_snapshot_uses_only_the_granted_offer_and_owned_items():
             'verified_purchases': [{'itemId': '1', 'label': 'Beach Set'}]}
     offer = SyntheticProposal('x', action='offer', offer_grant_id='g1')
     g = grounding_from_snapshot(snap, offer)
-    assert g.quantities == {3, 2, 4} and g.purchase_labels == ('Beach Set',)
-    assert 9 not in g.quantities and 7 not in g.quantities
+    # F1b: an attached card is held to its ONE selected grant. Earlier sent cards and catalogue matches (2, 4) are not authority
+    # for what this lead-in may say about the card; the owned-item labels are unchanged.
+    assert g.quantities == {3} and g.offer_bound and g.purchase_labels == ('Beach Set',)
+    assert not ({9, 7, 2, 4} & g.quantities)
+    # without a real-model grant list (synthetic fixture) the legacy sources still ground quantities
+    legacy = grounding_from_snapshot({k: v for k, v in snap.items() if k != 'offer_grants'}, offer)
+    assert legacy.quantities == {2, 4} and not legacy.offer_bound
 
 
 # ---- the same checks on the real judge() path, including the PDF regressions -------------------------------

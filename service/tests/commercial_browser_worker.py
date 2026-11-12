@@ -7,7 +7,8 @@ def read(path):
  with httpx.Client(trust_env=False,timeout=10) as client:
   response=client.get(API+path);response.raise_for_status();return response.json()
 info=read('/fixture')
-os.environ['DATABASE_URL']=info['database']
+# Role and database are decided BEFORE any service module is imported (db.engine reads them at import time), as in production.
+os.environ.update(DATABASE_URL=info['database'],ONLYFANS_PROCESS_ROLE='worker')
 # This is only boot sequencing. The existing worker owns all intake, planning,
 # retries and sending after activation; there is no test-owned tick scheduler.
 for _ in range(900):

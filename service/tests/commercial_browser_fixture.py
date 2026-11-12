@@ -5,9 +5,10 @@ from pathlib import Path
 from datetime import timedelta
 from contextlib import contextmanager
 from fastapi import FastAPI
-from sqlalchemy import select,func
+from sqlalchemy import select,func,text
 from sqlalchemy.orm import Session
 from db.models import Account,Fan,OfCreatorBinding,OfConversationState
+from db.onlyfans_models import OfRuntime
 from db.onlyfans_engine_models import OfEngineOfferGrant,OfEngineAccessEvidence,OfEngineModelCall
 from db.onlyfans_delivery_models import OfTextIntent
 from onlyfans_runtime.store import Store,Event,utcnow
@@ -32,6 +33,11 @@ from history_support import Provider,factory,page,chat_page,fan_message
 
 ACCOUNT='browser-normal'
 CREATOR='11111111-1111-4111-8111-111111111111'
+# An EXISTING account that belongs to another tenant. The browser journey must be refused every read and write on it
+# (the BFF/backend answer 404, the same as for an unknown account) and its durable rows must stay byte-identical.
+FOREIGN='browser-foreign-tenant'
+FOREIGN_TENANT='tenant-foreign-browser'
+FOREIGN_CREATOR='99999999-9999-4999-8999-999999999999'
 OWNER='44444444-4444-4444-8444-444444444444'
 ACTOR='op-session:'+hashlib.sha256(('twin-plan-c-named-owner-v1:'+OWNER).encode()).hexdigest()
 db=database.__wrapped__();owned=next(db);store=Store(owned[0])
@@ -41,6 +47,11 @@ with Session(owned[1]) as s,s.begin():
  s.add(Fan(account_id=ACCOUNT,fan_id=FAN_A));s.flush()
  s.add(OfConversationState(account_id=ACCOUNT,fan_id=FAN_A,mode='paused',revision=0,takeover_state='none',requires_attention=False))
 store.register(TENANT,ACCOUNT,activated_at=utcnow()-timedelta(hours=1),enabled=False)
+with Session(owned[1]) as s,s.begin():
+ s.add(Account(id=FOREIGN,nickname='Offline foreign tenant fixture'));s.flush()
+ s.add(OfCreatorBinding(id='browser-foreign-binding',tenant_id=FOREIGN_TENANT,creator_id=FOREIGN_CREATOR,creator_name='Offline foreign tenant fixture',account_id=FOREIGN,handle='foreign',channel='onlyfans'))
+store.register(FOREIGN_TENANT,FOREIGN,activated_at=utcnow()-timedelta(hours=1),enabled=False)
+TextAuthority(store).configure(FOREIGN_TENANT,FOREIGN,expected_revision=0,enabled=False,media_enabled=False,limit_units=0,throttle_seconds=1,transport_kind='fansapi',actor=ACTOR,reason='Disabled foreign tenant fixture')
 TextAuthority(store).configure(TENANT,ACCOUNT,expected_revision=0,enabled=False,media_enabled=False,limit_units=0,throttle_seconds=1,transport_kind='fansapi',actor=ACTOR,reason='Disabled offline browser connector')
 cfg=config(8,requests=1000,credits=2000)
 provider=Provider(cfg);provider.vault=[lambda:page([_item(31)])];provider.chats[FAN_A]=[chat_page([fan_message(701,FAN_A,'Earlier hello')])]
@@ -60,6 +71,16 @@ os.environ.update(ONLYFANS_PROCESS_ROLE='api',TWIN_PLAN_C_FIXTURE_ONLY='1',TWIN_
  ONLYFANS_API_TOKEN='synthetic-read',ONLYFANS_API_TENANT=TENANT,ONLYFANS_CONTENT_TOKEN='synthetic-content',ONLYFANS_CONTENT_TENANT=TENANT,
  ONLYFANS_CONFIGURATION_TOKEN='synthetic-configuration',ONLYFANS_CONFIGURATION_TENANT=TENANT,
  ONLYFANS_CONTROL_TOKEN='synthetic-control',ONLYFANS_CONTROL_TENANT=TENANT)
+# The read routes use the process-wide async engine that db.engine built at import time (before this fixture's database
+# existed). Point it at the SAME PostgreSQL database the store writes, with the settings an api-role process uses in
+# production, exactly as DATABASE_URL would. Real read code, real data; no stand-in repository.
+from importlib import import_module
+_db_engine=import_module('db.engine')  # not `import db.engine`: that would rebind the name `db` (the test-database generator below)
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncSession,async_sessionmaker,create_async_engine
+_db_engine.engine=create_async_engine(make_url(owned[0]).set(drivername='postgresql+asyncpg'),future=True,pool_size=4,max_overflow=4,pool_pre_ping=True,
+ connect_args={'command_timeout':15,'server_settings':{'statement_timeout':'10000','lock_timeout':'3000','timezone':'UTC'}})
+_db_engine.async_session_factory=async_sessionmaker(_db_engine.engine,expire_on_commit=False,class_=AsyncSession)
 app=FastAPI();app.state.control_store=store;app.add_middleware(AgencyScopeMiddleware)
 for router in (reads,config_router,vault,content,operator,controls):app.include_router(router)
 world=World();world.store=store;world.database=owned;world.account=ACCOUNT;world.cfg=cfg;world.env=env
@@ -73,7 +94,7 @@ def worker_role():
 
 @app.get('/fixture')
 def info():
- return {'account':ACCOUNT,'creator':CREATOR,'fan':FAN_A,'actor':ACTOR,'preparation':cfg,'profile':profile,'database':owned[0]}
+ return {'account':ACCOUNT,'foreignAccount':FOREIGN,'creator':CREATOR,'fan':FAN_A,'actor':ACTOR,'preparation':cfg,'profile':profile,'database':owned[0]}
 @app.post('/fixture/prepare')
 def prepare():
  with worker_role():
@@ -156,10 +177,21 @@ def unlock():
   if value['access']==1:return value
   time.sleep(0.2)
  raise RuntimeError('autonomous worker did not fold the exact unlock')
+def foreign_snapshot(s):
+ """Every durable row that carries the foreign account id, digested table by table. Any write the journey makes
+ to that account (even an audit/command row) changes this value."""
+ tables=[r[0] for r in s.execute(text("select table_name from information_schema.columns where table_schema='public' and column_name='account_id' order by table_name"))]
+ rows={}
+ for table in tables:
+  count,digest=s.execute(text('select count(*),coalesce(md5(string_agg(t::text,\'|\' order by t::text)),\'\') from "'+table+'" t where account_id=:a'),{'a':FOREIGN}).one()
+  if count:rows[table]=[count,digest]
+ runtime=s.get(OfRuntime,FOREIGN)
+ return {'runtimeEnabled':bool(runtime.enabled),'grants':s.scalar(select(func.count()).select_from(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id==FOREIGN)),
+  'modelCalls':s.scalar(select(func.count()).select_from(OfEngineModelCall).where(OfEngineModelCall.account_id==FOREIGN)),'rows':rows}
 @app.get('/fixture/state')
 def state():
  with Session(owned[1]) as s:
-  return {'posts':[p['body'] for p in world.fans_mock.posts],
+  return {'foreign':foreign_snapshot(s),'posts':[p['body'] for p in world.fans_mock.posts],
    'grants':s.scalar(select(func.count()).select_from(OfEngineOfferGrant)),
    'access':s.scalar(select(func.count()).select_from(OfEngineAccessEvidence).where(OfEngineAccessEvidence.applied.is_(True))),
    'modelCalls':s.scalar(select(func.count()).select_from(OfEngineModelCall)),

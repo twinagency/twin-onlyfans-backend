@@ -34,7 +34,6 @@ import json
 import re
 import sys
 import shlex
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,6 +45,7 @@ sys.path.insert(0, str(HERE))
 import accounts as account_registry  # noqa: E402
 from of_signer import derive_rules_from_chunk, verify_rules  # noqa: E402
 from capture_owner import MissingAuthId, OwnerMismatch, check_capture_owner  # noqa: E402,F401
+from onlyfans_runtime.store import Refused  # noqa: E402,F401  (re-exported for the relay route)
 
 CHUNK_URL_TPL = "https://static2.onlyfans.com/static/prod/f/{rev}/2313.js"
 
@@ -234,6 +234,15 @@ class CurlParseError(ValueError):
     pass
 
 
+def _check_ids(user_id: str, x_of_rev: str) -> None:
+    """user-id / x-of-rev rule shared by from_curl and the connection capture build."""
+    from onlyfans_runtime.browser_capture import REV
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", user_id):
+        raise CurlParseError("user-id header is not a numeric OnlyFans id")
+    if not re.fullmatch(REV, x_of_rev):
+        raise CurlParseError("x-of-rev header is not an OnlyFans revision")
+
+
 def _check_owner(account: str, user_id: str, cookies: list) -> None:
     try:
         check_capture_owner(account, user_id, cookies)
@@ -387,6 +396,7 @@ def from_curl(curl_text: str, *,
     user_agent = h["user-agent"]
     sign = h["sign"]
     time_ms = h["time"]
+    _check_ids(user_id, x_of_rev)
     # The relay files a capture under its own user-id (rerouted below), so only
     # the auth_id cookie can disagree here.
     _check_owner(f"of-{user_id}", user_id, parsed["cookies"])
@@ -425,10 +435,19 @@ def from_curl(curl_text: str, *,
         )
 
     # ── Fetch 2313.js + derive checksum indexes/constant ─────
+    # Through the account's proxies.json proxy (curl_cffi, capped, no redirects);
+    # an assigned-but-unusable proxy entry refuses (no direct fetch). None = no proxy assigned.
+    import proxies as proxy_registry
+    from onlyfans_runtime import browser_capture
+    try:
+        p = proxy_registry.get_for_account(user_id)  # binding is by user_id (account_id is a hint, below)
+        proxy = proxy_registry.proxy_url(p) if p is not None else None
+    except (KeyError, TypeError, ValueError, OSError):
+        raise CurlParseError("assigned proxy for this account is unusable; fix it under Setup → Proxies") from None
     chunk_url = CHUNK_URL_TPL.format(rev=x_of_rev)
     print(f"[bootstrap] Fetching {chunk_url}")
-    with urllib.request.urlopen(chunk_url, timeout=20) as r:
-        chunk_code = r.read().decode("utf-8", errors="replace")
+    chunk_code = browser_capture.fetch_asset("rules", owner=user_id, rev=x_of_rev,
+                                             user_agent=user_agent, proxy=proxy)
     print(f"[bootstrap] Got chunk ({len(chunk_code)} bytes)")
 
     derived = derive_rules_from_chunk(chunk_code, [sample])
@@ -539,10 +558,7 @@ def build_connection_capture_from_request(parsed: dict, *,
         )
     user_id, x_bc, x_of_rev = h["user-id"], h["x-bc"], h["x-of-rev"]
     user_agent, sign, time_ms = h["user-agent"], h["sign"], h["time"]
-    if not re.fullmatch(r"[1-9][0-9]{0,18}", user_id):
-        raise CurlParseError("user-id header is not a numeric OnlyFans id")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", x_of_rev):
-        raise CurlParseError("x-of-rev header is not an OnlyFans revision")
+    _check_ids(user_id, x_of_rev)
     _check_owner(account, user_id, parsed["cookies"])
     asset = dict(owner=user_id, rev=x_of_rev, user_agent=user_agent, proxy=proxy)
     # The Fastt Login extension's curl carries no x-hash; it is a per-user

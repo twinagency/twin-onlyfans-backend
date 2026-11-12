@@ -89,3 +89,8 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F0 r2 (Opus): budget=0 → GREEN w/o running; ?dsn= DB bypass. Fixed 15b78beb (299 LOC, fast GREEN 42 s measured by worker).
 - F0 r3: Opus all r2 closed + 1 test string; Flash extra hardening. A: comma-host case, budget cap, evidence-write INFRA, guard inside db_checks (+ M4/umask if LOC fits). R: fast all-DOWN = note (owner spec). D → F0b: premerge ONLYFANS_TEST_PG_URL loopback check, full skip-only detection, test gaps.
 - F5 r2 cf145ec4: Activate after stop writes policy, runtime stays off; uses TextAuthority._configure_in_session. Behaviour change accepted: Activate refuses fansapi→native (existing safety invariant text_delivery.py:312); pin test requested.
+
+## F0 merged (#89 → 91e32acc)
+- rwl 3 rounds (Opus+Flash). Orchestrator-measured: harness 35 passed; `check.sh fast` GREEN wall 39 s (premerge + promoted + live smoke). CI billing-locked (annotation checked) → merged on local proof. Team head was 96609e23 (no rebase). Local target ff 96609e23..91e32acc; no wt on target.
+- Merge gate from now: `scripts/check.sh fast` GREEN (env: CHECK_ENV_FILE, CHECK_DB_URL stack PG :55432 read-only, ONLYFANS_TEST_PG_URL throwaway PG). Merges: 6 (F1 F2 F3 F2b OWN-b F0).
+- F5 r2 Flash MERGE / Opus FIX-THEN-MERGE (F5-21 ordering test, F5-22 comment) → worker.

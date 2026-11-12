@@ -431,7 +431,7 @@ def from_curl(curl_text: str, *,
     import proxies as proxy_registry
     from onlyfans_runtime import browser_capture
     try:
-        p = proxy_registry.get_for_account(account_id or user_id)
+        p = proxy_registry.get_for_account(user_id)  # binding is by user_id (account_id is a hint, below)
         proxy = proxy_registry.proxy_url(p) if p is not None else None
     except Exception:
         raise CurlParseError("assigned proxy for this account is unusable; fix it under Setup → Proxies") from None

@@ -216,7 +216,7 @@ def test_legacy_bad_rev_refused_before_fetch(legacy):
 def test_legacy_assigned_proxy_reaches_fetch(legacy):
     legacy.assigned = {"label": "p1", "scheme": "http", "host": "proxy.example", "port": 8080}
     with pytest.raises(_Stop):
-        sb.from_curl(curl(), account_id="123")
+        sb.from_curl(curl(), account_id="999")  # hint only; binding is by curl user-id
     assert legacy.looked == ["123"]
     assert [(k, kw["proxy"]) for k, kw in legacy.fetched] == [("rules", "http://proxy.example:8080")]
 

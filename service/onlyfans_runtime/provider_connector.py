@@ -27,6 +27,9 @@ from .text_delivery import Dispatch, TextAuthority
 
 ORIGIN = "https://onlyfans.com"
 APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
+# Default GET timeout. A 77-row (536 KB) history page takes ~6 s server-side
+# (with or without proxy), so the 5 s write timeout starved every deep read.
+READ_TIMEOUT_SECONDS = 10
 
 
 class NativeAuthenticationError(NativeProtocolError):
@@ -213,7 +216,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
         self._handle = session
         self._timeout, self._max_bytes = float(timeout_seconds), max_response_bytes
         try:
-            read_timeout = float(os.environ.get('ONLYFANS_PROVIDER_READ_TIMEOUT_SECONDS', timeout_seconds))
+            read_timeout = float(os.environ.get('ONLYFANS_PROVIDER_READ_TIMEOUT_SECONDS',
+                                                max(timeout_seconds, READ_TIMEOUT_SECONDS)))
         except (TypeError, ValueError):
             raise Refused('invalid native HTTPS read timeout') from None
         if not math.isfinite(read_timeout) or not .05 <= read_timeout <= 10:

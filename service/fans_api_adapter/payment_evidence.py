@@ -152,7 +152,11 @@ def _external_access_proven(s, row):
     if ingress is None:
         return False
     if row.source == 'history':
-        if fact.via != 'history' or row.raw_sha256 != fact.raw_sha256:
+        # The card's terms were frozen from its first wire row. A card first seen unopened/unknown and observed opened later
+        # is a different wire row of the SAME terms (message_facts.record refused it as a conflict otherwise), so the
+        # observation is bound by being the one that recorded the opening (same retained opening time), not by hash equality.
+        if fact.via != 'history' or not (row.raw_sha256 == fact.raw_sha256
+                                         or fact.opened_at is not None and row.occurred_at == fact.opened_at):
             return False
     elif row.source != 'webhook' or webhook_binding(s, row) != runtime.binding_id:
         return False

@@ -989,7 +989,8 @@ class FansEventIntake:
             if recorded == 'backpressure':
                 raise IntakeBackpressure('outgoing history requires intake capacity before completion')
             # First-seen card terms (previews, lock, queue origin, opening) before normalisation discards them.
-            message_facts.record(s, account, fan_id, message_id, item, event, via='history', now=now)
+            if message_facts.record(s, account, fan_id, message_id, item, event, via='history', now=now) == 'opened':
+                self._drive_after(account, fan_id, after)       # a retained unlock now has its card
             digest = ev.digest(item)
             price = item.get('price')
             if item.get('isOpened') is True and price not in (None, 0) and float(price) > 0:

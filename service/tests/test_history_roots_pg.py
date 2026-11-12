@@ -28,6 +28,7 @@ from fans_api_adapter.events import FansEventIntake
 from model_transport.pilot_supervised import build_supervised_pilot
 
 MID = 7102
+FAN_OTHER = 402
 
 
 def history_of(first_opened, media=(31,), price=12, previews=()):
@@ -210,7 +211,7 @@ def test_a_webhook_unlock_before_the_card_is_retained_and_proves_access_when_the
         assert fact is None and [r.status for r in rows] == ['pending'], 'nothing is proven before the card is known'
         intake = FansEventIntake(w.store)
         intake.ingest_history_item(TENANT, w.account, FAN_A, card(MID, w.cfg, [31], 12, previews=[], opened=first_opened))
-        intake.drive(w.account, FAN_A)
+        w.pilot.tick()                       # the real worker projects the imported card, then re-drives the fan's evidence
         fact, rows = fact_and_unlock(database, w)
         assert fact.is_opened is True and not fact.conflicted, 'the retained authenticated unlock is the opening observation'
         assert [(r.source, r.status, r.reason) for r in rows] == [('webhook', 'paired', 'external_access_proven')]

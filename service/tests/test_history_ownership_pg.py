@@ -46,6 +46,14 @@ def states(result):
     return {m: v.state for m, v in result.items()}
 
 
+def reconcile_transactions(database, account):
+    """A person reconciles every imported payment (the operator route marks it dismissed). H2: a payment is never explained by
+    counting cards, matching an amount or timing, so a test that wants a fan with imported history to be clear says so here."""
+    with database[1].begin() as c:
+        c.execute(text("UPDATE of_fans_evidence SET status='dismissed', reason='operator_reconciled', resolved_by='op-session:resolved' "
+                       "WHERE account_id=:a AND kind='transaction' AND status='pending'"), {"a": account})
+
+
 def terms(media, previews=(), price=1500):
     return {"media_ids": list(media), "preview_ids": list(previews), "price_cents": price}
 
@@ -60,6 +68,7 @@ def test_an_imported_opened_card_makes_its_paid_media_owned_and_excludes_any_bun
     cfg = config(1)
     store, account, cfg, wire = world(database, 1, messages=[opened(cfg, 9002, [111, 112, 113], [111])], tx=[tx_row("t1", FAN)])
     try:
+        reconcile_transactions(database, account)
         got = derive(database, account, FAN, [111, 112, 113, 114])
         assert states(got) == {111: "clear_as_of", 112: "owned", 113: "owned", 114: "clear_as_of"}
         assert got[112].evidence == ("message:9002",) and got[111].as_of is not None and got[112].as_of is None
@@ -136,6 +145,7 @@ def test_a_reversal_makes_owned_media_unknown_until_a_person_resolves_it(databas
     store, account, cfg, wire = world(database, 1, messages=[opened(cfg, 9301, [161, 162], [161])],
                                       tx=[tx_row("t1", FAN)], cb=[cb_row("t1", FAN)])
     try:
+        reconcile_transactions(database, account)
         got = derive(database, account, FAN, [161, 162, 163])
         assert states(got) == {161: "clear_as_of", 162: "unknown", 163: "clear_as_of"}
         assert got[162].reasons == ("reversal_unresolved",), "a reversed purchase is unknown, neither owned nor clear"
@@ -179,9 +189,13 @@ def test_payments_the_unlock_evidence_cannot_explain_make_the_fan_unknown(databa
         assert states(got) == {192: "owned", 193: "unknown"} and got[193].reasons == ("payment_without_unlock",)
     finally:
         store.close()
-    # one payment, one unlock: explained, so a different product is clear
+    # one payment, one opened card: the count matches, but a count is not an identity. The payment stays unexplained until a
+    # person reconciles it (H2; this assertion formerly expected 193 clear_as_of from the numeric comparison).
     store, account, cfg, wire = world(database, 2, messages=[opened(config(2), 9502, [191, 192], [191])], tx=[tx_row("t1", FAN)])
     try:
+        got = derive(database, account, FAN, [192, 193])
+        assert states(got) == {192: "owned", 193: "unknown"} and got[193].reasons == ("payment_without_unlock",)
+        reconcile_transactions(database, account)
         assert states(derive(database, account, FAN, [192, 193])) == {192: "owned", 193: "clear_as_of"}
     finally:
         store.close()
@@ -192,6 +206,7 @@ def test_a_tip_or_subscription_payment_is_not_an_unexplained_purchase(database):
     store, account, cfg, wire = world(database, 1, messages=[opened(cfg, 9601, [201, 202], [201])],
                                       tx=[tx_row("t1", FAN), {**tx_row("t2", FAN), "type": "tip"}, {**tx_row("t3", FAN), "type": "subscription"}])
     try:
+        reconcile_transactions(database, account)           # only the message payment is a purchase payment; tip/subscription never were
         assert states(derive(database, account, FAN, [203])) == {203: "clear_as_of"}
     finally:
         store.close()
@@ -250,6 +265,7 @@ def test_two_accounts_with_identical_fan_and_media_ids_never_share_ownership(dat
     a_store, a, a_cfg, _ = world(database, 1, messages=[opened(config(1), 9901, [221, 222], [221])], tx=[tx_row("t1", FAN)], cb=[cb_row("t1", FAN)])
     b_store, b, b_cfg, _ = world(database, 2, messages=[creator_message(9901, config(2), "same id, no card")])
     try:
+        reconcile_transactions(database, a)
         assert states(derive(database, a, FAN, [221, 222])) == {221: "clear_as_of", 222: "unknown"}
         assert states(derive(database, b, FAN, [221, 222])) == {221: "clear_as_of", 222: "clear_as_of"}, "A's purchase and reversal do not leak into B"
         with Session(database[1]) as s:

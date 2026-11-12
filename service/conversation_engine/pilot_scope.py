@@ -320,6 +320,10 @@ def digest_resolution_key(binding, epoch, event_key, payload_sha256):
     return sha256(f'plan-c-digest-resolve:{binding}:{epoch}:{event_hash}:{payload_sha256}'.encode()).hexdigest()
 
 
+# Group reviews that settle a conflicting key: the queue review and the conflicting-event review (conflicting_webhook.py).
+CONFLICT_REVIEW_KINDS = ('plan_c_queue_digest_resolution', 'plan_c_conflict_marker')
+
+
 def unresolved_webhook_digests(runtime):
     """One shared view for barriers, queue and readiness; original evidence never changes.
 
@@ -342,7 +346,7 @@ def unresolved_webhook_digests(runtime):
         OfLaunchCommand.kind == 'plan_c_webhook_resolution').correlate(row).exists()
     queue_resolved = select(OfLaunchCommand.command_key).where(OfLaunchCommand.account_id == row.account_id,
         OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.command_key == key,
-        OfLaunchCommand.kind == 'plan_c_queue_digest_resolution').correlate(row).exists()
+        OfLaunchCommand.kind.in_(CONFLICT_REVIEW_KINDS)).correlate(row).exists()
     # Every conflicting variant must have its own queue-review marker. A new
     # variant immediately invalidates the group's old disposition for all fans.
     other_key_text = (literal('plan-c-digest-resolve:' + runtime.binding_id + ':') + cast(other.epoch, String) + ':'
@@ -350,7 +354,7 @@ def unresolved_webhook_digests(runtime):
     other_key = func.encode(func.sha256(func.convert_to(other_key_text, 'UTF8')), 'hex')
     other_reviewed = select(OfLaunchCommand.command_key).where(OfLaunchCommand.account_id == other.account_id,
         OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.command_key == other_key,
-        OfLaunchCommand.kind == 'plan_c_queue_digest_resolution').correlate(other).exists()
+        OfLaunchCommand.kind.in_(CONFLICT_REVIEW_KINDS)).correlate(other).exists()
     unreviewed_variant = select(other.payload_sha256).where(other.account_id == row.account_id,
         other.epoch == row.epoch, other.event_key == row.event_key, ~other_reviewed).correlate(row).exists()
     return select(row).join(OfFansConnection, and_(OfFansConnection.account_id == row.account_id,

@@ -5,13 +5,37 @@ import json
 from pathlib import Path
 from fans_api_adapter.event_scope import classify_raw, SUPPORTED, IRRELEVANT, MATERIAL
 from fans_api_adapter.queue_review import reviewed_queue_delivery
+from conversation_engine.conflicting_webhook import reviewed_conflicting_delivery
 import re
-from incident_state import WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec,CLASSES
+from incident_state import (WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,incident_spec,CLASSES,READINESS,READINESS_CAVEAT,
+    journal_class,evidence_reference_ok,named_sends_ok)
 from delivery_history import canon,sha,retry_index,retry_state
 FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
 PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
 URL='https://peterson-blacks-quit-ceremony.trycloudflare.com/onlyfans/webhooks/plan-c'
+
+def _readiness(root,manifest):
+    """readiness_unavailable needs more than a clean interval: the journal, the sender, the scope and every
+    unresolved send are re-proved here from retained bytes, and the operator's attestation must match them."""
+    try:
+        journal=(root/'journal.txt').read_bytes()
+        sends=json.loads((root/'unresolved-sends.json').read_bytes())
+        attestation=json.loads((root/'operator-attestation.json').read_bytes())
+    except (OSError,ValueError):
+        raise RuntimeError('readiness evidence is missing') from None
+    if journal_class(journal)!=READINESS:
+        raise RuntimeError('journal does not show exactly the readiness stop')
+    if manifest.get('sender_absent') is not True or manifest.get('scope_status')!='stopped':
+        raise RuntimeError('sender must be absent and the scope stopped')
+    if (type(attestation) is not dict or set(attestation)!={'evidence_reference','named_sends','cause_caveat'}
+            or not evidence_reference_ok(attestation['evidence_reference']) or not named_sends_ok(attestation['named_sends'])
+            or attestation['cause_caveat']!=READINESS_CAVEAT):
+        raise RuntimeError('operator attestation is missing or weakened')
+    if not named_sends_ok(sends) or sends!=attestation['named_sends']:
+        raise RuntimeError('unresolved sends are not exactly the sends the operator named')
+    return {'cause_caveat':READINESS_CAVEAT,'evidence_reference':attestation['evidence_reference'],'unresolved_sends':sends,
+            'journal_stop':READINESS,'sender_absent':True,'scope_status':'stopped'}
 
 def validate(root):
     root=Path(root)
@@ -62,6 +86,7 @@ def validate(root):
         full_rows={canon(r) for r in rows}
         if any(canon(r) not in full_rows for r in recent['data']):
             raise RuntimeError('incident window has unmatched reported delivery')
+    readiness=_readiness(root,manifest) if class_based and manifest.get('classification')==READINESS else None
     receipts={r['key']:r for r in local['receipts']}
     findings=[];matched=[];superseded=[]
     ok_index=retry_index(rows,lambda r:r.get('succeeded') is True and type(r.get('status_code')) is int
@@ -82,6 +107,10 @@ def validate(root):
         if reviewed_queue_delivery(local,key,payload,PROVIDER):
             findings.append({'event_key':key,'event':payload['event'],'disposition':'audited_queue_group_review',
                              'limitation':'operator reviewed provider queue and both fan histories; no send authority'})
+            continue
+        if reviewed_conflicting_delivery(local,key,payload,PROVIDER,FANS):
+            findings.append({'event_key':key,'event':payload['event'],'disposition':'audited_conflicting_event_review',
+                             'limitation':'operator reviewed every retained variant as an outside-fan message; no send authority'})
             continue
         if verdict.cls not in (SUPPORTED,IRRELEVANT,MATERIAL):raise RuntimeError('provider event is malformed or not classified')
         event,fan=verdict.event,verdict.fan
@@ -110,7 +139,8 @@ def validate(root):
         if not rows:raise RuntimeError('class-based interval has no provider delivery evidence')
     elif REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
         raise RuntimeError('known prior pilot receipt missing from full monitor window' if current_case else 'known post-incident pilot receipt missing from provider interval')
-    return {'interval_valid_for_bounded_scope':True,'matched_receipts':matched,'superseded_failed_attempts':superseded,
+    return {**({'readiness':readiness} if readiness is not None else {}),
+            'interval_valid_for_bounded_scope':True,'matched_receipts':matched,'superseded_failed_attempts':superseded,
             'outside_scope_limitations':findings,'full_event_continuity_claimed':False,
             **({'reported_incident_window_count':manifest['incident_delivery_count'],
                 'anchor_context':'known prior receipt predates this incident','original_failure_subcause':'not retained'} if current_case else {})}

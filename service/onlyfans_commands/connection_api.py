@@ -130,6 +130,45 @@ async def capture_from_curl(request:Request,account_id:str):
     except Exception:
         return response({'ok':False,'code':'outcome_unconfirmed','error':'The curl could not be converted to a capture. Copy a fresh signed request and try again.'},502)
 
+_BB_JOB=re.compile(r'[a-f0-9]{32}')
+
+def _bb_job(context,account_id,job_id):
+    import browserbase_login
+    job=browserbase_login.find_job(context[1],account_id,job_id) if _BB_JOB.fullmatch(job_id) else None
+    return job or response({'ok':False,'code':'not_found','error':'No such Browserbase login.'},404)
+
+@router.post('/accounts/{account_id}/browserbase-login')
+async def browserbase_login_start(request:Request,account_id:str):
+    """Start (or return the running) Browserbase login for this account. The human
+    signs in in the live view; the job derives the same output as capture-from-curl."""
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        if await read_json(request)!={}:raise ValueError()
+    except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid Browserbase login request.'},400)
+    import browserbase_login
+    try:job=browserbase_login.start(context[1],account_id)
+    except browserbase_login.Unconfigured:return response({'ok':False,'code':'browserbase_unconfigured','error':'BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'},503)
+    except browserbase_login.Busy:return response({'ok':False,'code':'browserbase_busy','error':'Too many Browserbase logins are running. Try again in a few minutes.'},429)
+    return response({'ok':True,**job.public()})
+
+@router.get('/accounts/{account_id}/browserbase-login/{job_id}')
+async def browserbase_login_status(request:Request,account_id:str,job_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    job=_bb_job(context,account_id,job_id)
+    if isinstance(job,JSONResponse):return job
+    return response({'ok':True,**job.public()})
+
+@router.post('/accounts/{account_id}/browserbase-login/{job_id}/cancel')
+async def browserbase_login_cancel(request:Request,account_id:str,job_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    job=_bb_job(context,account_id,job_id)
+    if isinstance(job,JSONResponse):return job
+    import browserbase_login
+    return response({'ok':True,'state':browserbase_login.cancel(job)})
+
 @router.get('/enrollments')
 async def enrollments(request:Request):
     context=authenticate(request)

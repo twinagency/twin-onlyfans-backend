@@ -502,7 +502,14 @@ def build_connection_capture(curl_text: str, *,
     The hard obfuscation-sensitive step stays in of_signer.derive_rules_from_chunk,
     the single source shared with from_curl.
     """
-    parsed = parse_curl(curl_text)
+    return build_connection_capture_from_request(
+        parse_curl(curl_text), static_param_override=static_param_override)
+
+
+def build_connection_capture_from_request(parsed: dict, *,
+                                          static_param_override: str | None = None) -> dict:
+    """`build_connection_capture` on an already-parsed request (parse_curl's
+    shape) — the Browserbase login feeds its browser capture in here."""
     h = parsed["headers"]
     required = ("user-id", "x-bc", "x-of-rev", "sign", "time", "user-agent")
     missing = [k for k in required if not h.get(k)]

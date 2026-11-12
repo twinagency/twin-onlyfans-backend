@@ -5,5 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 COPY service/ service/
+# Browserbase login injects the login extension's interceptor into the remote page.
+COPY loginExtension/interceptor.js loginExtension/interceptor.js
 EXPOSE 8787
 CMD ["uvicorn","service.onlyfans_app:app","--host","0.0.0.0","--port","8787","--workers","1"]

@@ -365,6 +365,75 @@ def test_edit_cannot_change_the_part_count_or_smuggle_a_price(api):
     assert [r.status for r in approvals(api)] == ['awaiting']
 
 
+def photo_only_offer(api):
+    """An approved offer whose frozen terms are two photos and NO video (USD 15.00)."""
+    from conversation_engine.writer_context import CreatorProfile, StaticCreatorProfiles, set_active_profiles
+    item = api.second_item()
+    with Session(api.database[1]) as s, s.begin():
+        from db.models import VaultItem
+        for v in s.scalars(select(VaultItem)):
+            v.content_hash_kind = 'vault-metadata-v1'
+    set_active_profiles(StaticCreatorProfiles({ACCOUNT: CreatorProfile(name='Fixture creator', limits=('no meetups',),
+        offers_permitted=True, approved_item_ids=(str(item),))}))
+    api.operator_on = False
+    api.backfilled(FAN)
+    grant = api.grant(item=item)
+    api.reply(lambda snap: SyntheticProposal('Here you go', action='offer', offer_grant_id=grant))
+    staged, mid = api.say('show me the set')
+    assert staged['outcome'] == 'awaiting_approval', staged
+    return staged, grant
+
+
+def edit_body(d, n, parts):
+    return {'expectedVersion': d['draftVersion'], 'commandKey': key(n), 'actor': ACTOR, 'parts': parts}
+
+
+def assert_refused_and_unchanged(api, d, response, before):
+    assert response.status_code == 409, response.text
+    assert (response.json()['ok'], response.json()['code']) == (False, 'conflict')
+    assert [r.status for r in approvals(api)] == ['awaiting'] and drafts(api) == before   # nothing superseded, nothing sent
+    assert api.fans.posts == []
+
+
+FALSE_PHOTO_LEADS = ['Enjoy this video.', 'A little video clip for you.', 'Your video is attached.', 'Here are three videos for you.',
+                     'Enjoy this ten-minute photo set.', 'It is USD 5.00 for this set.']
+
+
+@pytest.mark.parametrize('lead', FALSE_PHOTO_LEADS)
+def test_operator_edit_route_refuses_a_false_product_claim_about_the_attached_card(api, lead):
+    """The authenticated operator edit route (not just the shared text gate) refuses wording that misdescribes the selected
+    grant's kind, count, duration or price. The same state accepts a truthful edit, so the refusal is the claim and nothing else."""
+    photo_only_offer(api)
+    [d] = drafts(api)
+    assert d['action'] == 'offer' and d['offer']['mediaCount'] == 2 and d['offer']['priceCents'] == 1500
+    before = drafts(api)
+    refused = post(api, draft_path(d, 'edit'), edit_body(d, 50, [lead]))
+    assert_refused_and_unchanged(api, d, refused, before)
+    unauthenticated = api.client.post(url(draft_path(d, 'edit')), headers={HEADER: SCHEMA}, json=edit_body(d, 51, ['Enjoy these photos.']))
+    assert unauthenticated.status_code in (401, 403) and drafts(api) == before         # the bearer token is what authorizes the edit
+    truthful = post(api, draft_path(d, 'edit'), edit_body(d, 52, ['Enjoy these two photos.']))
+    assert truthful.status_code == 200, truthful.text
+    [new] = drafts(api)
+    assert new['generation'] == d['generation'] + 1 and new['draftVersion'] == 2 and new['status'] == 'awaiting'
+    [offer] = [p for p in new['parts'] if p['action'] == 'offer']
+    assert offer['body'].startswith('Enjoy these two photos.') and offer['price_cents'] == 1500 and offer['media_ids'] == d['parts'][0]['media_ids']
+    assert [r.status for r in approvals(api)] == ['invalidated', 'awaiting'] and api.fans.posts == []
+
+
+def test_operator_edit_route_checks_a_mixed_card_against_its_own_kinds_and_counts(api):
+    staged, grant = offer_draft(api)                    # two photos and one video, USD 10.00
+    [d] = drafts(api)
+    assert d['offer']['mediaCount'] == 3 and d['offer']['priceCents'] == 1000
+    before = drafts(api)
+    for n, lead in enumerate(['Here are five videos for you.', 'Enjoy this ten-minute video.', 'Four items for you.', 'It is USD 5.00 for this set.']):
+        assert_refused_and_unchanged(api, d, post(api, draft_path(d, 'edit'), edit_body(d, 60 + n, [lead])), before)
+    truthful = post(api, draft_path(d, 'edit'), edit_body(d, 70, ['Two photos and a video for you.']))
+    assert truthful.status_code == 200, truthful.text
+    [new] = drafts(api)
+    assert new['draftVersion'] == 2 and [p for p in new['parts'] if p['action'] == 'offer'][0]['body'].startswith('Two photos and a video for you.')
+    assert api.fans.posts == []
+
+
 # ======================================================================== conversation controls
 def test_stop_pauses_automation_withdraws_the_draft_and_is_replay_safe(api):
     staged, mid = stage(api)

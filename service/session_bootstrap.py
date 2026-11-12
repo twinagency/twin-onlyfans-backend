@@ -45,6 +45,7 @@ sys.path.insert(0, str(HERE))
 
 import accounts as account_registry  # noqa: E402
 from of_signer import derive_rules_from_chunk, verify_rules  # noqa: E402
+from capture_owner import MissingAuthId, OwnerMismatch, check_capture_owner  # noqa: E402,F401
 
 CHUNK_URL_TPL = "https://static2.onlyfans.com/static/prod/f/{rev}/2313.js"
 
@@ -233,6 +234,13 @@ class CurlParseError(ValueError):
     pass
 
 
+def _check_owner(account: str, user_id: str, cookies: list) -> None:
+    try:
+        check_capture_owner(account, user_id, cookies)
+    except MissingAuthId as e:
+        raise CurlParseError(str(e)) from None
+
+
 def parse_curl(curl_text: str) -> dict:
     """Parse a `curl ...` command (the kind DevTools generates).
 
@@ -356,6 +364,9 @@ def from_curl(curl_text: str, *,
     user_agent = h["user-agent"]
     sign = h["sign"]
     time_ms = h["time"]
+    # The relay files a capture under its own user-id (rerouted below), so only
+    # the auth_id cookie can disagree here.
+    _check_owner(f"of-{user_id}", user_id, parsed["cookies"])
 
     # Runtime fields the loginExtension may inject as custom -H headers.
     # The wire never carries these — they're only knowable from a hooked
@@ -487,7 +498,8 @@ def from_curl(curl_text: str, *,
 
 
 def build_connection_capture(curl_text: str, *,
-                             static_param_override: str | None = None) -> dict:
+                             static_param_override: str | None = None,
+                             account: str) -> dict:
     """Derive a dashboard connection capture from a single DevTools curl.
 
     Pure derivation twin of `from_curl` — parses the curl, resolves
@@ -503,13 +515,17 @@ def build_connection_capture(curl_text: str, *,
     the single source shared with from_curl.
     """
     return build_connection_capture_from_request(
-        parse_curl(curl_text), static_param_override=static_param_override)
+        parse_curl(curl_text), static_param_override=static_param_override, account=account)
 
 
 def build_connection_capture_from_request(parsed: dict, *,
-                                          static_param_override: str | None = None) -> dict:
+                                          static_param_override: str | None = None,
+                                          account: str) -> dict:
     """`build_connection_capture` on an already-parsed request (parse_curl's
-    shape) — the Browserbase login feeds its browser capture in here."""
+    shape) — the Browserbase login feeds its browser capture in here.
+
+    The capture must belong to one OnlyFans login: `user-id` == `auth_id`
+    cookie, and == the owner of `account` (`of-<owner>`)."""
     h = parsed["headers"]
     required = ("user-id", "x-bc", "x-of-rev", "sign", "time", "user-agent")
     missing = [k for k in required if not h.get(k)]
@@ -522,6 +538,7 @@ def build_connection_capture_from_request(parsed: dict, *,
     user_agent, sign, time_ms = h["user-agent"], h["sign"], h["time"]
     if not re.fullmatch(r"[1-9][0-9]{0,18}", user_id):
         raise CurlParseError("user-id header is not a numeric OnlyFans id")
+    _check_owner(account, user_id, parsed["cookies"])
     # The Fastt Login extension's curl carries no x-hash; it is a per-user
     # value OnlyFans serves publicly, so fetch it when the paste lacks one.
     x_hash = h.get("x-hash")

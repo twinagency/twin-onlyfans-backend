@@ -15,6 +15,7 @@ from db.onlyfans_models import OfRuntime,OfScan,OfRecovery,OfIngress
 from db.onlyfans_delivery_models import OfDeliveryPolicy,OfDeliveryPolicyChange
 from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChange
 from onlyfans_read.contract import ID_PATTERN
+from capture_owner import check_capture_owner
 from .store import NEW_CONVERSATION_AUTOMATION_LOCKED,Refused,utcnow
 from .native_context import canonical
 from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError,NativeProtocolError,NativeRateLimitError
@@ -266,6 +267,9 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
             payload={**payload,'proxyUrl':previous.get('proxyUrl'),'model':previous.get('model')}
         try:
             expires=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00'))
+            # Product accounts are all of-<owner> (provision_account); non-of- ids exist only in tests/load_test (acc-a), so
+            # they get the auth_id==ownerId check and the account check binds to of-<ownerId>.
+            check_capture_owner(account if account.startswith('of-') else 'of-'+str(payload['ownerId']),payload['ownerId'],payload['capture']['cookies'])
             session_from_capture(account_id=account,owner_id=payload['ownerId'],policy_revision=1,capture=payload['capture'],
                 x_hash=payload['xHash'],proxy_url=payload['proxyUrl'],expires_at=expires)
             model=payload['model']

@@ -147,7 +147,7 @@ def test_start_status_capture_matches_paste_curl(client,world):
           " -H 'sign: "+SIGN+"' -H 'time: 1762900000000' -H 'user-agent: "+UA+"' -H 'x-hash: synthetic-xhash'"
           " -H 'x-relay-static-param: synthetic-static' -H 'x-relay-sign-start: 51234' -H 'x-relay-sign-end: 6789abcd'"
           " -b 'auth_id="+UID+"; sess=synthetic-sess-value'")
-    expected=session_bootstrap.build_connection_capture(curl)
+    expected=session_bootstrap.build_connection_capture(curl,account=ACCOUNT)
     assert {k:done[k] for k in ('capture','xHash','ownerId')}==expected
     assert expected['ownerId']==int(UID) and expected['capture']['signing']['rules']['static_param']=='synthetic-static'
     assert [c['name'] for c in done['capture']['cookies']]==['auth_id','sess']  # only onlyfans.com, path /

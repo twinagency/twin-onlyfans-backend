@@ -123,8 +123,10 @@ async def capture_from_curl(request:Request,account_id:str):
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid curl capture request.'},400)
     try:
         import session_bootstrap
-        result=await asyncio.to_thread(session_bootstrap.build_connection_capture,body['curl'],static_param_override=body.get('staticParamOverride'))
+        result=await asyncio.to_thread(session_bootstrap.build_connection_capture,body['curl'],static_param_override=body.get('staticParamOverride'),account=account_id)
         return response({'ok':True,'capture':result['capture'],'xHash':result['xHash'],'ownerId':result['ownerId']})
+    except session_bootstrap.OwnerMismatch:
+        return response({'ok':False,'code':'owner_mismatch','error':'That curl is signed in as a different OnlyFans account.'},409)
     except session_bootstrap.CurlParseError as exc:
         return response({'ok':False,'code':'invalid_request','error':f'Could not read that curl: {exc}'},400)
     except Exception:

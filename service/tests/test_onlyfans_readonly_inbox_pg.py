@@ -206,7 +206,7 @@ def test_mixed_cohort_keeps_paging_and_never_adopts_unconnected_or_foreign_creat
         account = provision(store, owner_id=owner, creator_id="creator-"+str(index), command_key=f"{index+1:064x}")
         accounts.append(account)
         if index < 3:
-            payload = data(); payload["ownerId"] = owner; payload["capture"]["headers"]["user_id"] = str(owner)
+            payload = data(owner=owner)
             save(store, account, payload)
     with Session(database[1]) as s, s.begin(): s.get(OfProviderConnection, accounts[0]).sealed_config = "tampered"
     assert load_worker_accounts(store, TENANT) == []

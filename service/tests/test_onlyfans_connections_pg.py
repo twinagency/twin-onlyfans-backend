@@ -45,8 +45,9 @@ def provision(store,**overrides):
     return provision_account(store,TENANT,**args)
 
 
-def data(*,model=None):
-    return {'ownerId':OWNER,'capture':capture(),'xHash':'synthetic-hash','proxyUrl':'http://synthetic:proxy-secret@proxy.example:8080',
+def data(*,model=None,owner=OWNER):
+    c=capture();c['headers']['user_id']=str(owner);c['cookies'].append({'name':'auth_id','value':str(owner),'domain':'.onlyfans.com','path':'/'})
+    return {'ownerId':owner,'capture':c,'xHash':'synthetic-hash','proxyUrl':'http://synthetic:proxy-secret@proxy.example:8080',
         'expiresAt':expires().isoformat(),'model':model}
 
 
@@ -233,6 +234,16 @@ def test_same_provider_owner_cannot_be_armed_under_another_canonical_account(dat
     store.close();other.close()
 
 
+def test_first_save_refuses_capture_of_another_owner(database,monkeypatch):
+    # W5BB-1 at the sink: with no existing row, another login's capture never lands under this account.
+    settings(monkeypatch);store=Store(database[0]);account=provision(store)
+    forged=data();forged['capture']['cookies'][-1]['value']=str(OWNER+1)
+    for payload in (data(owner=OWNER+1),forged):
+        with pytest.raises(Refused,match='invalid connection configuration'):save(store,account,payload)
+    with Session(database[1]) as session:assert session.get(OfProviderConnection,account) is None
+    save(store,account,data());store.close()
+
+
 def test_concurrent_registration_and_owner_claims_serialize_into_one_record(database,monkeypatch):
     settings(monkeypatch);store=Store(database[0])
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -333,7 +344,7 @@ def test_worker_cohorts_advance_over_refused_and_pending_accounts_and_wrap_witho
     monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:calls.append(self.account_id))
     for index in range(3):
         owner=OWNER+index;account=provision(store,owner_id=owner,command_key=f'{index+1:064x}')
-        payload=data();payload['ownerId']=owner;payload['capture']['headers']['user_id']=str(owner)
+        payload=data(owner=owner)
         save(store,account,payload);accounts.append(account)
     with Session(database[1]) as session,session.begin():
         session.get(OfProviderConnection,accounts[0]).sealed_config='tampered'
@@ -357,7 +368,7 @@ def test_worker_cohort_stop_finishes_one_verification_and_retains_unvisited_curs
     settings(monkeypatch);store=Store(database[0]);accounts=[];calls=[];stop=threading.Event()
     for index in range(2):
         owner=OWNER+index;account=provision(store,owner_id=owner,command_key=f'{index+1:064x}')
-        payload=data();payload['ownerId']=owner;payload['capture']['headers']['user_id']=str(owner)
+        payload=data(owner=owner)
         save(store,account,payload);accounts.append(account)
     def verify(self):calls.append(self.account_id);stop.set()
     monkeypatch.setattr(NativeProviderConnector,'verify_identity',verify)

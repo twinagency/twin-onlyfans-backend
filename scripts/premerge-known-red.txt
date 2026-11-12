@@ -1,0 +1,6 @@
+# Pre-existing reds, each measured failing on clean a253c84c. One per line: pytest node id (deselected), or a
+# script test file followed by the exact last output line it must fail with. Remove an entry once it is fixed.
+# a253c84c: of_earnings_total DuplicateTable when upgrading from rev 91
+service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence
+# a253c84c: script, owner fence refuses before the suite asserts
+service/tests/test_native_pilot_runtime.py onlyfans_runtime.store.Refused: engine_owner_lookup_failed

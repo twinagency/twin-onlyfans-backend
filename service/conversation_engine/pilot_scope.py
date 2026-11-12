@@ -835,8 +835,12 @@ def _activate_fansapi_scope(s, store, runtime, row, config, *, actor, reason, me
             OfLaunchCommand.binding_id == runtime.binding_id,
             OfLaunchCommand.kind == 'preparation_connect')).all()
         for proof in proofs:
-            saved = json.loads(proof.result_json)
-            if (saved.get('identityVerified') is True and saved.get('epoch') == conn.epoch
+            try:
+                saved = json.loads(proof.result_json)
+            except (ValueError, TypeError):
+                continue
+            if (type(saved) is dict and saved.get('identityVerified') is True
+                    and type(saved.get('epoch')) is int and saved.get('epoch') == conn.epoch
                     and saved.get('provider_account') == conn.provider_account_id
                     and saved.get('creator_id') == conn.provider_creator_id):
                 preparation_proof = proof.command_key

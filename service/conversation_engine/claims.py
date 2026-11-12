@@ -81,6 +81,11 @@ def grounding_from_snapshot(snapshot, proposal=None):
                  *[p for p in snapshot.get('price_information') or [] if isinstance(p, dict)],
                  *[o for o in (snapshot.get('offer_reference') or {}).get('offers') or [] if isinstance(o, dict)],
                  *[c for c in (snapshot.get('offer_reference') or {}).get('cards') or [] if isinstance(c, dict)]]
+    offering = proposal is not None and getattr(proposal, 'action', 'reply') == 'offer'
+    if offering:
+        # The attached card is grounded by its selected grant only. Another
+        # quoted/catalogue product cannot justify describing these photos as video.
+        referents = [g for g in grants if isinstance(g, dict)]
     for ref in referents:
         media = ref.get('media') if isinstance(ref.get('media'), dict) else {}
         if type(media.get('pictures')) is int and media['pictures'] > 0:
@@ -89,7 +94,7 @@ def grounding_from_snapshot(snapshot, proposal=None):
             kinds.add('video')
         if type(ref.get('durationSeconds')) is int and ref['durationSeconds'] > 0:
             durations.add(ref['durationSeconds'])
-        for field in ('label', 'description'):
+        for field in (() if offering else ('label', 'description')):
             if isinstance(ref.get(field), str):
                 kinds.update(_kinds_in(ref[field]))
     from .writer_context import is_price_question

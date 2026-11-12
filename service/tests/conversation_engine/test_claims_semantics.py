@@ -197,3 +197,10 @@ def test_presented_media_kind_requires_grounded_kind(body):
 ])
 def test_presentation_checks_preserve_questions_reports_and_unrelated_chat(body):
     run(body, action='offer', grounding=Grounding(product_context=True, media_kinds=frozenset({'picture'})))
+
+
+def test_other_video_price_information_does_not_ground_photo_card_wording():
+    ctx = _ctx(grants=('g1',), price_information=[{'itemId':'other', 'label':'Pool video',
+        'priceCents':600,'currency':'USD','media':{'videos':1,'pictures':0}}])
+    verdict=judge(_raw('Here you go, a short video clip for you.',action='offer',offer_grant_id='g1',pitch=True),ctx)
+    assert verdict.outcome=='invalid' and any('media type' in r for r in verdict.reasons)

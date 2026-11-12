@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
-# Single-entry test harness (FIX-MODE F0). Merge gate = `scripts/check.sh fast` GREEN.
-#   fast  premerge.sh, then the live smoke when the local stack is up (skipped with a note when down).
-#         HARD wall budget CHECK_BUDGET_S (900 = 15 min) at nice 10; exceeding it is RED.
-#         premerge.sh step (c) already runs every test in scripts/premerge-promoted.txt: not run twice here.
-#   live  read-only smoke of the local stack (scripts/check_live.py, GET only, loopback only, <3 min).
-#   full  whole suite: run-service-tests.py (--postgres when ONLYFANS_TEST_PG_URL is set) + app vitest. No budget.
-# Exit 0 GREEN, 1 RED, 2 INFRA (environment missing: premerge INCOMPLETE e.g. no PG URL, stack down in live mode).
-# Evidence: .check-evidence/<UTC-ts>-<shortsha>/ (step logs, timings.txt, verdict.txt). Tokens are never logged.
-# env: PY, ONLYFANS_TEST_PG_URL, CHECK_BUDGET_S, CHECK_PREMERGE_CMD (test seam), CHECK_EVIDENCE_ROOT, and
-#      check_live.py's CHECK_API, CHECK_DASH, CHECK_SIGNIN, CHECK_DB_URL, CHECK_ENV_FILE, CHECK_TOKEN_VAR.
+# Test harness (FIX-MODE F0); merge gate = `scripts/check.sh fast` GREEN. Exit 0 GREEN, 1 RED, 2 INFRA (env missing).
+#   fast  premerge.sh (its step (c) already runs scripts/premerge-promoted.txt, so not twice), then live unless the
+#         whole stack is down. HARD budget CHECK_BUDGET_S=900 at nice 10: over = RED, no timeout binary = INFRA.
+#   live  scripts/check_live.py: read-only, GET + loopback only, capped at 180 s. full: run-service-tests + vitest.
+# Evidence: .check-evidence/<UTC-ts>-<shortsha>/ (logs, timings.txt, verdict.txt). env: PY, ONLYFANS_TEST_PG_URL,
+# ALLOW_SKIP, CHECK_BUDGET_S, CHECK_EVIDENCE_ROOT + check_live.py's CHECK_* (see its docstring).
 set -uo pipefail
 [ -z "${CHECK_NICED:-}" ] && exec env CHECK_NICED=1 nice -n 10 bash "$0" "$@"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
@@ -26,21 +22,22 @@ step() { local name=$1 lim=$2 s=$SECONDS rc; shift 2
   echo "$name rc=$rc $((SECONDS-s))s" >>"$EV/timings.txt"; return "$rc"; }
 note() { notes+=("$1"); }
 
-live_rc() {  # map check_live.py's exit code; $1 = verdict for "stack down"
-  case $2 in 0) ;; 2) [ "$1" = skip ] && note "live skipped: local stack down" || { infra=1; note "live: stack down"; };;
-    124|137) red=1; note "live killed: budget exceeded";; *) red=1; note "live RED rc=$2";; esac; }
+live() {  # $1 = cap seconds, $2 = what "whole stack down" means (skip | infra); SKIP lines become notes
+  step live "$1" "$PY" scripts/check_live.py; local rc=$? l
+  while IFS= read -r l; do note "live $l"; done < <(grep '^SKIP' "$EV/live.log")
+  case $rc in 0) ;; 2) infra=1;; 3) [ "$2" = skip ] && note "live skipped: local stack down" || { infra=1; note "live: stack down"; };;
+    124|137) red=1; note "live killed: time cap";; *) red=1; note "live RED rc=$rc";; esac; }
 
 case "$mode" in
 fast)
   budget="${CHECK_BUDGET_S:-900}"
-  step premerge "$budget" bash -c "${CHECK_PREMERGE_CMD:-scripts/premerge.sh}"; rc=$?
+  [ -z "$TO" ] && { infra=1; note "no timeout/gtimeout binary: budget unenforceable, nothing run"; budget=0; }
+  [ "$budget" -gt 0 ] && { step premerge "$budget" scripts/premerge.sh; rc=$?
   case $rc in 0) ;; 2) infra=1; note "premerge INCOMPLETE (tests skipped, e.g. no ONLYFANS_TEST_PG_URL)";;
     124|137) red=1; note "premerge killed: budget ${budget}s exceeded";; *) red=1; note "premerge FAILED rc=$rc";; esac
-  left=$((budget - (SECONDS - T0)))
-  if [ "$left" -gt 0 ]; then step live "$left" "$PY" scripts/check_live.py; live_rc skip $?; fi
-  [ $((SECONDS - T0)) -ge "$budget" ] && { red=1; note "wall $((SECONDS - T0))s >= budget ${budget}s"; } ;;
-live)
-  step live 0 "$PY" scripts/check_live.py; live_rc infra $? ;;
+  left=$((budget - (SECONDS - T0))); [ "$left" -gt 0 ] && live $((left < 180 ? left : 180)) skip
+  [ $((SECONDS - T0)) -ge "$budget" ] && { red=1; note "wall $((SECONDS - T0))s >= budget ${budget}s"; }; } ;;
+live) live 180 infra ;;
 full)
   args=(); if [ -n "${ONLYFANS_TEST_PG_URL:-}" ]; then args=(--postgres); else infra=1; note "no ONLYFANS_TEST_PG_URL: *_pg.py modules not run"; fi
   step service 0 "$PY" scripts/run-service-tests.py ${args[@]+"${args[@]}"} || { red=1; note "service tests FAILED"; }

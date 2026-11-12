@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-"""Read-only smoke of the running local stack, for `scripts/check.sh live`. Exit 0 GREEN, 1 RED, 2 INFRA (down).
-
-Hard rules, enforced here: GET only; every URL and CHECK_DB_URL must be loopback, else refused before any call;
-no proxies, no redirects followed; the bearer is read per call from env var $CHECK_TOKEN_VAR (or the file
-$CHECK_ENV_FILE) and never printed; the DB is read in a READ ONLY transaction (SELECT / inspect only).
-
-Why no endpoint reaches onlyfans.com (verified in the server code at F0):
-  API /healthz                  onlyfans_app.health(): a literal dict.
-  API /onlyfans/api/v1/status   onlyfans_read/api.status(): bearer + schema header only, touches no storage.
-  API /onlyfans/api/v1/ready    onlyfans_app.ready(): bearer + db.schema.check_schema (local DB inspect).
-  API /onlyfans/api/v1/accounts onlyfans_read list_accounts -> SqlOnlyFansReadRepo, SQL only (onlyfans_read/
-                                imports no HTTP client).
-  dash /login                   static sign-in page; middleware skips session renewal on login paths.
-                                (NOT /api/health: it reads Supabase and calls Telegram.)
-  sign-in /health               creator-sign-in/server.mjs answers {ok:true} before auth; launches no browser.
+"""Read-only smoke of the local stack for `scripts/check.sh live`.
+Exit 0 GREEN, 1 RED (incl. partial DOWN), 2 INFRA (a check SKIPped; ALLOW_SKIP=1 accepts), 3 all probes DOWN.
+Enforced: GET only; URLs and CHECK_DB_URL loopback or refused before any call; no proxy, no redirect; bearer read
+per call from env var $CHECK_TOKEN_VAR (or file $CHECK_ENV_FILE), never printed; DB READ ONLY + statement_timeout.
+Why no endpoint reaches onlyfans.com (read in this repo's code at F0):
+  API /healthz, /onlyfans/api/v1/status  literal dicts after bearer/schema-header checks; no storage.
+  API /onlyfans/api/v1/ready     db.schema.check_schema: local DB inspect.
+  API /onlyfans/api/v1/accounts  SqlOnlyFansReadRepo, SQL only; onlyfans_read/ imports no HTTP client.
+  :3001 /login                   twin-dashboard (separate repo), its sign-in page; checked there. Never /api/health.
+  sign-in /health                creator-sign-in/server.mjs answers {ok:true} before auth; launches no browser.
 """
 import json, os, re, sys, time, urllib.error, urllib.request
 from pathlib import Path
@@ -21,9 +16,8 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
-TIMEOUT = 10  # per call: 6 calls + one DB connect stay far under the 3-min live budget
+TIMEOUT = 10  # per call; check.sh caps the whole run at 180 s
 KEY_TABLES = ("alembic_version", "users", "accounts", "of_creator_bindings", "messages")
-
 
 def loopback(url):
     u = urlsplit(url)
@@ -31,132 +25,115 @@ def loopback(url):
         raise SystemExit(f"live: refused non-loopback url {u.scheme}://{u.hostname}")
     return url
 
-
 def db_loopback(url):
+    """One explicit loopback host or absolute socket path; no host list, hostaddr, service or conninfo dbname."""
     from sqlalchemy.engine import make_url
-    u = make_url(url)
-    host = u.host or str(u.query.get("host") or "")
-    if u.get_backend_name() != "postgresql" or not (host in LOOPBACK or host.startswith("/") or not host):
-        raise SystemExit("live: refused non-loopback CHECK_DB_URL")
+    try:
+        u = make_url(url)
+        q = {k.lower(): v for k, v in u.query.items()}
+        hosts = [h for h in (u.host, q.get("host")) if h]
+        ok = (u.get_backend_name() == "postgresql" and hosts and not {"hostaddr", "service", "servicefile"} & set(q)
+              and "=" not in (u.database or "")
+              and all(isinstance(h, str) and "," not in h and (h in LOOPBACK or h.startswith("/")) for h in hosts))
+    except Exception:  # noqa: BLE001
+        ok = False
+    if not ok:
+        raise SystemExit("live: refused CHECK_DB_URL (need one loopback host or socket path)")
     return url
 
-
 def token():
-    name = os.environ.get("CHECK_TOKEN_VAR", "ONLYFANS_API_TOKEN")
-    if (os.environ.get(name) or "").strip():
-        return os.environ[name].strip()
-    f = os.environ.get("CHECK_ENV_FILE")
-    if f and Path(f).is_file():
-        for line in Path(f).read_text().splitlines():
-            k, _, v = line.partition("=")
-            if k.strip().removeprefix("export ").strip() == name:
-                return v.strip().strip("'\"")
-    return ""
-
-
-def schema_version():
-    text = (ROOT / "service/onlyfans_read/contract.py").read_text()
-    return re.search(r'^SCHEMA_VERSION = "([^"]+)"', text, re.M).group(1)
-
+    name, f = os.environ.get("CHECK_TOKEN_VAR", "ONLYFANS_API_TOKEN"), os.environ.get("CHECK_ENV_FILE")
+    t = (os.environ.get(name) or "").strip()
+    for line in Path(f).read_text().splitlines() if not t and f and Path(f).is_file() else []:
+        k, _, v = line.partition("=")
+        t = v.strip().strip("'\"") if k.strip().removeprefix("export ").strip() == name else t
+    if t and not re.fullmatch(r"[\x21-\x7e]+", t):  # a bad header value would echo it in a traceback
+        raise SystemExit(f"live: bearer in ${name} has non-printable characters (value not shown)")
+    return t
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):  # a 3xx is reported as-is, never followed
-        return None
-
+    def redirect_request(self, *a, **k): return None  # a 3xx is reported as-is, never followed
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
 
-
 def get(url, bearer=None):
-    """GET only. Returns (status|None, body|reason). Headers are never logged."""
+    """GET only -> (status, body); status None = down. Nothing about the request is echoed."""
     req = urllib.request.Request(loopback(url), method="GET")
-    if bearer:
-        req.add_header("Authorization", "Bearer " + bearer)
-        req.add_header("X-OnlyFans-Schema-Version", schema_version())
     try:
+        if bearer:
+            schema = re.search(r'^SCHEMA_VERSION = "([^"]+)"', (ROOT / "service/onlyfans_read/contract.py").read_text(), re.M)
+            req.add_header("Authorization", "Bearer " + bearer)
+            req.add_header("X-OnlyFans-Schema-Version", schema.group(1))
         with OPENER.open(req, timeout=TIMEOUT) as r:
             return r.status, r.read(1 << 20)
     except urllib.error.HTTPError as e:
         return e.code, e.read(1 << 20)
     except (urllib.error.URLError, OSError) as e:
         return None, type(getattr(e, "reason", e)).__name__
-
+    except Exception as e:  # noqa: BLE001 - type name only, never the message
+        return -1, type(e).__name__.encode()
 
 def jd(body):
-    try:
-        j = json.loads(body)
-    except (ValueError, TypeError):
-        return {}
+    try: j = json.loads(body)
+    except (ValueError, TypeError): return {}
     return j if isinstance(j, dict) else {}
 
-
-API, DASH, SIGNIN = (("CHECK_API", "http://127.0.0.1:8787"), ("CHECK_DASH", "http://127.0.0.1:3001"),
-                     ("CHECK_SIGNIN", "http://127.0.0.1:8479"))
+API, DASH, SIGNIN = ("CHECK_API", "http://127.0.0.1:8787"), ("CHECK_DASH", "http://127.0.0.1:3001"), \
+    ("CHECK_SIGNIN", "http://127.0.0.1:8479")
 CHECKS = [  # (label, base, path, needs bearer, expected shape)
     ("api health", API, "/healthz", False, lambda b: jd(b) == {"ok": True, "role": "api"}),
-    ("api status", API, "/onlyfans/api/v1/status", True,
-     lambda b: jd(b).get("ok") is True and isinstance(jd(b).get("schemaVersion"), str)),
+    ("api status", API, "/onlyfans/api/v1/status", True, lambda b: jd(b).get("ok") is True and "schemaVersion" in jd(b)),
     ("api ready", API, "/onlyfans/api/v1/ready", True, lambda b: jd(b).get("schemaReady") is True),
     ("api accounts", API, "/onlyfans/api/v1/accounts", True, lambda b: isinstance(jd(b).get("accounts"), list)),
     ("dashboard login", DASH, "/login", False, lambda b: b"<html" in b[:4000].lower()),
     ("sign-in health", SIGNIN, "/health", False, lambda b: jd(b) == {"ok": True}),
 ]
 
-
 def db_checks(url):
     if not url:
-        print("SKIP db: CHECK_DB_URL unset")
-        return 0, 0
+        return print("SKIP db: CHECK_DB_URL unset") or "SKIP"
+    for k in [k for k in os.environ if k.startswith("PG")]:  # PGHOSTADDR/PGSERVICE etc. could redirect libpq
+        del os.environ[k]
     sys.path.insert(0, str(ROOT / "service"))
     from sqlalchemy import create_engine, inspect, text
     from db.schema import HEAD, REVISION_RANK
-    eng = create_engine(url, connect_args={"options": "-c default_transaction_read_only=on", "connect_timeout": TIMEOUT})
+    eng = create_engine(url, connect_args={"connect_timeout": TIMEOUT,
+                        "options": "-c default_transaction_read_only=on -c statement_timeout=10000"})
     try:
-        try:
-            c = eng.connect()
-        except Exception as e:  # noqa: BLE001 - type only: a message could carry the URL
-            print(f"DOWN db: {type(e).__name__}")
-            return 0, 1
-        with c:
-            ro = c.execute(text("SHOW transaction_read_only")).scalar()
-            revs = c.execute(text("SELECT version_num FROM alembic_version")).scalars().all() if ro == "on" else []
-            missing = [t for t in KEY_TABLES if not inspect(c).has_table(t)]
-    finally:
-        eng.dispose()
-    ok = ro == "on" and len(revs) == 1 and revs[0] in REVISION_RANK and not missing
+        c = eng.connect()
+    except Exception as e:  # noqa: BLE001 - type only: a message could carry the URL
+        return print(f"DOWN db: {type(e).__name__}") or "DOWN"
+    with c:
+        ro = c.execute(text("SHOW transaction_read_only")).scalar()
+        revs = c.execute(text("SELECT version_num FROM alembic_version")).scalars().all() if ro == "on" else []
+        missing = [t for t in KEY_TABLES if not inspect(c).has_table(t)]
+    eng.dispose()
+    v = "PASS" if ro == "on" and len(revs) == 1 and revs[0] in REVISION_RANK and not missing else "FAIL"
     note = "" if revs == [HEAD] else f" (worktree head {HEAD})"
-    print(f"{'PASS' if ok else 'FAIL'} db: read_only={ro} revision={revs}{note} missing_tables={missing}")
-    return (0 if ok else 1), 0
-
+    return print(f"{v} db: read_only={ro} revision={revs}{note} missing_tables={missing}") or v
 
 def main():
-    t0 = time.monotonic()
+    t0, seen, db_url = time.monotonic(), [], os.environ.get("CHECK_DB_URL", "")
     urls = [loopback(os.environ.get(env, default).rstrip("/") + path) for _, (env, default), path, _, _ in CHECKS]
-    db_url = os.environ.get("CHECK_DB_URL", "")
-    if db_url:
-        db_loopback(db_url)
-    red = down = 0
+    db_loopback(db_url) if db_url else None
     for url, (label, _, _, auth, shape) in zip(urls, CHECKS):
-        bearer = token() if auth else None
+        bearer, s = (token() if auth else None), time.monotonic()
         if auth and not bearer:
             print(f"SKIP {label}: no bearer in ${os.environ.get('CHECK_TOKEN_VAR', 'ONLYFANS_API_TOKEN')}")
+            seen.append("SKIP")
             continue
-        s = time.monotonic()
         status, body = get(url, bearer)
-        ms = int((time.monotonic() - s) * 1000)
-        if status is None:
-            down += 1
-            print(f"DOWN {label}: GET {url} ({body})")
-        elif status == 200 and shape(body):
-            print(f"PASS {label}: GET {url} 200 {ms}ms")
-        else:
-            red += 1
-            print(f"FAIL {label}: GET {url} {status} {ms}ms keys={sorted(jd(body))[:8]}")
-    r, d = db_checks(db_url)
-    red, down = red + r, down + d
+        v = "DOWN" if status is None else "PASS" if status == 200 and shape(body) else "FAIL"
+        seen.append(v)
+        print(f"{v} {label}: GET {url} " + (f"({body})" if v == "DOWN" else f"{status} {int((time.monotonic() - s) * 1000)}ms")
+              + (f" keys={sorted(jd(body))[:8]}" if v == "FAIL" else ""))
+    seen.append(db_checks(db_url))
     print(f"live: wall {time.monotonic() - t0:.1f}s")
-    return 1 if red else 2 if down else 0
-
+    if {s for s in seen if s != "SKIP"} == {"DOWN"}:  # every probe that ran is down: the stack is down
+        return 3
+    if "FAIL" in seen or "DOWN" in seen:  # one service down while others answer is RED, not "stack down"
+        return 1
+    return 2 if "SKIP" in seen and os.environ.get("ALLOW_SKIP") != "1" else 0
 
 if __name__ == "__main__":
     sys.exit(main())

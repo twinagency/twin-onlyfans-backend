@@ -43,8 +43,11 @@ class Constants(unittest.TestCase):
         self.assertEqual(m.READINESS, READINESS)
         self.assertNotIn(READINESS, m.V2_CLASSES)           # the thin v2 receipt can never carry it
         self.assertEqual(set(m.V2_CLASSES) | {READINESS}, set(m.CLASSES))
-        for word in ('UNPROVEN', 'loop_stale', 'not retained', 'does not prove', 'grants no send'):
+        for word in ('UNPROVEN', 'not retained', 'does not prove', 'grants no send'):
             self.assertIn(word, m.READINESS_CAVEAT)
+        # The original HTTP status/code/body were lost: never state or suggest one as fact.
+        for word in ('503', 'loop_stale'):
+            self.assertNotIn(word, m.READINESS_CAVEAT)
         self.assertTrue(m.READINESS_CAVEAT.isascii())
 
     def test_journal_class_accepts_exactly_one_readiness_stop_and_nothing_else(self):
@@ -327,12 +330,16 @@ class ReadinessResolver(unittest.TestCase):
         self.argv=['resolver','--evidence-ref',REF]
         before=(self.sup/'budget-state.json').read_bytes()
         out,_=self.run_main()
-        self.assertEqual(json.loads(out)['result'],'dry_run')
+        shown=json.loads(out)
+        # Collecting and validating evidence is a preview, not a dry run; nothing is audited or published.
+        self.assertEqual(shown['result'],'preview')
+        self.assertIs(shown['audited'],False);self.assertIs(shown['published'],False);self.assertIs(shown['applied'],False)
         self.assert_nothing_happened()
         self.assertEqual((self.sup/'budget-state.json').read_bytes(),before)
         evidence=self.evidence_dir()
         self.argv=['resolver','--apply','--resume',str(evidence)]
-        self.run_main()
+        out,_=self.run_main()
+        self.assertIs(json.loads(out)['applied'],True)
         self.assertIsNotNone(self.audited)
         self.assertFalse(m.unresolved(self.sup/'outage-open.json'))
 

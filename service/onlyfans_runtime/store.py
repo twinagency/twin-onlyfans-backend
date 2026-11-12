@@ -46,6 +46,20 @@ def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def page_cursor(ids, next_before, before_id=None):
+    """Next history cursor: the oldest provider id read on a page.
+
+    `next_before` also covers rows the reader skipped (tips, unsent, deleted),
+    so they are not re-read and a page of only skipped rows still advances.
+    """
+    if next_before is None:
+        return min(ids) if ids else None
+    _id(next_before)
+    if (ids and next_before > min(ids)) or (before_id is not None and next_before >= before_id):
+        raise Refused("page cursor did not advance")
+    return next_before
+
+
 def _id(value):
     if type(value) is not int or not 0 < value < 2**63:
         raise Refused("invalid numeric identity")
@@ -828,8 +842,8 @@ class Store:
             return RecoveryClaim(account_id, row.fan_id, row.generation, row.lease_token, row.high_water, row.upper_bound, row.before_id)
 
     def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool, connection_revision=None,
-                      observations=(), provider_read_claim=None):
-        if type(has_more) is not bool or len(events) > PAGE_LIMIT or (has_more and not events):
+                      observations=(), provider_read_claim=None, next_before=None):
+        if type(has_more) is not bool or len(events) > PAGE_LIMIT or (has_more and not events and next_before is None):
             raise Refused("invalid recovery page")
         normalized = [event.normalized() for event in events]
         ids = [e.message_id for e in normalized]
@@ -837,6 +851,7 @@ class Store:
             raise Refused("invalid recovery order or scope")
         if claim.before_id is not None and any(i >= claim.before_id for i in ids):
             raise Refused("recovery cursor did not advance")
+        cursor = page_cursor(ids, next_before, claim.before_id)
         from .offer_terms import OfferObservation
         if (type(observations) not in {list, tuple} or len(observations) > len(normalized)
                 or any(type(o) is not OfferObservation for o in observations)):
@@ -866,13 +881,13 @@ class Store:
                     # their next drain. Reading never consents to an AI reply.
                     source = "import" if connection_revision is not None else "catchup"
                     self._record(s, runtime, event, event.payload(), source, utcnow())
-            finished = not has_more or any(i <= row.high_water for i in ids)
+            finished = not has_more or cursor <= row.high_water
             if finished:
                 row.high_water = max(row.high_water, row.upper_bound)
                 row.upper_bound = row.before_id = None
                 row.status, row.last_complete_at = "complete", utcnow()
             else:
-                row.before_id = min(ids)
+                row.before_id = cursor
                 row.status = "needed"
             row.lease_token = row.lease_until = None
             # Do not mark the account current here: discovery of every chat is

@@ -373,6 +373,28 @@ def test_fairness_and_new_input_fencing(database):
     store.close(); other.close()
 
 
+def test_recovery_cursor_covers_rows_the_reader_skipped(database):
+    url, engine = database
+    store = seed(url, engine)
+    store.need_recovery("tenant-a", "acc-a", 101)
+    first = store.claim_recovery("tenant-a", "acc-a")
+    # Oldest rows 150..141 were skipped (tips): the cursor moves past them.
+    assert store.recovery_page("tenant-a", first, [event(mid) for mid in range(250, 150, -1)],
+                               has_more=True, next_before=141) == "continue"
+    with Session(engine) as s:
+        assert s.get(OfRecovery, ("acc-a", 101)).before_id == 141
+    second = store.claim_recovery("tenant-a", "acc-a")
+    with pytest.raises(Refused, match="invalid recovery page"):
+        store.recovery_page("tenant-a", second, [], has_more=True)
+    # A page of only skipped rows still advances instead of pinning the claim.
+    assert store.recovery_page("tenant-a", second, [], has_more=True, next_before=100) == "continue"
+    third = store.claim_recovery("tenant-a", "acc-a")
+    assert third.before_id == 100
+    with pytest.raises(Refused, match="cursor did not advance"):
+        store.recovery_page("tenant-a", third, [event(90)], has_more=True, next_before=100)
+    store.close()
+
+
 def test_catchup_persists_lower_pages_and_commits_cursor_atomically(database):
     url, engine = database
     store = seed(url, engine)

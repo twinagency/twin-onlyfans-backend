@@ -56,6 +56,15 @@ def test_read_timeout_configuration_keeps_write_timeout_and_one_attempt(transpor
     assert state.calls == [('GET', 10), ('POST', 2)]
 
 
+def test_default_read_timeout_outlasts_slow_history_pages(transport):
+    # Measured: a 77-row (536 KB) message page takes ~6 s server-side; 5 s timed out every time.
+    state, session = transport
+    reader = connector.NativeProviderConnector(session)
+    reader._signed_request('GET', '/api2/v2/chats/9/messages?limit=100')
+    reader._signed_request('POST', '/api2/v2/chats/9/messages', b'{}')
+    assert state.calls == [('GET', 10), ('POST', 5)]
+
+
 @pytest.mark.parametrize('value', ['0', '11', 'nan', 'inf', '', 'invalid'])
 def test_invalid_read_timeout_refused(transport, monkeypatch, value):
     _, session = transport

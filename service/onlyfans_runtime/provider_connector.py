@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from collections import OrderedDict
 import math
 import os
 import re
+import threading
 import time
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlsplit
@@ -27,6 +29,50 @@ from .text_delivery import Dispatch, TextAuthority
 
 ORIGIN = "https://onlyfans.com"
 APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
+# Default GET timeout. A 77-row (536 KB) history page takes ~6 s server-side
+# (with or without proxy), so the 5 s write timeout starved every deep read.
+READ_TIMEOUT_SECONDS = 10
+# Message page size after a slow read, per (account, fan, lane): the newest-page
+# lane (recent inbox, head recovery) and the deep-cursor lane never share a cap.
+# Timeout/oversize at size L: cap = 20 (or L//2, min 5) and L becomes the
+# ceiling. Only GROW_AFTER consecutive successes at the cap double it, and it
+# never reaches the failing ceiling again. In-process only.
+SMALL_PAGE_LIMIT = 20
+GROW_AFTER = 3
+_PAGE_LIMITS = OrderedDict()  # key -> (size, ceiling, streak)
+_PAGE_LOCK = threading.Lock()
+
+
+def _page_key(account_id, fan_id, before_id):
+    return account_id, fan_id, "head" if before_id is None else "deep"
+
+
+def _page_limit(key, requested):
+    with _PAGE_LOCK:
+        entry = _PAGE_LIMITS.get(key)
+        return requested if entry is None else min(requested, entry[0])
+
+
+def _page_outcome(key, limit, error):
+    with _PAGE_LOCK:
+        entry = _PAGE_LIMITS.get(key)
+        if error is None:
+            if entry is None or limit != entry[0]:
+                return
+            size, ceiling, streak = entry[0], entry[1], entry[2] + 1
+            if streak >= GROW_AFTER and size * 2 < ceiling:
+                size, streak = size * 2, 0
+            _PAGE_LIMITS[key] = (size, ceiling, streak)
+            return
+        failure = getattr(error, "read_failure", None)
+        slow = (type(failure) is dict and failure.get("failure") == "provider_timeout") or (
+            str(error) == "native HTTPS response exceeded its byte budget")
+        if slow:
+            size = SMALL_PAGE_LIMIT if limit > SMALL_PAGE_LIMIT else max(5, limit // 2)
+            _PAGE_LIMITS[key] = (size, limit, 0)
+            _PAGE_LIMITS.move_to_end(key)
+            while len(_PAGE_LIMITS) > 4096:
+                _PAGE_LIMITS.popitem(last=False)
 
 
 class NativeAuthenticationError(NativeProtocolError):
@@ -213,7 +259,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
         self._handle = session
         self._timeout, self._max_bytes = float(timeout_seconds), max_response_bytes
         try:
-            read_timeout = float(os.environ.get('ONLYFANS_PROVIDER_READ_TIMEOUT_SECONDS', timeout_seconds))
+            read_timeout = float(os.environ.get('ONLYFANS_PROVIDER_READ_TIMEOUT_SECONDS',
+                                                max(timeout_seconds, READ_TIMEOUT_SECONDS)))
         except (TypeError, ValueError):
             raise Refused('invalid native HTTPS read timeout') from None
         if not math.isfinite(read_timeout) or not .05 <= read_timeout <= 10:
@@ -273,10 +320,20 @@ class NativeProviderConnector(NativeLoopbackConnector):
             parent_messages = super().messages
             def unread_state():
                 return load(self._signed_request("GET", API_PATH + f"/chats/{fan_id}"), max_bytes=MAX_HISTORY_BYTES)
+            lane = _page_key(self.account_id, fan_id, before_id)
+            size = _page_limit(lane, limit)
+            def read():
+                try:
+                    page = parent_messages(fan_id=fan_id, before_id=before_id, limit=size)
+                except Exception as error:
+                    _page_outcome(lane, size, error)
+                    raise
+                _page_outcome(lane, size, None)
+                return page
             return preserve_unread(
                 account_id=self.account_id, fan_id=fan_id,
                 snapshot=unread_state,
-                read=lambda: parent_messages(fan_id=fan_id, before_id=before_id, limit=limit),
+                read=read,
                 restore=self.restore_unread,
                 confirm=unread_state,
             )

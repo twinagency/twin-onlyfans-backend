@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import json
+import logging
 import os
 import re
+import time
 from urllib.parse import urlencode
 
 from of_signer import sign
@@ -19,7 +22,7 @@ from .loopback_transport import (
 )
 from .native_protocol import API_PATH, MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, load, message, request
 from .store import PAGE_LIMIT, Refused, _id
-from .text_delivery import Dispatch, TextAuthority
+from .text_delivery import Dispatch, TextAuthority, _stamp
 from .worker import ChatPage, MessagePage
 
 
@@ -47,6 +50,49 @@ def _synthetic_headers(port, path, owner_id):
              "checksum_indexes": list(range(32)), "checksum_constant": 17}
     headers = sign(f"http://127.0.0.1:{port}{path}", owner_id, rules)
     return {**headers, "user-id": str(owner_id)}
+
+
+def _skip_reason(row, *, owner_id, fan_id):
+    """Name a well-formed, in-scope row on the skip whitelist, else None.
+
+    Only explicit tip/unsent/deleted flags are skipped: the history Event has
+    no tip and these rows carry no conversation text. Every other row the
+    strict parser rejects still refuses the whole page.
+    """
+    try:
+        _id(row["id"])
+        sender = _id(row["fromUser"]["id"])
+        if sender not in {owner_id, fan_id} or owner_id == fan_id:
+            raise ValueError()
+        if "toUser" in row and _id(row["toUser"]["id"]) != (fan_id if sender == owner_id else owner_id):
+            raise ValueError()
+        _stamp(row["createdAt"])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    if row.get("isTip") is True or row.get("responseType") == "tip":
+        return "tip"
+    if row.get("isUnsent") is True:
+        return "unsent"
+    if row.get("isDeleted") is True:
+        return "deleted"
+    return None
+
+
+_SKIP_LOG_SECONDS = 60.0
+_SKIP_LOGGED = {}
+
+
+def _log_skipped(account_id, rows, skipped, indexes):
+    """At most one line per account a minute; counts and row positions only."""
+    now = time.monotonic()
+    last, suppressed = _SKIP_LOGGED.get(account_id, (None, 0))
+    if last is not None and now - last < _SKIP_LOG_SECONDS:
+        _SKIP_LOGGED[account_id] = (last, suppressed + 1)
+        return
+    _SKIP_LOGGED[account_id] = (now, 0)
+    logging.getLogger(__name__).warning("onlyfans_history_rows_skipped %s", json.dumps(
+        {"account": account_id, "rows": rows, "skipped": skipped, "indexes": indexes[:20],
+         "suppressed": suppressed}, sort_keys=True))
 
 
 class NativeLoopbackConnector:
@@ -145,15 +191,32 @@ class NativeLoopbackConnector:
             params["id"] = before_id
         path = API_PATH + f"/chats/{fan_id}/messages?" + urlencode(params)
         rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
-        events = [message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True) for row in rows]
-        ids = [event.message_id for event in events]
+        kept, events, ids, skipped, indexes = [], [], [], {}, []
+        for index, row in enumerate(rows):
+            try:
+                event = message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True)
+            except NativeProtocolError:
+                # Only whitelisted, in-scope rows are skipped; any other
+                # unsupported or malformed row still refuses the page.
+                reason = _skip_reason(row, owner_id=self._handle.owner_id, fan_id=fan_id)
+                if reason is None:
+                    raise
+                skipped[reason] = skipped.get(reason, 0) + 1
+                indexes.append(index)
+                ids.append(_id(row["id"]))
+                continue
+            kept.append(row); events.append(event); ids.append(event.message_id)
+        if skipped:
+            _log_skipped(self.account_id, len(rows), skipped, indexes)
         if ids != sorted(set(ids), reverse=True) or (before_id is not None and any(value >= before_id for value in ids)):
             raise NativeProtocolError("native message cursor did not advance")
         # Paid-offer terms come from the same validated rows before previews and
         # lockedText are discarded. Event identity and payloads are unchanged.
         from .offer_terms import from_history
-        observations = [value for value in (from_history(row, event) for row, event in zip(rows, events)) if value is not None]
-        return MessagePage(events, more, observations)
+        observations = [value for value in (from_history(row, event) for row, event in zip(kept, events)) if value is not None]
+        # The cursor covers skipped rows too, so they are never re-read and a
+        # page of only skipped rows still advances.
+        return MessagePage(events, more, observations, min(ids) if ids else None)
 
     def send(self, dispatch, *, authority, tenant_id):
         self._ready()

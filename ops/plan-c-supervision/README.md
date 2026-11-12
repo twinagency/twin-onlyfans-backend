@@ -103,7 +103,7 @@ A third recovery preserves BOTH prior immutable histories and does not activate.
 
 Scope-aware sender readiness and the host guard (U3). The host guard is UNCHANGED:
 supervision-v11/guard_core.py, sha256 c2be833f7191bf5a94f3c1f841e09effac62cf5a0b03b751663545e9af905797 (early stop 300, Jesse 2026-11-10; previous 5aef81d2 = 250).
-host-guard-c2be833f/guard_core.py is a byte-identical copy kept only so the tests run the real guard
+guard_core.py is the release-owned guard imported directly by the supervisor and its tests
 (service/tests/test_plan_c_u3_readiness_pg.py asserts the hash); it is not an install source and the
 host copy is never edited independently. The guard still requires the sender /readyz to report
 ok=true, mode=active, code=ready and sendingReady=true. What changed is the worker's definition of
@@ -116,3 +116,48 @@ sendingReady=true, eligibleFans=0, heldFans=2 and sends nothing; it is not a hea
 work.malformedHolds and workHeld still count every unresolved digest. Deploy this worker revision
 together with the existing guard; no guard/hash/manifest change is required, and rolling the worker
 image back restores the previous (stricter, fan-hold-denies-all) readiness with the same guard.
+
+## Commercial multi-account configuration (offline candidate)
+
+Each supervisor process must receive TWIN_SUPERVISOR_CONFIG, a private JSON
+file accepted by operation_config.validate. No running process falls back to
+a live legacy account, scope id, webhook id, URL or database name.
+
+Required fields: version (twin-supervision.v1), root, tenant, account, binding,
+epoch, providerAccount, webhookId, publicUrl, receiverUrl, senderUrl,
+databaseContainer, databaseRole, databaseName, supervisorUnit, senderUnit,
+senderContainer, teamAccounts, creditStop, initialExternalReserved, reservations.
+Each reservation names a relative evidence path, integer amount, boolean optional.
+
+Use an account-specific root, credential-reference file, state, checkpoint,
+sender identity, ports and unit names. The existing filenames under root
+are retained; no state is migrated by startup. The existing budget-state file
+must match account_id, binding_id and connection_epoch. A wrong root or a prior
+account's state refuses startup.
+
+teamAccounts explicitly lists up to ten accounts billed to the same reviewed
+provider team. The read-only supervisor query totals their existing durable
+scope reservations while preserving the selected account's own counter.
+These are conservative reservation estimates, separate from provider billing.
+The reviewed early-stop threshold is explicit creditStop. This monitoring
+configuration does not replace the final application admission checks.
+
+Root-owned operational tests must run as root inside an offline, read-only
+container with only temporary writable storage. Application tests retain
+their unprivileged runtime. Do not mock away ownership and chmod checks.
+
+The commercial audience contract remains at most 100 explicitly listed fans
+per creator. The vault selection remains at most 1,000 assets; old ownership
+history is retained separately. A2 unknown-text retirement remains disabled.
+
+Shared request admission also requires TWIN_PROVIDER_TEAM_LIMITS_FILE in every
+real provider process. Use the same read-only provider-team.v1 JSON for every
+member: team, accounts (the explicit at-most-ten account IDs), creditLimit and
+externalReserved. Existing per-account scope counters are summed under one
+PostgreSQL transaction lock before each preparation, active or stopped-backfill
+HTTP attempt. No separate usage ledger exists. Keep the reviewed team membership
+and baseline unchanged during qualification or a run; replacing membership or
+reducing the external baseline is a new budget authorization. Fixture transports
+may omit this file. Missing/invalid real configuration refuses provider requests,
+activation and planning. The monitor remains an additional detection boundary,
+not a substitute for transaction-level admission.

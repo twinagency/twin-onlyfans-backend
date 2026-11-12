@@ -356,6 +356,8 @@ class PreparationRequestGuard:
                 # Refusal here rolls back this whole transaction, so no level keeps a reservation for a refused read.
                 from fans_api_adapter import history_import
                 history_import.reserve(s,self.account,source,limits["provider_credits_per_request"],now)
+            from .pilot_scope import shared_provider_ceiling
+            shared_provider_ceiling(s,row,config)
             row.provider_requests_used+=1;row.provider_credits_reserved+=limits["provider_credits_per_request"];row.updated_at=now
 
 def prepare_one(store,tenant,account,*,client_factory):

@@ -2,16 +2,17 @@
 import datetime,hashlib,json,os,re,subprocess,sys
 from pathlib import Path
 import incident_state as state
-ROOT=Path('/srv/projects/twin-plan-c-pilot-20261109')
+ROOT=Path('/unconfigured-twin-supervisor')
 SUP=ROOT/'supervision-v11'
 HERE=Path(__file__).resolve().parent
 def read(path):return json.loads(Path(path).read_bytes())
 def command(args,**kw):return subprocess.check_output(args,timeout=90,**kw)
 def assert_sender_stopped():
- if command(['docker','ps','-q','--filter','name=twin-plan-c-pilot-active-sender']).strip():
+ if command(['docker','ps','-q','--filter','name='+CONFIG['senderContainer']]).strip():
   raise RuntimeError('sender must remain stopped')
- if subprocess.run(['systemctl','is-active','--quiet','plan-c-pilot-sender.service']).returncode==0:
+ if subprocess.run(['systemctl','is-active','--quiet',CONFIG['senderUnit']]).returncode==0:
   raise RuntimeError('sender service must remain stopped')
+CONFIG={}
 def main():
  # The release pin is staged only after independent review; never chosen implicitly.
  release=read(SUP/'reviewed-recovery-release.json')
@@ -46,6 +47,9 @@ def main():
   validator=['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL',
     '--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service:/app/ops/plan-c-supervision',
     '-v',str(evidence)+':/proof:ro','-v',str(HERE/'validate_interval.py')+':/opt/validate.py:ro',
+    '-e','TWIN_SUPERVISION_ACCOUNT='+CONFIG.get('account',state.ACCOUNT),
+    '-e','TWIN_SUPERVISION_BINDING='+CONFIG.get('binding',state.BINDING),
+    '-e','TWIN_SUPERVISION_EPOCH='+str(CONFIG.get('epoch',state.EPOCH)),
     '--entrypoint','python',image,'/opt/validate.py']
   findings=json.loads(command(validator))
   if findings.get('interval_valid_for_bounded_scope') is not True:raise RuntimeError('interval proof refused')
@@ -58,7 +62,7 @@ def main():
   actor=read(ROOT/'config/pilot-operator-identity.json')['actor']
   if spec['pinned']:
    receipt={'version':state.V1,'incident_sha256':incident_hash,
-    'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':1,
+    'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':CONFIG.get('epoch',1),
     'scope_revision':manifest['scope_revision'],'classification':spec['classification'],
     'actor':actor,'audit_command_key':state.digest(('monitor-resolution:'+state.APPROVED_INCIDENT+':'+evidence_hash).encode()),
     'evidence_sha256':evidence_hash,'resolved_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
@@ -70,7 +74,7 @@ def main():
        or manifest.get('incident_id')!=spec['incident_id']):raise RuntimeError('class-based evidence does not match this incident')
    interval={'start':spec['interval_start'],'end':manifest['collected_at']}
    receipt={'version':state.V2,'incident_sha256':incident_hash,'incident_id':spec['incident_id'],
-    'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':1,
+    'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':CONFIG.get('epoch',1),
     'scope_revision':manifest['scope_revision'],'classification':manifest['classification'],
     'affected_interval':interval,'delivery_url_sha256':manifest['delivery_url_sha256'],'config_version':manifest['config_version'],
     'actor':actor,'audit_command_key':state.command_key_v2(incident_hash,evidence_hash,interval['start'],interval['end'],manifest['scope_revision']),
@@ -89,6 +93,8 @@ def main():
    '-e','ONLYFANS_PROCESS_ROLE=worker','-v',str(ROOT/'config/pilot-worker-database-url')+':/run/pilot-database-url:ro',
    '-v',str(ROOT/'config/pilot-operator-identity.json')+':/run/pilot-identity.json:ro',
    '-v',str(evidence)+':/proof:ro','-v',str(HERE/'db_audit.py')+':/opt/audit.py:ro',
+   '-e','TWIN_SUPERVISION_ACCOUNT='+CONFIG.get('account',state.ACCOUNT),
+   '-e','TWIN_SUPERVISION_TENANT='+CONFIG.get('tenant','fixture'),
    '--entrypoint','python',image,'/opt/audit.py']
   result=json.loads(command(args))
   if result.get('recorded') is not True or result.get('sendingEnabled') is not False or result.get('evidenceSha256')!=evidence_hash:
@@ -101,4 +107,8 @@ def main():
  result=state.resolve(SUP,receipt,audit)
  print(json.dumps({'result':result,'evidence':str(evidence),'sendingEnabled':False,
                    'incident_sha256':incident_hash},sort_keys=True))
-if __name__=='__main__':main()
+if __name__=='__main__':
+ from operation_config import load
+ CONFIG=load();ROOT=CONFIG['root'];SUP=ROOT/'supervision-v11'
+ state.ACCOUNT=CONFIG['account'];state.BINDING=CONFIG['binding'];state.EPOCH=CONFIG['epoch']
+ main()

@@ -58,6 +58,11 @@ suite_files() {
     operator)     echo "tests/test_engine_operator_pg.py tests/test_plan_c_q2_n4_operator_http_pg.py tests/test_plan_c_u3_readiness_pg.py" ;;
     matrix)       echo "tests/test_commercial_matrix_pg.py tests/test_commercial_ten_creators_pg.py tests/test_commercial_import_to_sale_pg.py" ;;   # Step 6; files exist only once committed
     completion)   echo "tests/test_commercial_completion_pg.py tests/test_commercial_stopped_activation_pg.py tests/conversation_engine/test_claims_semantics.py" ;;
+    preparation)  echo "tests/test_commercial_preparation_pg.py tests/test_preparation_retry_state_pg.py tests/test_commercial_classification_refresh_pg.py tests/test_history_import_pg.py" ;;
+    normal)       echo "tests/test_commercial_normal_control_journey_pg.py tests/test_commercial_terms_http_pg.py tests/test_commercial_shared_provider_pg.py" ;;
+    legacy)       echo "tests/test_commercial_progress.py tests/test_commercial_full_path.py tests/test_history_capacity_turns.py" ;;
+    recovery)     echo "tests/test_commercial_ops_recovery_pg.py tests/test_onlyfans_release_package_pg.py tests/test_onlyfans_recovery_pg.py" ;;
+    delivery)     echo "tests/test_onlyfans_text_delivery_pg.py tests/test_concurrent_delivery_pg.py tests/test_plan_c_compressed_retry_pg.py tests/test_plan_c_auth_recovery_pg.py tests/test_plan_c_conflicting_webhook_pg.py" ;;
     ops)          echo "OPS" ;;       # handled specially: pytest in /app/ops/plan-c-supervision
     planc-all)    echo "PLANC_ALL" ;; # every tests/test_plan_c_*.py present in the image
     *) return 1 ;;
@@ -68,12 +73,13 @@ suite_files() {
 # RELEASE-PACKET.md.  Pass it with --tests when decided.
 
 # ---- argument parsing -------------------------------------------------------------------------------------------------
+REQUIRED_SUITES=(completion matrix step4 step5 r0 operator migrations ops preparation normal legacy recovery delivery)
 COMMIT_ARG=""; TAG=""; LABEL=""; SUITES=(); CUSTOM_TESTS=""; BUILD_ONLY=0; NO_BUILD=0; DRY=0; KEEP_PG=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --tag) TAG=$2; shift 2 ;;
     --label) LABEL=$2; shift 2 ;;
-    --suite) SUITES+=("$2"); shift 2 ;;
+    --suite) if [ "$2" = all ]; then SUITES+=("${REQUIRED_SUITES[@]}"); else SUITES+=("$2"); fi; shift 2 ;;
     --tests) CUSTOM_TESTS=$2; shift 2 ;;
     --build-only) BUILD_ONLY=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
@@ -168,7 +174,6 @@ printf 'requested_commit=%s\nrequested_tree=%s\nruntime_image=%s\n' "$FULL" "$TR
 if [ "$NO_BUILD" = 0 ]; then
   git -C "$REPO" archive "$FULL" service ops Dockerfile.onlyfans requirements.txt requirements-onlyfans-test.txt | tar -x -C "$BUILD/ctx/src"
   git -C "$REPO" archive "$BASE_FULL" service | tar -x -C "$BUILD/ctx/baseline"
-  cp -a "$TEST_PACKAGES" "$BUILD/ctx/test-packages"
   printf '#!/bin/sh\n# runs the unmodified postgres client binary with its own libraries\nLD_LIBRARY_PATH=/opt/pg16/lib exec /opt/pg16/real/$(basename "$0") "$@"\n' > "$BUILD/ctx/pg-wrapper.sh"
   generate_dockerfile > "$BUILD/ctx/Dockerfile.candidate"
   cp "$BUILD/ctx/Dockerfile.candidate" "$BUILD/Dockerfile.candidate"
@@ -176,11 +181,10 @@ if [ "$NO_BUILD" = 0 ]; then
   # pins recorded BEFORE the build: what exactly goes in
   ( cd "$BUILD/ctx/src" && find service ops -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ) > "$BUILD/source-files.sha256"
   ( cd "$BUILD/ctx/baseline" && find service -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ) > "$BUILD/baseline-files.sha256"
-  ( cd "$BUILD/ctx/test-packages" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ) > "$BUILD/test-packages.sha256"
   sha256sum "$BUILD/ctx/src/requirements.txt" "$BUILD/ctx/src/requirements-onlyfans-test.txt" "$BUILD/ctx/src/Dockerfile.onlyfans" > "$BUILD/dependency-locks.sha256"
   {
     echo "source_commit=$FULL"; echo "source_tree=$TREE"; echo "baseline_commit=$BASE_FULL"; echo "tag=$TAG"
-    echo "py_image=$PY_IMAGE id=$(docker image inspect "$PY_IMAGE" --format '{{.Id}}')"
+    echo "runtime_image=$RUNTIME_IMAGE id=$(docker image inspect "$RUNTIME_IMAGE" --format '{{.Id}}')"
     echo "pg_image=$PG_IMAGE id=$(docker image inspect "$PG_IMAGE" --format '{{.Id}}')"
     echo "built_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; echo "docker=$(docker --version)"
     echo "source_files=$(wc -l < "$BUILD/source-files.sha256") baseline_files=$(wc -l < "$BUILD/baseline-files.sha256")"
@@ -248,11 +252,13 @@ FAILED=0
 RESULTS=$BUILD_RECORD/results.tsv; [ -f "$RESULTS" ] || printf 'suite\texit\tsummary\tlog\n' > "$RESULTS"
 run_group() {   # name, then pytest args
   local name=$1; shift
-  local log=$BUILD_RECORD/suite-$name.log rc=0
+  local log=$BUILD_RECORD/suite-$name.log rc=0 run_user=1000:1000
+  local caps=()
+  [ "$name" != ops ] || { run_user=0:0; caps=(--cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE); }
   { echo "IMAGE=$IMAGE_ID"; echo "COMMIT=$FULL"; echo "GROUP=$name"; echo "OVERLAY=none (no -v mounts of source, tests, ops, baseline, packages or pg tools)"; echo "ARGS=$*"; } > "$log"
   set +e
-  timeout "$SUITE_TIMEOUT" docker run --rm --name "$RUN_T" --pull never --cpus 1 --memory 1g --pids-limit 256 --cap-drop ALL \
-    --security-opt no-new-privileges --read-only --user 1000:1000 --network "container:$RUN_PG" \
+  timeout "$SUITE_TIMEOUT" docker run --rm --name "$RUN_T" --pull never --cpus 1 --memory 1g --pids-limit 256 --cap-drop ALL "${caps[@]}" \
+    --security-opt no-new-privileges --read-only --user "$run_user" --network "container:$RUN_PG" \
     --tmpfs /tmp:rw,nosuid,size=256m -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONHASHSEED=0 \
     -e "PYTHONPATH=$TEST_PYTHONPATH" -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
     -e ONLYFANS_TEST_PG_EMPTY_TEMPLATE=1 -e ONLYFANS_TEST_PG_URL=postgresql://postgres@127.0.0.1:5432/postgres \
@@ -289,6 +295,19 @@ done
 if [ -n "$CUSTOM_TESTS" ]; then
   # shellcheck disable=SC2206
   run_group custom $CUSTOM_TESTS
+fi
+for required in "${REQUIRED_SUITES[@]}"; do
+  found=0
+  for chosen in "${SUITES[@]:-}"; do [ "$chosen" != "$required" ] || found=1; done
+  if [ "$found" = 0 ]; then
+    FAILED=1
+    printf '%s\t%s\t%s\t%s\n' "$required" INCOMPLETE "required group omitted" - | tee -a "$RESULTS"
+  fi
+done
+# Q14 must run against a frozen dashboard, BFF/backend and PostgreSQL.
+if [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
+  FAILED=1
+  printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 exact-artifact browser receipt missing" - | tee -a "$RESULTS"
 fi
 printf 'qualification_exit=%s\n' "$FAILED" >> "$BUILD_RECORD/manifest.txt"
 echo "done: $TAG = $IMAGE_ID ; records in $BUILD_RECORD ; exit=$FAILED"

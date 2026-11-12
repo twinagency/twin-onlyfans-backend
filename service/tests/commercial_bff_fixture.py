@@ -19,6 +19,7 @@ from datetime import timedelta
 from conversation_engine import commercial_lifecycle as lifecycle
 from test_commercial_scope_contract import profile,model,limits,PERMISSIONS
 from onlyfans_read.agency_scope import AgencyScopeMiddleware
+from onlyfans_commands.content_api_v2 import router as content_v2_router
 from onlyfans_commands.vault_api import router
 from onlyfans_commands.configuration_api import router as configuration_router
 from onlyfans_read.api import router as reads
@@ -42,7 +43,7 @@ os.environ.update(ONLYFANS_PROCESS_ROLE="api",ONLYFANS_API_TOKEN="synthetic-read
     ONLYFANS_CONTENT_TOKEN="synthetic-content",ONLYFANS_CONTENT_TENANT=TENANT,
     ONLYFANS_CONFIGURATION_TOKEN="synthetic-configuration",ONLYFANS_CONFIGURATION_TENANT=TENANT)
 app=FastAPI();app.state.control_store=store;app.add_middleware(AgencyScopeMiddleware)
-app.include_router(router);app.include_router(reads);app.include_router(configuration_router)
+app.include_router(router);app.include_router(content_v2_router);app.include_router(reads);app.include_router(configuration_router)
 preparation_reads=[]
 @app.post("/fixture/prepare")
 def prepare():

@@ -8,25 +8,49 @@ from guard_core import GuardFailure,credit_estimate,require_health
 class TransientFailure(GuardFailure):
  """A lookup that could not complete. Tolerated a bounded number of times in a row, never as success."""
 MAX_TRANSIENT=2
-ROOT=Path('/srv/projects/twin-plan-c-pilot-20261109')
+# Inert import defaults support pure tests; a running supervisor must load
+# an explicit reviewed account configuration before it can inspect anything.
+ROOT=Path('/unconfigured-twin-supervisor')
 STATE=ROOT/'supervision-v11'/'budget-state.json'
 INCIDENT=ROOT/'supervision-v11'/'outage-open.json'
 BASELINE=ROOT/'config'/'pilot-credit-baseline-v1.json'
 ENV=ROOT/'config'/'pilot-worker-fansapi.env'
-PUBLIC='https://peterson-blacks-quit-ceremony.trycloudflare.com/onlyfans/webhooks/plan-c'
-LOCAL='http://127.0.0.1:55462'
-SENDER='http://127.0.0.1:55464'
-RESERVATIONS=[('mass-queue-observation-v1/mass-queue-observation-v1-reservation.json',1),('transaction-total-v1/transaction-total-v1-reservation.json',1),('fresh-photo-v1/fresh-photo-v1-reservation.json',12),('full-photo-v1/full-photo-v1-reservation.json',20),('bounded-photo-get-v1/bounded-photo-get-v1-reservation.json',20)]
-OPTIONAL=[('live-preflight-8a91179-20261111/queue-read-reservation.json',1),
- ('live-preflight-8a91179-20261111/fan-history-two-read-reservation.json',2),
- ('live-preflight-8a91179-20261111/fan-history-queue-times-reservation.json',2),
- ('queue-proof-711-v4/manual-reservation.json',4)]
-RESERVATIONS.append(('provider-photo-v2/provider-photo-v2-reservation.json',10))
-RESERVATIONS += [('webhook-readiness-inspection-v1/reservation.json',2),
- ('webhook-enable-v1/reservation.json',3),('webhook-enable-v2/reservation.json',3),
- ('webhook-delivery-check-v1/reservation.json',1),('supervisor-preflight-v10/reservation.json',2)]
+PUBLIC='https://unconfigured.invalid/onlyfans/webhooks/plan-c'
+LOCAL='http://127.0.0.1:1'
+SENDER='http://127.0.0.1:2'
+PROVIDER_ACCOUNT=WEBHOOK_ID=DATABASE_CONTAINER=DATABASE_ROLE=DATABASE_NAME=''
+CREDIT_STOP=300
+INITIAL_EXTERNAL=0
+RESERVATIONS=[]
+OPTIONAL=[]
+SQL=''
+CONFIG=None
 
-SQL="""select json_build_object('status',s.status,'revision',s.revision,'reserved',s.provider_credits_reserved,'runtime',r.enabled,'policy',p.enabled) from of_engine_pilot_scope s join of_runtime r on r.account_id=s.account_id join of_delivery_policy p on p.account_id=r.account_id where s.scope_id=1 and s.account_id='of-323358988';"""
+
+def configure(value):
+ from operation_config import validate
+ global ROOT,STATE,INCIDENT,BASELINE,ENV,PUBLIC,LOCAL,SENDER,PROVIDER_ACCOUNT,WEBHOOK_ID
+ global DATABASE_CONTAINER,DATABASE_ROLE,DATABASE_NAME,CREDIT_STOP,INITIAL_EXTERNAL,RESERVATIONS,OPTIONAL,SQL,CONFIG
+ CONFIG=validate(value)
+ ROOT=CONFIG['root'];STATE=ROOT/'supervision-v11'/'budget-state.json';INCIDENT=STATE.with_name('outage-open.json')
+ BASELINE=ROOT/'config'/'pilot-credit-baseline-v1.json';ENV=ROOT/'config'/'pilot-worker-fansapi.env'
+ PUBLIC=CONFIG['publicUrl'];LOCAL=CONFIG['receiverUrl'];SENDER=CONFIG['senderUrl']
+ PROVIDER_ACCOUNT=CONFIG['providerAccount'];WEBHOOK_ID=CONFIG['webhookId']
+ DATABASE_CONTAINER=CONFIG['databaseContainer'];DATABASE_ROLE=CONFIG['databaseRole'];DATABASE_NAME=CONFIG['databaseName']
+ CREDIT_STOP=CONFIG['creditStop'];INITIAL_EXTERNAL=CONFIG['initialExternalReserved']
+ RESERVATIONS=[(r['path'],r['amount']) for r in CONFIG['reservations'] if not r['optional']]
+ OPTIONAL=[(r['path'],r['amount']) for r in CONFIG['reservations'] if r['optional']]
+ # Identities are validated ASCII values without SQL quotes. Current bindings
+ # are joined, and shared reservation totals include every explicitly named account.
+ team=','.join("'" + a + "'" for a in CONFIG['teamAccounts'])
+ SQL=("select json_build_object('status',s.status,'revision',s.revision,'reserved',s.provider_credits_reserved,"
+      "'team_reserved',(select coalesce(sum(t.provider_credits_reserved),0) from of_engine_pilot_scope t "
+      "join of_runtime tr on tr.account_id=t.account_id and tr.binding_id=t.binding_id where t.account_id in ("+team+")),"
+      "'runtime',r.enabled,'policy',p.enabled) from of_engine_pilot_scope s "
+      "join of_runtime r on r.account_id=s.account_id and r.binding_id=s.binding_id "
+      "join of_delivery_policy p on p.account_id=r.account_id where s.account_id='"+CONFIG['account']+"';")
+ return CONFIG
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*args,**kwargs):return None
 OPENER=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
@@ -80,7 +104,7 @@ def intake_readiness(scope_status):
  except Exception:raise GuardFailure('receiver_unavailable') from None
 def db_state():
  try:
-  text=subprocess.check_output(['docker','exec','twin-plan-c-pilot-pg-20261109','psql','-X','-qAt','-U','plan_c_pilot','-d','twin_plan_c_pilot','-v','ON_ERROR_STOP=1','-c',SQL],timeout=8,stderr=subprocess.DEVNULL,text=True)
+  text=subprocess.check_output(['docker','exec',DATABASE_CONTAINER,'psql','-X','-qAt','-U',DATABASE_ROLE,'-d',DATABASE_NAME,'-v','ON_ERROR_STOP=1','-c',SQL],timeout=8,stderr=subprocess.DEVNULL,text=True)
   row=json.loads(text)
   if type(row) is not dict or type(row.get('reserved')) is not int or type(row.get('revision')) is not int:raise ValueError()
   if row.get('status')=='active':
@@ -91,7 +115,7 @@ def db_state():
   return row
  except Exception:raise GuardFailure('pilot_state_unavailable') from None
 def external_reservations():
- total=38
+ total=INITIAL_EXTERNAL
  for rel,amount in RESERVATIONS+OPTIONAL:
   path=ROOT/'evidence'/rel
   if (rel,amount) in OPTIONAL and not path.exists():continue
@@ -107,7 +131,7 @@ def team_usage(baseline):
    k,sep,v=line.partition('=')
    if not sep or k in pairs:raise ValueError()
    pairs[k]=v
-  if pairs.get('FANSAPI_BASE')!='https://api.fansapi.com' or pairs.get('FANSAPI_ACCT')!='acct_7bf8540de5a84f459058490fee26c47f' or not pairs.get('FANSAPI_KEY'):raise ValueError()
+  if pairs.get('FANSAPI_BASE')!='https://api.fansapi.com' or pairs.get('FANSAPI_ACCT')!=PROVIDER_ACCOUNT or not pairs.get('FANSAPI_KEY'):raise ValueError()
   today=datetime.datetime.now(datetime.timezone.utc).date().isoformat()
   query=urlencode({'from':baseline['start'],'to':today,'group_by':'endpoint','include_today':'true'})
   status,body=lookup('https://api.fansapi.com/api/usage/credits?'+query,headers={'Authorization':'Bearer '+pairs['FANSAPI_KEY'],'Accept':'application/json','User-Agent':'Twin-Plan-C/1.0'})
@@ -126,10 +150,10 @@ def webhook_health(deadline=None):
    k,sep,v=line.partition('=')
    if not sep or k in pairs:raise ValueError()
    pairs[k]=v
-  if pairs.get('FANSAPI_BASE')!='https://api.fansapi.com' or pairs.get('FANSAPI_ACCT')!='acct_7bf8540de5a84f459058490fee26c47f' or not pairs.get('FANSAPI_KEY'):raise ValueError()
+  if pairs.get('FANSAPI_BASE')!='https://api.fansapi.com' or pairs.get('FANSAPI_ACCT')!=PROVIDER_ACCOUNT or not pairs.get('FANSAPI_KEY'):raise ValueError()
   headers={'Authorization':'Bearer '+pairs['FANSAPI_KEY'],'Accept':'application/json','User-Agent':'Twin-Plan-C/1.0'}
   expected=readjson(ROOT/'evidence'/'webhook-registration.log')
-  wid='wh_db5f1a0931514ef9b285c412bede5713'
+  wid=WEBHOOK_ID
   if expected.get('id')!=wid or expected.get('url')!=PUBLIC or expected.get('account_ids')!=[pairs['FANSAPI_ACCT']] or expected.get('account_scope')!='inclusive':raise ValueError()
   status,body=lookup('https://api.fansapi.com/api/webhooks/'+wid,headers=headers)
   if status!=200 or len(body)>2000000:raise ValueError()
@@ -159,7 +183,7 @@ def sender_identity():
  except Exception:raise GuardFailure('sender_identity_unavailable') from None
 def check(state):
  started=time.monotonic()
- baseline=readjson(BASELINE);row=db_state();outside=external_reservations()
+ baseline=readjson(BASELINE);row=db_state();outside=external_reservations()+max(0,row.get('team_reserved',row['reserved'])-row['reserved'])
  public,_=status_request(PUBLIC,'POST');local,_=status_request(LOCAL+'/onlyfans/webhooks/plan-c','POST')
  intake=intake_readiness(row['status'])
  pending=False;transition_start=None
@@ -177,11 +201,13 @@ def check(state):
  else:require_health(public_status=public,local_status=local,intake=intake,scope_status=row['status'],active_sender=None)
  webhook_health(started+25)
  total,balance,cost=team_usage(baseline)
- estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=row['reserved'],external_reserved=outside,prior_estimate=state['prior_estimate'])
+ estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=row['reserved'],external_reserved=outside,prior_estimate=state['prior_estimate'],credit_limit=CREDIT_STOP)
  # Bound proof age before the caller can publish STATE; request timeouts are
  # socket/request limits, not a whole-check wall-clock guarantee.
  if time.monotonic()-started>30:raise GuardFailure('monitor_check_too_old')
  result={'prior_estimate':estimate,'last_ok_utc':now(),'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'last_ok_monotonic':time.monotonic(),'scope_status':'transition' if pending else row['status'],'scope_revision':row['revision']}
+ if CONFIG is not None:
+  result.update(account_id=CONFIG['account'],binding_id=CONFIG['binding'],connection_epoch=CONFIG['epoch'])
  if pending:result['transition_start']=transition_start
  return result
 def run():
@@ -201,7 +227,13 @@ def run():
   notify('READY=1\nWATCHDOG=1\nSTATUS=Pilot checks passed')
   time.sleep(10)
 if __name__=='__main__':
- try:run()
+ try:
+  from operation_config import load
+  configure(load())
+  context=readjson(STATE)
+  if (context.get('account_id'),context.get('binding_id'),context.get('connection_epoch')) != (CONFIG['account'],CONFIG['binding'],CONFIG['epoch']):
+   raise GuardFailure('persistent_state_scope_mismatch')
+  run()
  except GuardFailure as exc:
   print('pilot_supervisor_stopped:'+str(exc),file=sys.stderr)
   raise SystemExit(1)

@@ -123,7 +123,9 @@ def test_q12_ten_creators_with_identical_ids_stay_isolated_and_a_degraded_creato
             assert [c['body']['price'] for c in b] == [POOL(i) / 100] and b[0]['body']['mediaFiles'] == ['41'], i
             assert f'USD {BEACH(i) / 100:.2f}' in a[0]['body']['text']
             assert all(p['path'].startswith(f'/api/{w.provider}/') and p['auth'] == f'Bearer fixture-key-{i}' for p in w.fans_mock.posts), i
-            assert sorted(x.provider_message_id for x in w.rows(OfTextIntent, OfTextIntent.price_cents > 0)) == [7002, 7003], i   # ids repeat fleet-wide
+            paid_intents=w.rows(OfTextIntent, OfTextIntent.price_cents > 0)
+            assert all(x.provider_message_id is not None for x in paid_intents), [(i,x.status,x.reason,x.provider_message_id,x.wire_started_at) for x in paid_intents]
+            assert sorted(x.provider_message_id for x in paid_intents) == [7002, 7003], i   # ids repeat fleet-wide
         # ---- 5. degraded creators hold exactly what they should and nothing else
         assert own_cards(fleet[RATE_LIMITED], FAN_A) == [] and fleet[RATE_LIMITED].scripted.calls[:2] == ['ok', 429]
         assert own_cards(fleet[TAKEN_OVER], FAN_A) == [] and len(own_cards(fleet[TAKEN_OVER], FAN_B)) == 1   # one fan held, the other served

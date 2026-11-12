@@ -6,7 +6,7 @@ def _number(value):
     return type(value) in (int, float) and value >= 0 and value < 10**9
 
 def credit_estimate(*, baseline_total, baseline_balance, team_total, team_balance,
-                    usage_cost, scope_reserved, external_reserved, prior_estimate):
+                    usage_cost, scope_reserved, external_reserved, prior_estimate, credit_limit=300):
     values = (baseline_total, baseline_balance, team_total, team_balance,
               scope_reserved, external_reserved, prior_estimate)
     if not all(_number(v) for v in values) or usage_cost != 0 or type(usage_cost) is bool:
@@ -15,7 +15,9 @@ def credit_estimate(*, baseline_total, baseline_balance, team_total, team_balanc
         raise GuardFailure('credit_monitor_inconsistent')
     estimate = max(prior_estimate, external_reserved + max(
         team_total - baseline_total, baseline_balance - team_balance, scope_reserved))
-    if estimate >= 300:  # Jesse 2026-11-10: stricter early stop 250 -> 300 (within the monitored 500)
+    if not _number(credit_limit) or credit_limit <= 0:
+        raise GuardFailure('credit_monitor_malformed')
+    if estimate >= credit_limit:  # Jesse 2026-11-10: stricter early stop 250 -> 300 (within the monitored 500)
         raise GuardFailure('credit_early_stop')
     return estimate
 

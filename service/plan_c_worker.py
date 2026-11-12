@@ -57,6 +57,14 @@ def _work_counts(pilot):
         # evidence) denies sending; a hold on one fan only removes that fan from the eligible set.
         account_wide, digest_fans = digest_hold_scope(s, runtime)
         from conversation_engine.coexistence import unresolved_own_send
+        from conversation_engine.pilot_scope import shared_provider_ceiling
+        from onlyfans_runtime.store import Refused
+        shared_hold = None
+        try:
+            shared_provider_ceiling(s,scope,config)
+        except Refused as exc:
+            shared_hold = str(exc)
+            account_wide = True
         eligible = 0
         for fan in config['fans']:
             state = s.get(OfConversationState, (pilot.account, fan))
@@ -65,7 +73,7 @@ def _work_counts(pilot):
                     and not unresolved_own_send(s, runtime, fan)):
                 eligible += 1
         return {**counts,'countsCapped':any(v==101 for v in counts.values()),
-                'accountHold':account_wide,'eligibleFans':eligible,'heldFans':len(config['fans'])-eligible}
+                'accountHold':account_wide,'sharedProviderHold':shared_hold,'eligibleFans':eligible,'heldFans':len(config['fans'])-eligible}
 
 
 def _response(status, code):

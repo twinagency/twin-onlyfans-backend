@@ -1,4 +1,5 @@
 """Validate every supported delivery using the existing app's event classifier."""
+import os
 import base64
 import hashlib
 import json
@@ -12,6 +13,19 @@ FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
 PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
 URL='https://peterson-blacks-quit-ceremony.trycloudflare.com/onlyfans/webhooks/plan-c'
+
+def configure_current():
+    from operation_config import load
+    global FANS,PROVIDER,URL,REQUIRED_PILOT_RECEIPT
+    config=load()
+    FANS=frozenset(config['fans']);PROVIDER=config['providerAccount'];URL=config['publicUrl']
+    # Pinned historical recovery anchors belong only to the original incident.
+    REQUIRED_PILOT_RECEIPT=None
+    return config
+
+if os.environ.get('TWIN_SUPERVISOR_CONFIG'):
+    configure_current()
+
 
 def validate(root):
     root=Path(root)
@@ -108,6 +122,8 @@ def validate(root):
             'limitation':'provider object does not reproduce retained exact raw bytes'})
     if class_based:
         if not rows:raise RuntimeError('class-based interval has no provider delivery evidence')
+    elif REQUIRED_PILOT_RECEIPT is None:
+        raise RuntimeError('current accounts require class-based incident evidence')
     elif REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
         raise RuntimeError('known prior pilot receipt missing from full monitor window' if current_case else 'known post-incident pilot receipt missing from provider interval')
     return {'interval_valid_for_bounded_scope':True,'matched_receipts':matched,'superseded_failed_attempts':superseded,
@@ -116,4 +132,5 @@ def validate(root):
                 'anchor_context':'known prior receipt predates this incident','original_failure_subcause':'not retained'} if current_case else {})}
 
 if __name__=='__main__':
+    configure_current()
     print(json.dumps(validate('/proof'),sort_keys=True))

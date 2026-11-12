@@ -16,6 +16,9 @@ WEBHOOK_INCIDENT='c240c781574ad075939782179ab926c9f0a69cc3fc40a292f81f7d3f57e3ad
 REPEATED_WEBHOOK_INCIDENT='df20805ad9525b3ccc54b5dba161940cbdca78bda053d916d0578bbb42a27f33'
 
 def pinned_incidents():
+    # Old pinned incidents remain readable only for their original identity.
+    if (ACCOUNT, BINDING, EPOCH) != (LEGACY_ACCOUNT, LEGACY_BINDING, 1):
+        return {}
     # Read the module constants at call time so the three pinned incidents stay the single table.
     return {
         APPROVED_INCIDENT:{'classification':'credit_monitor_unavailable','scope_revision':12},
@@ -58,8 +61,11 @@ def command_key_v2(incident_sha256,evidence_sha256,start,end,scope_revision):
     """Idempotent command identity: bound to incident, evidence, interval and expected revision."""
     return hashlib.sha256(('monitor-resolution.v2:%s:%s:%s:%s:%d'%(incident_sha256,evidence_sha256,start,end,scope_revision)).encode()).hexdigest()
 
-ACCOUNT='of-323358988'
-BINDING='01612323-b06f-5320-b623-4e032f474a6e'
+LEGACY_ACCOUNT='of-323358988'
+LEGACY_BINDING='01612323-b06f-5320-b623-4e032f474a6e'
+ACCOUNT=os.environ.get('TWIN_SUPERVISION_ACCOUNT',LEGACY_ACCOUNT)
+BINDING=os.environ.get('TWIN_SUPERVISION_BINDING',LEGACY_BINDING)
+EPOCH=int(os.environ.get('TWIN_SUPERVISION_EPOCH','1'))
 
 def classify_journal(raw,expected='credit_monitor_unavailable'):
     failures=re.findall(rb'pilot_supervisor_stopped:([A-Za-z0-9_]+)',raw)
@@ -83,7 +89,7 @@ def _common_valid(value,spec,incident_hash):
     return (spec is not None and type(value) is dict
         and value.get('incident_sha256')==incident_hash
         and value.get('account_id')==ACCOUNT and value.get('binding_id')==BINDING
-        and type(value.get('connection_epoch')) is int and value['connection_epoch']==1 and type(value.get('scope_revision')) is int
+        and type(value.get('connection_epoch')) is int and value['connection_epoch']==EPOCH and type(value.get('scope_revision')) is int
         and type(value['scope_revision']) is not bool and value['scope_revision']>=0 and (spec['scope_revision'] is None or value['scope_revision']==spec['scope_revision'])
         and re.fullmatch(r'op-session:[a-f0-9]{64}',str(value.get('actor',''))) is not None
         and all(re.fullmatch('[a-f0-9]{64}',str(value.get(k,''))) is not None

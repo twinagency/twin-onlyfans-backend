@@ -343,7 +343,8 @@ def terms_successor(s, runtime, owner, prior, policy, *, variant=None, fresh_mes
         # Restart alone cannot replay it; unknown/accepted attempts fail the
         # existing _never_dispatched proof above.
         old = s.get(OfEngineDecision, (runtime.account_id, proof['decisionId'])) if proof else None
-        old_message = s.get(Message, (runtime.account_id, prior.fan_id, old.source_message_id)) if old else None
+        old_request = s.get(OfEngineRequest, (runtime.account_id, old.request_id)) if old else None
+        old_message = s.get(Message, (runtime.account_id, prior.fan_id, old_request.source_message_id)) if old_request else None
         if (fresh_message is None or old_message is None
                 or fresh_message.message_id == old_message.message_id
                 or (fresh_message.created_at, fresh_message.message_id) <= (old_message.created_at, old_message.message_id)):

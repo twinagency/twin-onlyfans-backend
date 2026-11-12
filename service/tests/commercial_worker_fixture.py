@@ -165,7 +165,7 @@ class World:
 
     def rows(self, model, *where):
         with Session(self.database[1]) as s:
-            rows = list(s.scalars(select(model).where(*where)))
+            rows = list(s.scalars(select(model).where(model.account_id == self.account, *where)))
             s.expunge_all()
             return rows
 
@@ -180,7 +180,7 @@ def writer(world, *, choose=None):
 
     def respond(request):
         data = json.loads(request.content)
-        prompt = data['messages'][-1]['content']
+        prompt = '\n\n'.join(message['content'] for message in data['messages'])
         seen.append(prompt)
         approved = re.search(r'APPROVED OFFER: id ([0-9a-f-]{36}),', prompt)
         latest = prompt.split('LATEST:\nFAN: ', 1)[1].split('\n\nTHIS TURN:', 1)[0] if 'LATEST:\nFAN: ' in prompt else ''

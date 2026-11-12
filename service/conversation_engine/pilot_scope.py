@@ -607,9 +607,13 @@ def digest_blocks_fan(s, runtime, fan):
 
 def planning_block(s, runtime, fan):
     """Known send-blocking holds stop new model calls; resolved work resumes through normal processing."""
-    row, _ = current(s, runtime)
+    row, config = current(s, runtime)
     if row is None or row.status != 'active':
         return None
+    try:
+        shared_provider_ceiling(s,row,config)
+    except Refused as exc:
+        return str(exc)
     return delivery_block(s, runtime, fan)
 
 
@@ -928,6 +932,7 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
                     or row.provider_credits_reserved + config['limits']['provider_credits_per_request']
                     > config['limits']['provider_credit_budget']):
                 raise Refused('pilot provider budget is exhausted')
+            shared_provider_ceiling(s,row,config)
         if status == 'stopped' and (config.get('delivery_mode') == 'text_only' or commercial):
             from onlyfans_runtime.launch_operations import stop_runtime_in_session
             from onlyfans_runtime.text_delivery import TextAuthority
@@ -972,6 +977,50 @@ def describe(store, tenant, account, *, actor=None, require_read=False):
         return shown
 
 
+
+def shared_provider_ceiling(session, row, config):
+    """Serialize reservations across a reviewed provider team using existing scope counters.
+
+    The deployment input is identical for all members. No second usage ledger,
+    refund path or sender is introduced. A missing ceiling blocks real wire.
+    """
+    import os
+    from pathlib import Path
+    from sqlalchemy import func, text
+    path = os.environ.get('TWIN_PROVIDER_TEAM_LIMITS_FILE')
+    if not path:
+        if config['qualification']['mode'] != 'fixture':
+            raise Refused('shared provider ceiling is not configured')
+        return
+    try:
+        raw = Path(path).read_bytes()
+        if len(raw) > 65536:
+            raise ValueError()
+        team = json.loads(raw)
+        if (type(team) is not dict or set(team) != {'version','team','accounts','creditLimit','externalReserved'}
+                or team['version'] != 'provider-team.v1' or type(team['team']) is not str
+                or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', team['team'])
+                or type(team['accounts']) is not list or not 1 <= len(team['accounts']) <= 10
+                or len(set(team['accounts'])) != len(team['accounts'])
+                or any(type(a) is not str or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}',a) for a in team['accounts'])
+                or row.account_id not in team['accounts']
+                or type(team['creditLimit']) is not int or not 0 < team['creditLimit'] <= 10**12
+                or type(team['externalReserved']) is not int or not 0 <= team['externalReserved'] <= team['creditLimit']):
+            raise ValueError()
+    except (OSError, ValueError, TypeError, KeyError):
+        raise Refused('shared provider ceiling is invalid') from None
+    if session.bind.dialect.name != 'postgresql':
+        raise Refused('shared provider ceiling requires PostgreSQL')
+    session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+                    {'key':'twin-provider-team:'+team['team']})
+    # Flush this transaction before the aggregate; all reservations use the same
+    # team lock and commit their existing counter before another member proceeds.
+    used = session.scalar(select(func.coalesce(func.sum(OfEnginePilotScope.provider_credits_reserved),0))
+                          .where(OfEnginePilotScope.account_id.in_(team['accounts'])))
+    if used + team['externalReserved'] + config['limits']['provider_credits_per_request'] > team['creditLimit']:
+        raise Refused('shared provider credit budget exhausted')
+
+
 def reserve_provider_request(store, tenant, account, *, expected_revision):
     """Conservatively reserve the configured worst-case credits before one HTTP attempt. Never refund uncertainty."""
     with Session(store.engine) as s, s.begin():
@@ -983,6 +1032,7 @@ def reserve_provider_request(store, tenant, account, *, expected_revision):
         if (row.provider_requests_used >= limits['provider_requests']
                 or row.provider_credits_reserved + limits['provider_credits_per_request'] > limits['provider_credit_budget']):
             raise Refused('pilot provider request budget exhausted')
+        shared_provider_ceiling(s, row, config)
         row.provider_requests_used += 1
         row.provider_credits_reserved += limits['provider_credits_per_request']
         row.updated_at = utcnow()
@@ -1118,6 +1168,7 @@ class StoppedBackfillGuard:
                     or row.provider_requests_used >= limits['provider_requests']
                     or row.provider_credits_reserved + limits['provider_credits_per_request'] > limits['provider_credit_budget']):
                 raise Refused('pilot provider request budget exhausted')
+            shared_provider_ceiling(s, row, config)
             row.provider_requests_used += 1
             row.provider_credits_reserved += limits['provider_credits_per_request']
             row.updated_at = utcnow()

@@ -7,6 +7,8 @@ class GuardFailure(RuntimeError):pass
 spec=importlib.util.spec_from_file_location('timing_subject',Path(__file__).with_name('supervisor.py'))
 m=importlib.util.module_from_spec(spec)
 with patch.dict(sys.modules,{'guard_core':types.SimpleNamespace(GuardFailure=GuardFailure,credit_estimate=lambda **kw:207,require_health=lambda **kw:None)}):spec.loader.exec_module(m)
+from test_operation_config import fixture_config
+m.configure(fixture_config())
 
 class TimingTests(unittest.TestCase):
  def test_request_default_and_explicit_delivery_timeout_and_read_bound(self):

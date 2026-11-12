@@ -37,10 +37,10 @@ def persisted(w, epoch):
     return binding, provider, sorted(pilot_scope.describe(w.store, TENANT, ACCOUNT)['config']['fans'])
 
 
-def reviewed_config(w, epoch, **over):
-    binding, provider, fans = persisted(w, epoch)
+def reviewed_config(w, persisted_epoch, **over):
+    binding, provider, fans = persisted(w, persisted_epoch)
     value = {'version': 'twin-supervision.v1', 'root': '/tmp/twin-supervisor-w3', 'tenant': TENANT, 'account': ACCOUNT,
-             'binding': binding, 'epoch': epoch, 'fans': fans, 'providerAccount': provider, 'webhookId': 'wh_synthetic',
+             'binding': binding, 'epoch': persisted_epoch, 'fans': fans, 'providerAccount': provider, 'webhookId': 'wh_synthetic',
              'publicUrl': 'https://fixture.invalid/onlyfans/webhooks/plan-c', 'receiverUrl': 'http://127.0.0.1:55462',
              'senderUrl': 'http://127.0.0.1:55464', 'databaseContainer': 'fixture-pg', 'databaseRole': 'fixture',
              'databaseName': 'fixture', 'supervisorUnit': 'fixture-supervisor.service', 'senderUnit': 'fixture-sender.service',

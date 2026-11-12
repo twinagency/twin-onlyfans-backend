@@ -1,5 +1,5 @@
 """F0 scripts/check.sh: loopback/GET-only/no-redirect/no-proxy guards, bearer never echoed, verdict -> exit codes."""
-import http.server, importlib.util, os, pathlib, shutil, subprocess, sys, threading, pytest
+import http.server, importlib.util, os, pathlib, shutil, subprocess, sys, threading, types, pytest, sqlalchemy
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("check_live", ROOT / "scripts" / "check_live.py")
@@ -7,7 +7,7 @@ check_live = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check_live)
 DOWN = "http://127.0.0.1:9"  # discard port: connection refused
 
-@pytest.mark.parametrize("url", ["http://example.com/healthz", "http://127.0.0.1.evil.test/",
+@pytest.mark.parametrize("url", ["http://example.com/healthz", "http://127.0.0.1.evil.test/", "http://u:pw@127.0.0.1/",
                                  "http://localhost@evil.test/", "file:///etc/passwd", "http://10.0.0.1:8787/"])
 def test_live_refuses_non_loopback(url):
     with pytest.raises(SystemExit):
@@ -16,28 +16,34 @@ def test_live_refuses_non_loopback(url):
         check_live.get(url)
 
 @pytest.mark.parametrize("url", ["postgresql://u@db.example.com/x", "postgresql://u@/x", "sqlite:///x.db",
-                                 "postgresql://u@127.0.0.1/x?host=evil.test", "postgresql://u@127.0.0.1,evil.test/x",
-                                 "postgresql://u@127.0.0.1/x?host=127.0.0.1,evil.test", "postgresql://u@/x?host=a&host=b",
-                                 "postgresql://u@127.0.0.1/x?hostaddr=10.0.0.1", "postgresql://u@127.0.0.1/x?service=p",
-                                 "postgresql://u@127.0.0.1/x?servicefile=/f", "postgresql://u@127.0.0.1/host=evil"])
+    "postgresql://u@127.0.0.1,evil.test/x", "postgresql://u@/x?host=a&host=b"] + ["postgresql://u@127.0.0.1/" + q for q in (
+    "x?host=evil.test", "x?host=127.0.0.1,evil.test", "x?hostaddr=10.0.0.1", "x?service=p", "x?servicefile=/f",
+    "host=evil", "x?dsn=hostaddr%3D10.0.0.1", "x?options=-c")])
 def test_live_refuses_non_loopback_db_url(url):
     with pytest.raises(SystemExit):
         check_live.db_loopback(url)
     assert check_live.db_loopback("postgresql://u@127.0.0.1:5432/x")
     assert check_live.db_loopback("postgresql+psycopg2://u@/x?host=/tmp/sock&port=5")
 
+def test_db_checks_strip_pg_env_before_connect(monkeypatch):
+    for k in [k for k in os.environ if k.startswith("PG")] + ["PGHOSTADDR", "PGSERVICE"]:  # restored after the test
+        monkeypatch.setenv(k, os.environ.get(k, "10.0.0.1"))
+    seen = []
+    def connect(): seen.append([k for k in os.environ if k.startswith("PG")]); raise OSError
+    monkeypatch.setattr(sqlalchemy, "create_engine", lambda *a, **k: types.SimpleNamespace(connect=connect))
+    assert check_live.db_checks("postgresql://u@127.0.0.1/x") == "DOWN" and seen == [[]]
+
 def _env(tmp_path, **kw):
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("CHECK_", "ALLOW_SKIP"))}
-    env.update({"PY": sys.executable, "CHECK_EVIDENCE_ROOT": str(tmp_path / "ev"), "CHECK_API": DOWN,
-                "CHECK_DASH": DOWN, "CHECK_SIGNIN": DOWN, "CHECK_TOKEN_VAR": "CHECK_TEST_TOKEN", **kw})
-    return env
+    return {**{k: v for k, v in os.environ.items() if not k.startswith(("CHECK_", "ALLOW_SKIP"))}, "PY": sys.executable,
+            "CHECK_EVIDENCE_ROOT": str(tmp_path / "ev"), "CHECK_API": DOWN, "CHECK_DASH": DOWN, "CHECK_SIGNIN": DOWN,
+            "CHECK_TOKEN_VAR": "CHECK_TEST_TOKEN", **kw}
 
 def _run(mode, env, root=ROOT):
+    if env.get("PATH") == os.environ.get("PATH") and not (shutil.which("timeout") or shutil.which("gtimeout")):
+        pytest.skip("no timeout/gtimeout on PATH: check.sh refuses capped steps (INFRA)")
     return subprocess.run(["bash", str(root / "scripts/check.sh"), mode], env=env, cwd=root,
                           capture_output=True, text=True, timeout=120)
-
-def _verdict(tmp_path):
-    return next((tmp_path / "ev").iterdir()).joinpath("verdict.txt").read_text()
+_verdict = lambda tmp_path: next((tmp_path / "ev").iterdir()).joinpath("verdict.txt").read_text()
 
 def test_live_script_refuses_before_any_call(tmp_path):
     r = _run("live", _env(tmp_path, CHECK_API="http://192.0.2.1:8787"))
@@ -57,12 +63,14 @@ def test_fast_verdict_and_exit_code(tmp_path, cmd, code, verdict):
     assert (text := _verdict(tmp_path)).splitlines()[0] == verdict and "wall " in text
     assert "live skipped: local stack down" in text or cmd == "sleep 30"
 
-def test_fast_without_timeout_binary_is_infra(tmp_path):
+@pytest.mark.parametrize("budget,why", [("0", "positive int"), ("-5", "positive int"), ("abc", "positive int"),
+                                        ("60", "no timeout")])  # PATH: no timeout/gtimeout
+def test_fast_bad_budget_or_no_timeout_is_infra_nothing_run(tmp_path, budget, why):
     (tmp_path / "bin").mkdir()
-    for tool in ("bash", "env", "nice", "dirname", "git", "date", "mkdir", "tee", "grep"):
+    for tool in ("bash", "env", "nice", "dirname", "git", "date", "mkdir", "tee", "grep", "touch"):
         os.symlink(shutil.which(tool), tmp_path / "bin" / tool)
-    r = _run("fast", _env(tmp_path, PATH=str(tmp_path / "bin")), _fake_repo(tmp_path, "true"))
-    assert r.returncode == 2 and "no timeout" in _verdict(tmp_path), r.stdout + r.stderr
+    r = _run("fast", _env(tmp_path, CHECK_BUDGET_S=budget, PATH=str(tmp_path / "bin")), _fake_repo(tmp_path, "touch ran"))
+    assert r.returncode == 2 and why in _verdict(tmp_path) and not (tmp_path / "ran").exists(), r.stdout + r.stderr
 
 class _Stub(http.server.BaseHTTPRequestHandler):
     seen, bad = [], False

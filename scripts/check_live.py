@@ -21,19 +21,18 @@ KEY_TABLES = ("alembic_version", "users", "accounts", "of_creator_bindings", "me
 
 def loopback(url):
     u = urlsplit(url)
-    if u.scheme not in ("http", "https") or u.hostname not in LOOPBACK:
+    if u.scheme not in ("http", "https") or u.hostname not in LOOPBACK or "@" in u.netloc:
         raise SystemExit(f"live: refused non-loopback url {u.scheme}://{u.hostname}")
     return url
 
 def db_loopback(url):
-    """One explicit loopback host or absolute socket path; no host list, hostaddr, service or conninfo dbname."""
+    """Allowlist: postgresql[+psycopg2], query keys host/port/sslmode only, one loopback host or absolute socket path."""
     from sqlalchemy.engine import make_url
     try:
         u = make_url(url)
-        q = {k.lower(): v for k, v in u.query.items()}
-        hosts = [h for h in (u.host, q.get("host")) if h]
-        ok = (u.get_backend_name() == "postgresql" and hosts and not {"hostaddr", "service", "servicefile"} & set(q)
-              and "=" not in (u.database or "")
+        hosts = [h for h in (u.host, u.query.get("host")) if h]
+        ok = (u.drivername in {"postgresql", "postgresql+psycopg2"} and set(u.query) <= {"host", "port", "sslmode"}
+              and hosts and "=" not in (u.database or "")
               and all(isinstance(h, str) and "," not in h and (h in LOOPBACK or h.startswith("/")) for h in hosts))
     except Exception:  # noqa: BLE001
         ok = False
@@ -62,8 +61,7 @@ def get(url, bearer=None):
     try:
         if bearer:
             schema = re.search(r'^SCHEMA_VERSION = "([^"]+)"', (ROOT / "service/onlyfans_read/contract.py").read_text(), re.M)
-            req.add_header("Authorization", "Bearer " + bearer)
-            req.add_header("X-OnlyFans-Schema-Version", schema.group(1))
+            req.add_header("Authorization", "Bearer " + bearer), req.add_header("X-OnlyFans-Schema-Version", schema.group(1))
         with OPENER.open(req, timeout=TIMEOUT) as r:
             return r.status, r.read(1 << 20)
     except urllib.error.HTTPError as e:
@@ -74,9 +72,8 @@ def get(url, bearer=None):
         return -1, type(e).__name__.encode()
 
 def jd(body):
-    try: j = json.loads(body)
+    try: return isinstance(j := json.loads(body), dict) and j or {}
     except (ValueError, TypeError): return {}
-    return j if isinstance(j, dict) else {}
 
 API, DASH, SIGNIN = ("CHECK_API", "http://127.0.0.1:8787"), ("CHECK_DASH", "http://127.0.0.1:3001"), \
     ("CHECK_SIGNIN", "http://127.0.0.1:8479")
@@ -119,21 +116,17 @@ def main():
     for url, (label, _, _, auth, shape) in zip(urls, CHECKS):
         bearer, s = (token() if auth else None), time.monotonic()
         if auth and not bearer:
-            print(f"SKIP {label}: no bearer in ${os.environ.get('CHECK_TOKEN_VAR', 'ONLYFANS_API_TOKEN')}")
-            seen.append("SKIP")
+            seen.append(print(f"SKIP {label}: no bearer in ${os.environ.get('CHECK_TOKEN_VAR', 'ONLYFANS_API_TOKEN')}") or "SKIP")
             continue
         status, body = get(url, bearer)
-        v = "DOWN" if status is None else "PASS" if status == 200 and shape(body) else "FAIL"
-        seen.append(v)
+        seen.append(v := "DOWN" if status is None else "PASS" if status == 200 and shape(body) else "FAIL")
         print(f"{v} {label}: GET {url} " + (f"({body})" if v == "DOWN" else f"{status} {int((time.monotonic() - s) * 1000)}ms")
               + (f" keys={sorted(jd(body))[:8]}" if v == "FAIL" else ""))
     seen.append(db_checks(db_url))
     print(f"live: wall {time.monotonic() - t0:.1f}s")
-    if {s for s in seen if s != "SKIP"} == {"DOWN"}:  # every probe that ran is down: the stack is down
-        return 3
-    if "FAIL" in seen or "DOWN" in seen:  # one service down while others answer is RED, not "stack down"
-        return 1
-    return 2 if "SKIP" in seen and os.environ.get("ALLOW_SKIP") != "1" else 0
+    ran = {s for s in seen if s != "SKIP"}  # all that ran DOWN = stack down (3); one down while others answer = RED
+    rc = 3 if ran == {"DOWN"} else 1 if ran & {"FAIL", "DOWN"} else 0
+    return 2 if rc == 0 and "SKIP" in seen and os.environ.get("ALLOW_SKIP") != "1" else rc
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -28,7 +28,8 @@ and write the root-owned supervision-v11/reviewed-recovery-release.json with
 {"image":"sha256:<reviewed image>","commit":"<reviewed full commit>"}.
 This is a release pin, not a replacement for independent review.
 
-Run resolve_monitor_incident.py under the existing restricted host credential
+Run resolve_monitor_incident.py (a preview by default; add --apply to audit and publish,
+see the last section) under the existing restricted host credential
 owner. It collects fresh evidence, invokes the exact image's existing DB audit
 owner, preserves the credit high-water value and only then publishes the
 incident-specific resolution receipt. Original incident bytes and append-only
@@ -38,7 +39,7 @@ records a distinct held marker; resolver and failure writer share a lock.
 
 If the process crashes after audit but before publication, inspect the retained
 attempt, then explicitly run:
-  resolve_monitor_incident.py --resume /srv/projects/twin-plan-c-pilot-20261109/evidence/<exact-attempt>
+  resolve_monitor_incident.py --apply --resume /srv/projects/twin-plan-c-pilot-20261109/evidence/<exact-attempt>
 The DB command is idempotent; stale unaudited evidence is refused. A repeat after
 successful publication makes no new provider call. No automatic retries exist.
 

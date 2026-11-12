@@ -111,3 +111,39 @@ def test_a_conflict_for_an_audience_fan_or_a_money_event_is_never_reviewable_her
         review(w, revision, 'money', raw, 9222, apply=True)
     assert (1, 'money') in unresolved(w) and (1, 'dup-one') in unresolved(w)
     assert w.block(FAN_A) == w.block(FAN_B) == HELD
+
+
+def test_a_commercial_scope_audits_monitor_recovery_through_its_own_persisted_identity(make):
+    """Monitor recovery for a promoted commercial account: its binding, epoch, provider account and fan list, no legacy constants."""
+    from datetime import timedelta
+    from db.onlyfans_engine_models import OfFansConnection
+    from db.onlyfans_models import OfRuntime
+    from onlyfans_runtime import monitor_incident_recovery as recovery
+    from onlyfans_runtime.store import Refused, utcnow
+    w = make()
+    w.launch(coexist=True)
+    revision = stop(w)
+    assert w.account != recovery.ACCOUNT
+    with Session(w.database[1]) as s:
+        binding = s.get(OfRuntime, w.account).binding_id
+        connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == w.account,
+                                                             OfFansConnection.status == 'active'))
+        epoch, provider = connection.epoch, connection.provider_account_id
+    now = utcnow()
+    start, end = (now - timedelta(minutes=10)).isoformat() + '+00:00', (now - timedelta(minutes=1)).isoformat() + '+00:00'
+    reference = 'operator:fansapi:synthetic reviewer statement'
+    proof = {'version': recovery.V3, 'incident_sha256': 'cd' * 32, 'incident_id': 'a' * 32, 'account_id': w.account,
+             'binding_id': binding, 'connection_epoch': epoch, 'scope_revision': revision, 'classification': recovery.READINESS,
+             'affected_interval': {'start': start, 'end': end}, 'delivery_url_sha256': 'd' * 64, 'config_version': 'e' * 64,
+             'actor': OPERATOR, 'evidence_sha256': 'f' * 64, 'resolved_at': now.isoformat() + '+00:00',
+             'evidence_reference': reference, 'named_sends': [], 'cause_caveat': recovery.READINESS_CAVEAT}
+    proof['audit_command_key'] = recovery.command_key_v3(proof['incident_sha256'], proof['evidence_sha256'], start, end, revision,
+                                                         reference, [])
+    args = dict(proof=proof, actor=OPERATOR, command_key=proof['audit_command_key'])
+    for wrong in ({'provider_account': 'acct_other', 'fans': list(w.fans)}, {'provider_account': provider, 'fans': [w.fans[0]]}):
+        with pytest.raises(Refused):
+            recovery.record_resolution(w.store, TENANT, w.account, expected_identity=wrong, **args)
+    result = recovery.record_resolution(w.store, TENANT, w.account, expected_identity={'provider_account': provider,
+                                                                                       'fans': list(w.fans)}, **args)
+    assert result['recorded'] and not result['sendingEnabled'] and not result['holdsReleased'] and result['namedSends'] == []
+    assert pilot_scope.describe(w.store, TENANT, w.account)['status'] == 'stopped'

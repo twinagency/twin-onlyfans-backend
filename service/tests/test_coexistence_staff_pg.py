@@ -321,6 +321,27 @@ def test_authentication_events_still_stop_sending_with_coexistence_on(make):
     assert w.posts() == []
 
 
+def test_financial_events_stay_unlinked_evidence_and_are_never_cleared_by_coexistence(make):
+    w = make()
+    w.launch(coexist=True)
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    w.deliver({'event': 'transactions.new', 'account_id': w.provider, 'payload': {
+        'id': 'tx-5001', 'created_at': stamp, 'type': 'message', 'amount': 9, 'currency': 'USD', 'status': 'done',
+        'fan': {'id': str(FAN_A)}}}, event_key='tx-5001')
+    w.deliver({'event': 'chargebacks.new', 'account_id': w.provider, 'payload': {
+        'payment': {'id': 'tx-5002', 'amount': 4, 'user': {'id': FAN_A}, 'createdAt': stamp}, 'createdAt': stamp}}, event_key='cb-5002')
+    w.tick(3)
+    rows = {e.kind: e for e in w.evidence('transaction') + w.evidence('chargeback')}
+    assert rows['transaction'].status == 'pending' and rows['chargeback'].status == 'pending'   # kept, unlinked, never auto-resolved
+    assert rows['transaction'].intent_id is None and rows['chargeback'].intent_id is None and rows['transaction'].peer_id is None
+    with Session(w.database[1]) as s:
+        from db.models import OfConversationState
+        assert s.get(OfConversationState, (w.account, FAN_A)).requires_attention is True      # visible to the operator
+        assert s.get(OfConversationState, (w.account, FAN_B)).requires_attention is False     # and only for that fan
+    assert w.projections()['tx-5001'][0] == 'projected' and w.rows(OfEngineAccessEvidence) == []
+
+
 def test_a_malformed_outside_send_event_is_held_not_ignored(make):
     w = make()
     w.launch(coexist=True)

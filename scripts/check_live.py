@@ -89,6 +89,7 @@ CHECKS = [  # (label, base, path, needs bearer, expected shape)
 def db_checks(url):
     if not url:
         return print("SKIP db: CHECK_DB_URL unset") or "SKIP"
+    db_loopback(url)  # own guard too: main's pre-check is fail-fast, this one sits right before the engine
     for k in [k for k in os.environ if k.startswith("PG")]:  # PGHOSTADDR/PGSERVICE etc. could redirect libpq
         del os.environ[k]
     sys.path.insert(0, str(ROOT / "service"))

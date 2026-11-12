@@ -4,14 +4,14 @@
 #         HARD budget CHECK_BUDGET_S=900 at nice 10: over = RED; bad budget or no timeout = INFRA, nothing run.
 #   live  scripts/check_live.py (read-only; see its docstring), 180 s cap.   full  run-service-tests + vitest.
 # Evidence .check-evidence/<UTC-ts>-<shortsha>/. env: PY ONLYFANS_TEST_PG_URL ALLOW_SKIP CHECK_BUDGET_S CHECK_EVIDENCE_ROOT
-set -uo pipefail
+set -uo pipefail; umask 077  # evidence holds stack output: owner-only
 [ -z "${CHECK_NICED:-}" ] && exec env CHECK_NICED=1 nice -n 10 bash "$0" "$@"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 mode="${1:-}"; case "$mode" in fast|live|full) ;; *) echo "usage: scripts/check.sh fast|live|full" >&2; exit 64;; esac
 PY="${PY:-$( [ -x .venv/bin/python ] && echo "$ROOT/.venv/bin/python" || echo "$ROOT/venv/bin/python" )}"; export PY
 TO="$(command -v timeout || command -v gtimeout || true)"
 EV="${CHECK_EVIDENCE_ROOT:-$ROOT/.check-evidence}/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-mkdir -p "$EV"; T0=$SECONDS; red=0 infra=0 notes=()
+mkdir -p "$EV" || { echo "check $mode: INFRA (evidence dir not writable: $EV)" >&2; exit 2; }; T0=$SECONDS; red=0 infra=0 notes=()
 echo "check $mode: evidence $EV"
 
 # step NAME LIMIT_S CMD: tee to $EV/NAME.log; LIMIT_S>0 = timeout -k cap (rc 124), no timeout binary = INFRA, not run.
@@ -29,7 +29,7 @@ live() {  # $1 = cap seconds, $2 = what "whole stack down" means (skip | infra);
 case "$mode" in
 fast)
   budget="${CHECK_BUDGET_S:-900}"
-  if ! [[ $budget =~ ^[1-9][0-9]*$ ]]; then infra=1; note "CHECK_BUDGET_S=$budget not a positive int: nothing run"
+  if ! [[ $budget =~ ^[1-9][0-9]{0,4}$ ]]; then infra=1; note "CHECK_BUDGET_S=$budget not a positive int <= 99999: nothing run"
   else step premerge "$budget" scripts/premerge.sh; rc=$?
   case $rc in 0) ;; 2) infra=1; note "premerge INCOMPLETE (tests skipped, e.g. no ONLYFANS_TEST_PG_URL)";;
     124|137) red=1; note "premerge killed: budget ${budget}s exceeded";; *) red=1; note "premerge FAILED rc=$rc";; esac
@@ -44,6 +44,6 @@ full)
 esac
 
 v=GREEN rc=0; [ "$infra" = 1 ] && v=INFRA rc=2; [ "$red" = 1 ] && v=RED rc=1
-{ echo "$v"; [ ${#notes[@]} -gt 0 ] && printf '%s\n' "${notes[@]}"; echo "wall $((SECONDS - T0))s"; } >"$EV/verdict.txt"
+printf '%s\n' "$v" ${notes[@]+"${notes[@]}"} "wall $((SECONDS - T0))s" >"$EV/verdict.txt" || { [ $rc = 1 ] || v=INFRA rc=2; }
 echo "check $mode: $v (wall $((SECONDS - T0))s) ${notes[*]+${notes[*]}}"; echo "evidence: $EV"
 exit "$rc"

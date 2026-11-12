@@ -10,15 +10,13 @@ DOWN = "http://127.0.0.1:9"  # discard port: connection refused
 @pytest.mark.parametrize("url", ["http://example.com/healthz", "http://127.0.0.1.evil.test/", "http://u:pw@127.0.0.1/",
                                  "http://localhost@evil.test/", "file:///etc/passwd", "http://10.0.0.1:8787/"])
 def test_live_refuses_non_loopback(url):
-    with pytest.raises(SystemExit):
-        check_live.loopback(url)
-    with pytest.raises(SystemExit):
-        check_live.get(url)
+    for guard in (check_live.loopback, check_live.get):
+        pytest.raises(SystemExit, guard, url)
 
 @pytest.mark.parametrize("url", ["postgresql://u@db.example.com/x", "postgresql://u@/x", "sqlite:///x.db",
     "postgresql://u@127.0.0.1,evil.test/x", "postgresql://u@/x?host=a&host=b"] + ["postgresql://u@127.0.0.1/" + q for q in (
     "x?host=evil.test", "x?host=127.0.0.1,evil.test", "x?hostaddr=10.0.0.1", "x?service=p", "x?servicefile=/f",
-    "host=evil", "x?dsn=hostaddr%3D10.0.0.1", "x?options=-c")])
+    "host=evil", "x?dsn=hostaddr%3D10.0.0.1", "x?options=-c", "x?host=/tmp,evil.test")])
 def test_live_refuses_non_loopback_db_url(url):
     with pytest.raises(SystemExit):
         check_live.db_loopback(url)
@@ -32,6 +30,7 @@ def test_db_checks_strip_pg_env_before_connect(monkeypatch):
     def connect(): seen.append([k for k in os.environ if k.startswith("PG")]); raise OSError
     monkeypatch.setattr(sqlalchemy, "create_engine", lambda *a, **k: types.SimpleNamespace(connect=connect))
     assert check_live.db_checks("postgresql://u@127.0.0.1/x") == "DOWN" and seen == [[]]
+    pytest.raises(SystemExit, check_live.db_checks, "postgresql://u@db.example.com/x")  # FL-L1: own guard, no engine
 
 def _env(tmp_path, **kw):
     return {**{k: v for k, v in os.environ.items() if not k.startswith(("CHECK_", "ALLOW_SKIP"))}, "PY": sys.executable,
@@ -64,13 +63,14 @@ def test_fast_verdict_and_exit_code(tmp_path, cmd, code, verdict):
     assert "live skipped: local stack down" in text or cmd == "sleep 30"
 
 @pytest.mark.parametrize("budget,why", [("0", "positive int"), ("-5", "positive int"), ("abc", "positive int"),
-                                        ("60", "no timeout")])  # PATH: no timeout/gtimeout
-def test_fast_bad_budget_or_no_timeout_is_infra_nothing_run(tmp_path, budget, why):
-    (tmp_path / "bin").mkdir()
+                                        ("9223372036854775808", "positive int"), ("60", "no timeout"), ("60", "not writable")])
+def test_fast_bad_budget_no_timeout_or_evidence_is_infra_nothing_run(tmp_path, budget, why):
+    (tmp_path / "bin").mkdir()  # the run's whole PATH: no timeout/gtimeout
+    (tmp_path / "ev").mkdir(mode=0o500 if why == "not writable" else 0o700)  # evidence root
     for tool in ("bash", "env", "nice", "dirname", "git", "date", "mkdir", "tee", "grep", "touch"):
         os.symlink(shutil.which(tool), tmp_path / "bin" / tool)
     r = _run("fast", _env(tmp_path, CHECK_BUDGET_S=budget, PATH=str(tmp_path / "bin")), _fake_repo(tmp_path, "touch ran"))
-    assert r.returncode == 2 and why in _verdict(tmp_path) and not (tmp_path / "ran").exists(), r.stdout + r.stderr
+    assert r.returncode == 2 and why in r.stdout + r.stderr and not (tmp_path / "ran").exists(), r.stdout + r.stderr
 
 class _Stub(http.server.BaseHTTPRequestHandler):
     seen, bad = [], False

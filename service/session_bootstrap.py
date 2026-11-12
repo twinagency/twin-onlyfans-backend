@@ -499,7 +499,7 @@ def from_curl(curl_text: str, *,
 
 def build_connection_capture(curl_text: str, *,
                              static_param_override: str | None = None,
-                             account: str) -> dict:
+                             account: str, proxy: str | None = None) -> dict:
     """Derive a dashboard connection capture from a single DevTools curl.
 
     Pure derivation twin of `from_curl` — parses the curl, resolves
@@ -515,17 +515,20 @@ def build_connection_capture(curl_text: str, *,
     the single source shared with from_curl.
     """
     return build_connection_capture_from_request(
-        parse_curl(curl_text), static_param_override=static_param_override, account=account)
+        parse_curl(curl_text), static_param_override=static_param_override, account=account, proxy=proxy)
 
 
 def build_connection_capture_from_request(parsed: dict, *,
                                           static_param_override: str | None = None,
-                                          account: str) -> dict:
+                                          account: str, proxy: str | None = None) -> dict:
     """`build_connection_capture` on an already-parsed request (parse_curl's
     shape) — the Browserbase login feeds its browser capture in here.
 
     The capture must belong to one OnlyFans login: `user-id` == `auth_id`
-    cookie, and == the owner of `account` (`of-<owner>`)."""
+    cookie, and == the owner of `account` (`of-<owner>`). OnlyFans assets are
+    fetched like a browser capture: curl_cffi through `proxy` (the account's
+    assigned proxy, None when it has none), never urllib/env proxies."""
+    from onlyfans_runtime.browser_capture import fetch_asset
     h = parsed["headers"]
     required = ("user-id", "x-bc", "x-of-rev", "sign", "time", "user-agent")
     missing = [k for k in required if not h.get(k)]
@@ -538,17 +541,15 @@ def build_connection_capture_from_request(parsed: dict, *,
     user_agent, sign, time_ms = h["user-agent"], h["sign"], h["time"]
     if not re.fullmatch(r"[1-9][0-9]{0,18}", user_id):
         raise CurlParseError("user-id header is not a numeric OnlyFans id")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", x_of_rev):
+        raise CurlParseError("x-of-rev header is not an OnlyFans revision")
     _check_owner(account, user_id, parsed["cookies"])
+    asset = dict(owner=user_id, rev=x_of_rev, user_agent=user_agent, proxy=proxy)
     # The Fastt Login extension's curl carries no x-hash; it is a per-user
     # value OnlyFans serves publicly, so fetch it when the paste lacks one.
     x_hash = h.get("x-hash")
     if not x_hash:
-        request = urllib.request.Request(
-            f"https://cdn2.onlyfans.com/hash/?u={user_id}",
-            headers={"User-Agent": user_agent, "Referer": "https://onlyfans.com/",
-                     "Accept": "application/json, text/plain, */*"})
-        with urllib.request.urlopen(request, timeout=20) as r:
-            x_hash = r.read(4096).decode("utf-8", errors="strict").strip()
+        x_hash = fetch_asset("hash", **asset).strip()
         if not re.fullmatch(r"[\x21-\x7e]{8,512}", x_hash):
             raise RuntimeError("OnlyFans returned no usable X-Hash for this account.")
     parts = sign.split(":")
@@ -572,9 +573,7 @@ def build_connection_capture_from_request(parsed: dict, *,
             f"Login extension (it injects x-relay-static-param), or paste a "
             f"static_param override."
         )
-    chunk_url = CHUNK_URL_TPL.format(rev=x_of_rev)
-    with urllib.request.urlopen(chunk_url, timeout=20) as r:
-        chunk_code = r.read().decode("utf-8", errors="replace")
+    chunk_code = fetch_asset("rules", **asset)
     derived = derive_rules_from_chunk(chunk_code, [sample])
     if not derived:
         raise RuntimeError("Could not derive checksum rules from chunk; update of_signer regexes.")

@@ -130,6 +130,17 @@ def get_capture_context(store,tenant,creator,account=None):
     return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
 
 
+def get_capture_proxy(store,tenant,account):
+    """The account's assigned proxy for a curl-paste capture, resolved like the
+    browser-capture worker: the saved connection's proxy, None when none is saved."""
+    with Session(store.engine) as s:
+        runtime=store._runtime(s,tenant,account)
+        row=s.get(OfProviderConnection,account)
+        if row is None:return None
+        if row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
+        return _open(row,tenant)['proxyUrl']
+
+
 def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,include_policy=False,include_recent=False,runner_status_path=None):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)

@@ -89,6 +89,12 @@ def validate_browser_payload(payload, *, fresh=True):
 def _asset(kind, *, owner, rev, user_agent, proxy):
     """Fixed provider GETs only; no session cookies, redirects, retries or logs."""
     NativeProviderConnector._ready()
+    return fetch_asset(kind, owner=owner, rev=rev, user_agent=user_agent, proxy=proxy)
+
+
+def fetch_asset(kind, *, owner, rev, user_agent, proxy):
+    """`_asset` without the worker-role gate, for the API-side curl paste: the same
+    impersonated GET through `proxy` (no env proxies, redirects, retries), byte caps."""
     from curl_cffi import requests
     if kind == "rules":
         url, maximum = f"https://static2.onlyfans.com/static/prod/f/{rev}/2313.js", 2 * 1024 * 1024

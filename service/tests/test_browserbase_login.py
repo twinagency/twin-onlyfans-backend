@@ -84,11 +84,10 @@ def world(monkeypatch):
     monkeypatch.setattr(bb,'_sync_playwright',playwright)
     monkeypatch.setattr(bb,'POLL_S',0.001)
     # OnlyFans fetches inside build_connection_capture: chunk + pure derivation stubbed.
-    class Resp:
-        def __enter__(self):return self
-        def __exit__(self,*a):return False
-        def read(self,*a):return b'chunk'
-    monkeypatch.setattr(session_bootstrap.urllib.request,'urlopen',lambda *a,**k:Resp())
+    from onlyfans_runtime import browser_capture
+    from onlyfans_commands import connection_api
+    monkeypatch.setattr(browser_capture,'fetch_asset',lambda kind,**k:'chunk')
+    monkeypatch.setattr(connection_api,'get_capture_proxy',lambda *a:None)
     monkeypatch.setattr(session_bootstrap,'derive_rules_from_chunk',lambda code,samples:{'checksum_indexes':[1,2],'checksum_constant':7})
     monkeypatch.setattr(session_bootstrap,'verify_rules',lambda rules,samples:(True,None))
     with bb._jobs_lock:bb._jobs.clear()

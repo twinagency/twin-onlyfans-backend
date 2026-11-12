@@ -244,6 +244,16 @@ def test_first_save_refuses_capture_of_another_owner(database,monkeypatch):
     save(store,account,data());store.close()
 
 
+def test_capture_proxy_is_the_saved_connection_proxy_in_scope(database,monkeypatch):
+    # W3DC-01: curl paste fetches through the account's saved proxy; none saved -> None (browser-capture rule).
+    settings(monkeypatch);store=Store(database[0]);account=provision(store)
+    assert module.get_capture_proxy(store,TENANT,account) is None
+    save(store,account,data())
+    assert module.get_capture_proxy(store,TENANT,account)==data()['proxyUrl']
+    with pytest.raises(Refused,match='scope unavailable'):module.get_capture_proxy(store,'tenant-other',account)
+    store.close()
+
+
 def test_concurrent_registration_and_owner_claims_serialize_into_one_record(database,monkeypatch):
     settings(monkeypatch);store=Store(database[0])
     with ThreadPoolExecutor(max_workers=2) as pool:

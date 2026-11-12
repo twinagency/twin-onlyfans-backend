@@ -158,10 +158,25 @@ def test_sign_value_not_echoed_in_error(wire, bad):
     for build in (lambda c: sb.build_connection_capture(c, account="of-123", proxy=None), sb.from_curl):
         with pytest.raises(sb.CurlParseError) as e:
             build(curl(sign_value=bad))
-        assert "SECRET" not in str(e.value), str(e.value)
+        assert "SECRET" not in str(e.value) and "Sign" in str(e.value), str(e.value)
 
 
 def test_cookie_header_form_not_silently_dropped(wire):
     # W3DC-04: Firefox "Copy as cURL" sends -H 'Cookie: ...' instead of -b.
     out = sb.build_connection_capture(curl("-H 'Cookie: auth_id=123; sess=FAKE'"), account="of-123", proxy=None)
     assert {c["name"]: c["value"] for c in out["capture"]["cookies"]} == {"auth_id": "123", "sess": "FAKE"}
+
+
+def test_cookie_flag_wins_over_cookie_header(wire):
+    parsed = sb.parse_curl(curl("-H 'Cookie: auth_id=999; sess=HDR' -b 'auth_id=123; sess=FAKE'"))
+    assert {c["name"]: c["value"] for c in parsed["cookies"]} == {"auth_id": "123", "sess": "FAKE"}
+    assert "cookie" not in parsed["headers"]
+
+
+def test_sign_start_mismatch_not_echoed(wire):
+    c = curl("-H 'x-relay-sign-start: SECRETSTART' -b 'auth_id=123; sess=FAKE'")
+    for build in (lambda c: sb.build_connection_capture(c, account="of-123", proxy=None), sb.from_curl):
+        with pytest.raises(sb.CurlParseError) as e:
+            build(c)
+        msg = str(e.value)
+        assert "x-relay-sign-start disagrees" in msg and "SECRET" not in msg and "synthetic" not in msg, msg

@@ -33,3 +33,4 @@ def test_w5bb4_malformed_sign_not_echoed(client, world, monkeypatch, caplog):
     r = t.wait_state(client, job, {'done', 'failed'})
     assert r['state'] == 'failed'
     assert bad not in (r.get('error') or '') and bad not in caplog.text
+    assert 'Sign header malformed' in r['error']

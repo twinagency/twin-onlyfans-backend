@@ -77,6 +77,31 @@ def _skip_reason(row, *, owner_id, fan_id):
     return "unsupported"
 
 
+_TAG = re.compile(r"<\s*/?\s*([A-Za-z][A-Za-z0-9]{0,15})")
+_REQUIRED = ("id", "fromUser", "createdAt", "text", "media", "mediaCount", "price", "responseType")
+
+
+def _skip_detail(row, error, *, fan_id):
+    """Shape-only diagnostics for one skipped row: never text, media or user data."""
+    text = row.get("text")
+    media = row.get("media")
+    cause = error.__cause__
+    price = row.get("price")
+    return {
+        "fan": fan_id,
+        "error": str(error),
+        "cause": f"{type(cause).__name__}:{cause}"[:120] if cause is not None else None,
+        "missing": sorted(key for key in _REQUIRED if key not in row),
+        "responseType": row.get("responseType") if type(row.get("responseType")) is str else type(row.get("responseType")).__name__,
+        "media": len(media) if type(media) is list else type(media).__name__,
+        "mediaCount": row.get("mediaCount") if type(row.get("mediaCount")) is int else type(row.get("mediaCount")).__name__,
+        "priced": price not in (None, 0, "0", "0.00") and str(price) not in ("0", "0.0", "0.00"),
+        "isFree": row.get("isFree"), "isOpened": row.get("isOpened"),
+        "tags": sorted({tag.lower() for tag in _TAG.findall(text)}) if type(text) is str else type(text).__name__,
+        "empty": type(text) is str and not text.strip(),
+    }
+
+
 class NativeLoopbackConnector:
     """Account-bound reader and one-attempt sender for native-shaped fixtures.
 
@@ -173,15 +198,16 @@ class NativeLoopbackConnector:
             params["id"] = before_id
         path = API_PATH + f"/chats/{fan_id}/messages?" + urlencode(params)
         rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
-        kept, events, ids, skipped = [], [], [], {}
+        kept, events, ids, skipped, details = [], [], [], {}, []
         for row in rows:
             try:
                 event = message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True)
-            except NativeProtocolError:
+            except NativeProtocolError as error:
                 # One unsupported but in-scope row never fails the page; it is
                 # counted below. Out-of-scope or malformed rows still refuse.
                 reason = _skip_reason(row, owner_id=self._handle.owner_id, fan_id=fan_id)
                 skipped[reason] = skipped.get(reason, 0) + 1
+                details.append({"reason": reason, **_skip_detail(row, error, fan_id=fan_id)})
                 ids.append(_id(row["id"]))
                 continue
             kept.append(row); events.append(event); ids.append(event.message_id)
@@ -191,7 +217,8 @@ class NativeLoopbackConnector:
             if more and not events:
                 raise NativeProtocolError("native page has no supported history rows")
             logging.getLogger(__name__).warning("onlyfans_history_rows_skipped %s", json.dumps(
-                {"account": self.account_id, "rows": len(rows), "skipped": skipped}, sort_keys=True))
+                {"account": self.account_id, "rows": len(rows), "skipped": skipped, "details": details},
+                sort_keys=True, default=str))
         # Paid-offer terms come from the same validated rows before previews and
         # lockedText are discarded. Event identity and payloads are unchanged.
         from .offer_terms import from_history

@@ -96,9 +96,15 @@ def test_unsupported_rows_are_skipped_and_counted_not_page_fatal(wire, caplog):
         page = reader.messages(fan_id=FAN, before_id=None, limit=100)
     assert [e.message_id for e in page.events] == [16, 11] and page.has_more
     line = next(r.getMessage() for r in caplog.records if 'onlyfans_history_rows_skipped' in r.getMessage())
-    assert json.loads(line.split(' ', 1)[1]) == {'account': 'acc-a', 'rows': 6,
+    logged = json.loads(line.split(' ', 1)[1])
+    details = logged.pop('details')
+    assert logged == {'account': 'acc-a', 'rows': 6,
         'skipped': {'deleted': 1, 'tip': 1, 'unsent': 1, 'unsupported': 1}}
-    assert str(FAN) not in line
+    assert [d['reason'] for d in details] == ['tip', 'unsent', 'deleted', 'unsupported']
+    odd = details[-1]
+    assert odd['fan'] == FAN and odd['tags'] == ['p', 'script'] and odd['empty'] is False
+    assert odd['cause'].startswith('NativeProtocolError:') and odd['missing'] == []
+    assert 'x</script>' not in line  # shape only, never message text
 
 
 @pytest.mark.parametrize('rows,more', [

@@ -87,7 +87,7 @@ def test_changed_scope_revision_rejects_stale_class_evidence(incident):
 
 
 @pytest.mark.parametrize('name,change', [
-    ('classification', {'classification': 'network_check_failed'}),
+    ('classification', {'classification': 'unsupported_monitor_failure'}),
     ('incident_id', {'incident_id': 'nope'}),
     ('v1_form_for_unpinned_incident', {'version': recovery.V1}),
     ('wrong_command_key', {'audit_command_key': '9' * 64}),
@@ -156,7 +156,7 @@ def corpus():
     out = [ops_v2()]
     out += [ops_v1(p) for p in ops.pinned_incidents()]
     base = ops_v2()
-    out += [ops_v2(classification='network_check_failed'), ops_v2(connection_epoch=2), ops_v2(binding_id='x'), ops_v2(account_id='x'),
+    out += [ops_v2(classification='unsupported_monitor_failure'), ops_v2(connection_epoch=2), ops_v2(binding_id='x'), ops_v2(account_id='x'),
             ops_v2(actor='someone'), ops_v2(evidence_sha256='nothex'), ops_v2(config_version='x'), ops_v2(delivery_url_sha256='x'),
             ops_v2(resolved_at='not a time'), ops_v2(resolved_at='2026-11-10T00:30:00+00:00'),
             ops_v2(affected_interval={'start': END, 'end': START}), ops_v2(affected_interval={'start': START, 'end': START}),
@@ -203,3 +203,21 @@ def test_ops_is_never_looser_than_the_database_owner_on_marker_bound_fields():
         receipt = ops_v2(**change)
         assert recovery.proof_kind(receipt, recovery.ACCOUNT, recovery.BINDING) == 'v2'      # DB cannot see the marker
         assert ops._valid_resolution(receipt, receipt['incident_sha256'], MARKER) is False   # ops binds identity and start
+
+
+def test_network_check_resolution_is_audited_without_permit_or_control_release(incident):
+    w, proof = incident
+    proof=v2(proof, classification='network_check_failed')
+    with Session(w.database[1]) as s, s.begin():
+        s.get(OfConversationState, (ACCOUNT, FAN)).mode='no_contact'
+    before=pilot_scope.describe(w.store, TENANT, ACCOUNT)
+    result=record(w,proof)
+    assert result['recorded'] and not result['sendingEnabled'] and not result['holdsReleased']
+    assert result['proof']['classification']=='network_check_failed'
+    assert record(w,proof)==result and pilot_scope.describe(w.store,TENANT,ACCOUNT)==before
+    with Session(w.database[1]) as s:
+        assert s.get(OfConversationState,(ACCOUNT,FAN)).mode=='no_contact'
+        assert not s.get(OfRuntime,ACCOUNT).enabled and not s.get(OfDeliveryPolicy,ACCOUNT).enabled
+    receipt=ops_v2(classification='network_check_failed')
+    assert ops._valid_resolution(receipt,receipt['incident_sha256'],MARKER)
+    assert ops.journal_class(b'pilot_supervisor_stopped:network_check_failed')=='network_check_failed'

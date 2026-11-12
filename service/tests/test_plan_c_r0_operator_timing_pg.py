@@ -119,3 +119,25 @@ def test_crash_before_handover_keeps_long_wait_visible_without_stopping_other_fa
         assert shown['recoveryState'] == 'deferred_operator' and shown['operatorAlert']
         assert shown['recoveryReason'] == 'model_retry_deferred'
         assert w.provider.calls == [429, 'ok'] and len(w.w.fans.posts) == 1
+
+
+@pytest.mark.parametrize('next_step', ['review_changed_conversation', 'review_delivery_capacity'])
+def test_existing_review_work_is_visible_without_repeating_planning_gate(make_world, monkeypatch, next_step):
+    from sqlalchemy.orm import Session
+    from db.onlyfans_engine_models import OfEngineRequest
+    from conversation_engine import pilot_scope
+    w = make_world([429])
+    post(w, 94005)
+    w.ticks(1)
+    with Session(w.w.database[1]) as s, s.begin():
+        rows=list(s.query(OfEngineRequest).filter_by(account_id=w.pilot.account, source_message_id=94005))
+        assert len(rows)==1
+        rows[0].next_step=next_step
+    def cannot_plan(*a, **kw):
+        raise AssertionError('status reader repeated full planning gate for an existing review hold')
+    monkeypatch.setattr(pilot_scope, 'planning_block', cannot_plan)
+    shown=request_item(w, 94005, monkeypatch)
+    assert shown['recoveryState']=='review_hold' and shown['recoveryNextStep']==next_step
+    assert not shown['operatorAlert']
+    assert _work_counts(w.pilot)['staleUnplannedRequests']==0
+    assert w.provider.calls==[429] and w.w.fans.posts==[]

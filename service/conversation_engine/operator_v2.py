@@ -493,6 +493,11 @@ def request_recovery(s, runtime, request, *, now=None):
         result['recoveryReason'] = case.reason if case is not None else 'handover'
         return hold('deferred_operator' if result['recoveryReason'] == 'model_retry_deferred' else 'terminal_model_failure',
                     'accept_handover' if request.status == 'handover_pending' else 'complete_or_decline_with_evidence')
+    # These durable next steps already require a review/new inbound; status reporting must not
+    # re-run the full planning gate for each old request or call an intentional hold overdue.
+    # This reader cannot release the hold, schedule a model call, or authorize a send.
+    if request.next_step in ('review_changed_conversation', 'review_delivery_capacity'):
+        return hold('review_hold', request.next_step)
     if scope is not None and planning_block(s, runtime, request.fan_id) is not None:
         return hold('review_hold', 'review_current_conversation_hold')
     if any(released_failure(c.status, c.outcome, c.wire_started_at) == 'permanent' for c in calls):

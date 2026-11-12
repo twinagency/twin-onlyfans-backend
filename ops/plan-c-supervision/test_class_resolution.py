@@ -89,7 +89,7 @@ class ClassResolution(unittest.TestCase):
 
     def test_stale_receipt_fields_are_rejected(self):
         bad = [self.make(scope_revision=32, audit_command_key=self.receipt['audit_command_key']),   # revision changed, key not re-derived
-               self.make(incident_id='b' * 32), self.make(classification='network_check_failed'),
+               self.make(incident_id='b' * 32), self.make(classification='unsupported_monitor_failure'),
                self.make(affected_interval={'start': '2026-11-10T00:05:00+00:00', 'end': END}),     # does not start at last healthy
                self.make(affected_interval={'start': START, 'end': '2026-11-10T00:50:00+00:00'}),   # ends after resolved_at
                self.make(affected_interval={'start': START, 'end': START}),
@@ -122,7 +122,7 @@ class ClassResolution(unittest.TestCase):
 
     def test_journal_class_requires_exactly_one_known_failure(self):
         self.assertEqual(m.journal_class(b'x pilot_supervisor_stopped:provider_webhook_health_unavailable\n'), CLASS)
-        for raw in (b'', b'pilot_supervisor_stopped:network_check_failed',
+        for raw in (b'', b'pilot_supervisor_stopped:unsupported_monitor_failure',
                     b'pilot_supervisor_stopped:%s\npilot_supervisor_stopped:%s' % (CLASS.encode(), CLASS.encode())):
             with self.assertRaises(RuntimeError): m.journal_class(raw)
 

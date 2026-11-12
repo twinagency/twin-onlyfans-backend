@@ -313,6 +313,8 @@ def parse_curl(curl_text: str) -> dict:
     if not url:
         raise CurlParseError("no URL found in command")
 
+    # Firefox "Copy as cURL" sends cookies as -H 'Cookie: ...'; -b wins if both.
+    cookies_raw = cookies_raw or headers.pop("cookie", "")
     cookies: list[dict] = []
     if cookies_raw:
         for pair in cookies_raw.split(";"):
@@ -380,25 +382,19 @@ def from_curl(curl_text: str, *,
     # Parse Sign: "start:sha1:hexchecksum:end"
     parts = sign.split(":")
     if len(parts) != 4:
-        raise CurlParseError(f"Sign header malformed (need 4 colon-separated parts): {sign!r}")
+        raise CurlParseError("Sign header malformed (need 4 colon-separated parts)")
     start, sha1Hex, hexchecksum, end = parts
     # The extension-supplied start/end act as cross-checks — if they
     # disagree with what's on the wire, the page state is inconsistent
     # and we'd rather fail loudly here than write a broken session.
     if curl_sign_start and curl_sign_start != start:
-        raise CurlParseError(
-            f"x-relay-sign-start ({curl_sign_start!r}) does not match the "
-            f"start in the Sign header ({start!r}) — page state is inconsistent"
-        )
+        raise CurlParseError("x-relay-sign-start disagrees with the Sign header — page state is inconsistent")
     if curl_sign_end and curl_sign_end != end:
-        raise CurlParseError(
-            f"x-relay-sign-end ({curl_sign_end!r}) does not match the "
-            f"end in the Sign header ({end!r}) — page state is inconsistent"
-        )
+        raise CurlParseError("x-relay-sign-end disagrees with the Sign header — page state is inconsistent")
     try:
         checksum_value = abs(int(hexchecksum, 16))
     except ValueError as e:
-        raise CurlParseError(f"hex checksum portion is not hex: {hexchecksum!r}") from e
+        raise CurlParseError("Sign checksum portion is not hex") from None
 
     sample = {"sha1Hex": sha1Hex, "checksumValue": checksum_value,
               "url": parsed["url"], "time": time_ms, "user_id": user_id}
@@ -554,7 +550,7 @@ def build_connection_capture_from_request(parsed: dict, *,
             raise RuntimeError("OnlyFans returned no usable X-Hash for this account.")
     parts = sign.split(":")
     if len(parts) != 4:
-        raise CurlParseError(f"Sign header malformed (need 4 colon parts): {sign!r}")
+        raise CurlParseError("Sign header malformed (need 4 colon parts)")
     start, sha1Hex, hexchecksum, end = parts
     for label, supplied, wire in (("start", h.get("x-relay-sign-start"), start),
                                   ("end", h.get("x-relay-sign-end"), end)):
@@ -563,7 +559,7 @@ def build_connection_capture_from_request(parsed: dict, *,
     try:
         checksum_value = abs(int(hexchecksum, 16))
     except ValueError as e:
-        raise CurlParseError(f"hex checksum portion is not hex: {hexchecksum!r}") from e
+        raise CurlParseError("Sign checksum portion is not hex") from None
     sample = {"sha1Hex": sha1Hex, "checksumValue": checksum_value,
               "url": parsed["url"], "time": time_ms, "user_id": user_id}
     static_param = static_param_override or h.get("x-relay-static-param") or _lookup_static_param_for_rev(x_of_rev)

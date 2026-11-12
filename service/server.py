@@ -8259,7 +8259,6 @@ def bootstrap_session(body: _BootstrapBody = Body(...)) -> dict[str, Any]:
     existing one (uses the stored Incogniton profile if you don't override).
     `nickname` is the friendly label shown in the UI switcher."""
     import session_bootstrap
-    from onlyfans_runtime.store import Refused
     try:
         if body.mode == "incogniton-default":
             path = session_bootstrap.run_incogniton(
@@ -8301,7 +8300,7 @@ def bootstrap_session(body: _BootstrapBody = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"curl parse error: {e}")
     except session_bootstrap.OwnerMismatch:
         raise HTTPException(status_code=409, detail="owner_mismatch")
-    except Refused:
+    except session_bootstrap.Refused:
         raise HTTPException(status_code=502, detail=(
             "couldn't fetch OF signing asset through this account's proxy — check "
             "Setup → Proxies, or re-capture if OF updated"))

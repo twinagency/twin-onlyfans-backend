@@ -229,6 +229,14 @@ def test_legacy_unresolvable_proxy_refused_without_fetch(legacy, bad):
     assert legacy.looked == ["123"] and legacy.fetched == [] and legacy.urlopen == []
 
 
+def test_legacy_proxy_lookup_bug_not_relabelled(legacy):
+    # A programming error in the lookup propagates; only unusable-entry errors become "proxy unusable".
+    legacy.assigned = RuntimeError("bug")
+    with pytest.raises(RuntimeError):
+        sb.from_curl(curl())
+    assert legacy.fetched == [] and legacy.urlopen == []
+
+
 def test_legacy_no_proxy_is_explicit_none(legacy):
     with pytest.raises(_Stop):
         sb.from_curl(curl())

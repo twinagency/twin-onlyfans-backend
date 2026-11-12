@@ -45,6 +45,7 @@ sys.path.insert(0, str(HERE))
 import accounts as account_registry  # noqa: E402
 from of_signer import derive_rules_from_chunk, verify_rules  # noqa: E402
 from capture_owner import MissingAuthId, OwnerMismatch, check_capture_owner  # noqa: E402,F401
+from onlyfans_runtime.store import Refused  # noqa: E402,F401  (re-exported for the relay route)
 
 CHUNK_URL_TPL = "https://static2.onlyfans.com/static/prod/f/{rev}/2313.js"
 

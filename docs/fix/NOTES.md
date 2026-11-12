@@ -55,3 +55,10 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - Implementer bug I caught: proxy lookup keyed on `account_id or user_id`, but session binding is by user_id (session_bootstrap :496). Fixed and pinned (red m).
 - Live: NOT confirmable safely. The legacy relay boots the automation executor, so there is no local run. Proof = tests at the transport seam (m) + merged sha (i).
 - Deferred → queue: corrupt proxies.json → "no proxy" → direct (pre-existing, shared with of_client); proxies.py probe → ipinfo.io direct.
+
+## Fable @4 merges → CONTINUE
+- Order: F5 (full rwl) → F6 → **F2d** (corrupt proxies.json fail-closed + atomic save; ahead of F7–F11 because it needs no sending to fire and leaks a real IP irreversibly) → F4(b) → F7–F11. F4 remains a hard gate before sending is re-enabled (an HR-1 zero over 2h40m is weak evidence).
+- F6: place the retry cap where a skipped-head fan also hits it (bounds W6HR-2 for free); do not widen the PR.
+- F2d risk: check that proxies.load is not reached at import/boot//health, so a raise refuses instead of crashing the relay.
+- F5: cover every writer of stopped/enabled state, red test through the real Activate entrypoint (one case per stopped state), live proof must arm nothing.
+- Ledger: F2 proxy-on-fetch = inferred; F2b = transport-seam tests only. Never "live-confirmed".

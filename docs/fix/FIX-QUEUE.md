@@ -34,6 +34,7 @@ Result codes: RA = RED-ASSERT, RD = RED-DRIFT, G = GREEN, GG = GUARD-GREEN. Grou
 | F1b | — | W3DC-03 rest: `_adopt_into_account` (Incogniton/Playwright) no auth_id check; enrollment curl branch (sink covers) |
 | F2b | — | W3DC-01 rest (F2-05): legacy relay `from_curl` (server.py paste-curl, session_bootstrap.py ~:428) still plain urllib for 2313.js; W3DC-07/08 not applied there; proxies.json binding |
 | F2c | — | N3 (pre-existing #82): browserbase_login.py `"proxies": True` → remote login egresses via Browserbase proxies, not account proxy; pass job.proxy as external proxy or refuse Browserbase for proxied accounts |
+| F2d | — | corrupt/mis-shaped proxies.json → load() returns empty → "no proxy" → direct egress (proxies.py:49-61); fail closed on exists-but-unparseable, atomic save; Fable: after F6 |
 | F2 | W1 model-transport | major | test_w1_model_transport_pg (open, not handover_pending) | RA (m) | queue | model_runtime.py:221-230, :267-271 | G5 |
 | F3 | W1 model-transport | blocker | test_w1_model_transport_pg ×4 (sk-or-v1 / prompt text persisted) | RA (m) | queue | openrouter.py:57-58; model_runtime.py:288 | G11 |
 | F5 | W1 model-transport | major | test_w1_model_transport_pg (due retry starved) | RA (m) | queue | pilot_supervised.py:375-382 † | G5 |

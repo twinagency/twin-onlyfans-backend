@@ -13,12 +13,6 @@ is accepted only when it names an item the fan verifiably owns, a price must
 equal an approved price, and a content quantity must equal the payload (or a
 fact already recorded in the conversation). Neither is a perfect classifier:
 real-model grounding still has to be measured separately.
-
-Product truth. A card's lead-in (an `offer` proposal, or an operator edit of one) is held to the ONE grant it selected, and
-only to that grant: every asserted mention of a media noun states the card's kind, every stated count must be the grant's own
-count of that kind, a duration needs a stated duration, an amount must be the grant's price. Another grant, an earlier card,
-the catalogue and price listings authorize nothing for it. The model judge, the plan backstop and the operator edit all call
-this one module.
 """
 import re
 from dataclasses import dataclass
@@ -389,7 +383,9 @@ def _asserted(clause, question, start, *, anchored=False):
     """True when the match at `start` is the writer asserting it (not a question, negation, condition, quote or report).
 
     `anchored` (product nouns): negation must scope over the noun phrase itself, not merely occur earlier in the clause."""
-    if question or _HYPOTHETICAL.search(clause) or (_scoped_negation(clause, start) if anchored else _negated(clause, start)):
+    # A hypothetical word must precede the claim to scope over it; "I wish you well, enjoy this video" still says video.
+    hypothetical = _HYPOTHETICAL.search(_window(clause, start, 8) if anchored else clause)
+    if question or hypothetical or (_scoped_negation(clause, start) if anchored else _negated(clause, start)):
         return False
     window = _window(clause, start, 8)
     if _CONDITIONAL.search(window) or _ATTRIBUTED.search(window) or clause[:start].count('"') % 2 or clause[:start].count('\u201c') > clause[:start].count('\u201d'):

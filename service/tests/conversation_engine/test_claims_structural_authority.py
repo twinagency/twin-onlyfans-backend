@@ -70,6 +70,7 @@ CASES = [
     (PHOTOS, 'Short and sweet, a hot clip.', False), (PHOTOS, 'New video, just dropped.', False),
     (PHOTOS, 'One video and two photos.', False), (PHOTOS, 'Not just photos, a video too.', False),
     (PHOTOS, "Don't miss this video.", False),
+    (PHOTOS, 'I wish you well, enjoy this video.', False), (PHOTOS, 'Imagine my day, here is a video.', False),
     (PHOTOS, 'A short film for you.', False), (PHOTOS, 'Enjoy the movie.', False), (PHOTOS, 'Two clips for you.', False),
     # --- false COUNT ---
     (PHOTOS, 'Nine photos for you.', False), (PHOTOS, 'One photo for you.', False), (PHOTOS, 'Six pictures in this set.', False),

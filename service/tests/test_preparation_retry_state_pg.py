@@ -433,8 +433,8 @@ def test_stop_during_inflight_failure_does_not_overwrite_new_authority(database)
 def test_attempt_column_does_not_weaken_the_scope_guard_and_0133_is_in_the_chain(database):
     store, account, cfg = setup(database)
     try:
-        # Step 1 moves the head to 0136_history_coverage (down_revision 0133 on this branch); 0133 must stay an ancestor.
-        assert HEAD == "0136_history_coverage"
+        # Integration head is 0137_model_retry_due_repair (0136 -> 0137); 0133 must stay an ancestor.
+        assert HEAD == "0137_model_retry_due_repair"
         from alembic.script import ScriptDirectory
         with database[1].connect() as c:
             assert "0133_preparation_retry_state" in {r.revision for r in ScriptDirectory.from_config(_config(c)).iterate_revisions(HEAD, "base")}

@@ -36,12 +36,12 @@ def refuses(engine, sql, params=None, match=None):
         assert match in str(caught.value)
 
 
-def test_head_is_0136_and_every_table_exists_with_row_security(database):
+def test_head_is_0137_and_every_0136_table_exists_with_row_security(database):
     url, engine = database
-    assert HEAD == "0136_history_coverage"
+    assert HEAD == "0137_model_retry_due_repair"
     with engine.connect() as c:
         check_schema(c)
-        assert c.scalar(text("SELECT version_num FROM alembic_version")) == "0136_history_coverage"
+        assert c.scalar(text("SELECT version_num FROM alembic_version")) == HEAD
         for table in TABLES:
             assert c.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:t)"), {"t": table}), table
 
@@ -140,7 +140,7 @@ def test_empty_schema_downgrades_and_upgrades_again(database):
     with engine.begin() as c:
         command.upgrade(_config(c), "0136_history_coverage")
     with engine.connect() as c:
-        check_schema(c)
+        check_schema(c, expected="0136_history_coverage")
 
 
 def test_removed_protection_is_detected_by_the_schema_check(database):

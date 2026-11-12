@@ -133,7 +133,7 @@ def test_missing_reference_and_unauthorized_billing_never_lookup_or_guess_cost(s
         command.downgrade(_config(c),'0127_offer_grant_lineage')
         check_schema(c,expected='0127_offer_grant_lineage')
         upgrade(c);check_schema(c)
-        assert c.scalar(text('SELECT version_num FROM alembic_version'))==HEAD=='0136_history_coverage'
+        assert c.scalar(text('SELECT version_num FROM alembic_version'))==HEAD=='0137_model_retry_due_repair'
         assert c.execute(text('SELECT status,outcome,reserved_microusd,actual_microusd,usage_known FROM of_engine_model_call')).one()==before
         assert c.scalar(text('SELECT provider_generation_id FROM of_engine_model_call')) is None
     with pytest.raises(Refused):run(pilot,args)

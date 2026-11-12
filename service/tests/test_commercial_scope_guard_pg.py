@@ -252,7 +252,7 @@ def test_pinned_guard_hash_matches_the_installed_function_and_tampering_is_detec
         source = c.scalar(text("SELECT prosrc FROM pg_proc WHERE proname='of_engine_pilot_scope_guard'"))
     digest = hashlib.sha256(" ".join(source.split()).encode()).hexdigest()
     assert digest in open(schema.__file__).read()
-    assert HEAD == "0136_history_coverage" and schema.REVISION_RANK[HEAD] == 136  # integration head; the 0134 guard is still the installed scope guard
+    assert HEAD == "0137_model_retry_due_repair" and schema.REVISION_RANK[HEAD] == 137  # integration head; the 0134 guard is still the installed scope guard
     # An older guard (0132) under a head database must be rejected by the pin.
     old = migration("20261111_0800_account_preparation.py").GUARD
     with engine.begin() as c:

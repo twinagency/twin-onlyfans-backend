@@ -118,6 +118,9 @@ class _HistoryText(HTMLParser):
 
 
 _MENTION = re.compile(r'<a href="/[A-Za-z0-9_.-]{1,64}">(@[A-Za-z0-9_.-]{1,64})</a>')
+# An auto-linked URL shows exactly its target, so keeping the visible text hides nothing.
+_AUTOLINK = re.compile(r'<a href="(https?://[^\s"<>]{1,2048})">\1</a>')
+_BREAK = re.compile(r"<br />|<br/>|<br>")
 
 
 def history_text(value):
@@ -126,17 +129,12 @@ def history_text(value):
     except NativeProtocolError:
         if type(value) is not str or len(value.encode()) > 20000:
             raise NativeProtocolError("unsupported native history formatting") from None
-        # Older archive bodies contain bare text separated by BR tags, without
-        # a paragraph wrapper. Accept only those same three known break forms;
-        # other markup still requires the bounded, balanced history parser.
-        unwrapped = value.replace("<br />", "\n").replace("<br/>", "\n").replace("<br>", "\n")
-        if unwrapped != value and "<" not in unwrapped and ">" not in unwrapped:
-            return html.unescape(unwrapped)
-        # Bare @mention links (no paragraph wrapper) keep only their visible
-        # text, and only when no other markup is present.
-        mentions = _MENTION.sub(r"\1", value)
-        if mentions != value and "<" not in mentions and ">" not in mentions:
-            return html.unescape(mentions)
+        # Older archive and incoming bodies are bare text with only BR tags,
+        # @mention links or auto-linked URLs (no paragraph wrapper). Keep their
+        # visible text; any other markup still needs the bounded history parser.
+        bare = _BREAK.sub("\n", _AUTOLINK.sub(r"\1", _MENTION.sub(r"\1", value)))
+        if bare != value and "<" not in bare and ">" not in bare:
+            return html.unescape(bare)
         if not value.startswith("<p>") or not value.endswith("</p>"):
             raise NativeProtocolError("unsupported native history formatting") from None
     parser = _HistoryText()

@@ -70,6 +70,25 @@ def test_oversize_shrinks_but_other_failures_keep_page_size(wire):
     assert state['limits'] == [100, 20, 20]
 
 
+def test_bare_autolinked_url_keeps_its_visible_url():
+    url = 'https://onlyfans.com/123/synthetic_creator'
+    assert history_text(f'look at this <a href="{url}">{url}</a>') == f'look at this {url}'
+    assert history_text(f'one<br /><a href="{url}">{url}</a>') == f'one\n{url}'
+    for text in [f'x <a href="{url}">click here</a>', f'x <a href="javascript:alert(1)">javascript:alert(1)</a>',
+                 f'x <a href="{url}" target="_blank">{url}</a>', f'x <a href="{url}">{url}</a><img src=x>',
+                 f'x <a href="{url}">{url}</a><br onclick=x>', 'x <a href="http://a b">http://a b</a>']:
+        with pytest.raises(NativeProtocolError):
+            history_text(text)
+
+
+def test_incoming_row_with_autolink_imports(wire):
+    reader, state = wire
+    url = 'https://onlyfans.com/123/synthetic_creator'
+    state['rows'] = [native_message(12, owner=OWNER, text=f'hey <a href="{url}">{url}</a>')]
+    page = reader.messages(fan_id=FAN, before_id=None, limit=100)
+    assert [(e.direction, e.body) for e in page.events] == [('in', f'hey {url}')]
+
+
 def test_bare_mention_is_the_only_new_bare_markup():
     assert history_text('Thanks <a href="/some.creator_1">@some.creator_1</a> &amp; bye') == 'Thanks @some.creator_1 & bye'
     for text in ['Hi <a href="https://x.invalid/a">@a</a>', 'Hi <a href="/a" target="_blank">@a</a>',

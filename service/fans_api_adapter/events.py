@@ -552,9 +552,16 @@ class FansEventIntake:
         if str(fan_id) == link.creator_id:
             raise Refused('unlock names the creator as the fan')
         message_id = ev.numeric(payload.get('message_id'))
-        _, outcome = ev.add(s, connection.account_id, dedupe=f'unlock:{message_id}', kind='unlock', source='webhook',
-            event_key=raw.event_key, fan_id=fan_id, message_id=message_id, amount=ev.cents(payload.get('amountGross')),
+        # The GROSS amount is the only amount compared with the stored card. An absent amount stays absent (the unlock is still
+        # linked by its message id, never by a fabricated price); a present-but-invalid one is refused as before. amountNet is the
+        # creator's net-of-fee share, never the sale price, and is not read here.
+        amount = ev.cents(payload.get('amountGross')) if payload.get('amountGross') is not None else None
+        row, outcome = ev.add(s, connection.account_id, dedupe=f'unlock:{message_id}', kind='unlock', source='webhook',
+            event_key=raw.event_key, fan_id=fan_id, message_id=message_id, amount=amount,
             occurred=ev.stamp(payload.get('createdAt')), raw_sha256=raw.payload_sha256, now=now)
+        currency = payload.get('currency')
+        if outcome == 'new' and currency is not None and (type(currency) is not str or currency.upper() != 'USD'):
+            ev._hold(s, row, 'currency_mismatch', now)     # a supplied currency must be the stored card's (every card is USD)
         message_facts.mark_opened(s, connection.account_id, fan_id, message_id, ev.stamp(payload.get('createdAt')))
         self._drive_after(connection.account_id, fan_id, after)
         return ('held', 'conflicting_duplicate') if outcome == 'conflict' else ('projected', 'unlock_' + outcome)

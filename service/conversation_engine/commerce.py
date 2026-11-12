@@ -835,7 +835,7 @@ def _record_access(store, tenant, account, observation, cls, kind, prefix):
                     or unlock.reason not in {'awaiting_commerce', 'unlock_confirmed_finance_unlinked'}
                     or unlock.intent_id != intent.intent_id or unlock.fan_id != observation.fan_id
                     or unlock.message_id != observation.message_id or unlock.grant_id != decision.offer_grant_id
-                    or unlock.amount_cents != intent.price_cents or unlock.occurred_at != stamp
+                    or unlock.amount_cents is not None and unlock.amount_cents != intent.price_cents or unlock.occurred_at != stamp
                     or observation.evidence_key != sha256(f'engine-access:confirmed:{unlock.evidence_id}'.encode()).hexdigest()):
                 raise Refused('verified provider unlock evidence required')
         request = s.get(OfEngineRequest, (account, decision.request_id))

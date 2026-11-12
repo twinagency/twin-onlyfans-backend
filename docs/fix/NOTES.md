@@ -46,3 +46,12 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 ## Fable consult @F3 → REDIRECT (accepted)
 - Order: HR-1 live first (done: no fire); check F2b reachability; then F5, then F6 (+W6HR-2/3 if HR-1 had fired; it did not); F4 later as shape (b) only.
 - F4 shape (b): MessagePage carries skipped fan-row ids; a store helper bumps input_revision above high_water; all 4 page-commit sites call it. Hard gate before sending is re-enabled. Reject (a): high_water=0 on first import would refuse all tips. Tip-note text loss queues behind D3.
+
+## F2b merged
+- F2b is reachable: Dockerfile CMD = `service.server:app`, so the paste-curl `/admin/session/bootstrap` is live in deploys (i). The legacy relay is not running locally (m).
+- PR #87 squash → 9124b50d (m). Head b972eef3: 5 files, +146/−8 (m). from_curl 2313.js now uses `fetch_asset` (curl_cffi, capped, no redirects) via the proxies.json proxy keyed on curl user-id. Rules: assigned→proxied, unusable entry→refuse, none→explicit None. Shared `_check_ids` (one REV regex). Route maps Refused→502.
+- rwl: r1 Opus+Flash FIX-THEN-MERGE (/tmp/rwl-f2b/FINDINGS.md); FL-01 get_for_session fallback rejected (account-first binding). r2 → re-export Refused + pin narrowed catch (red m). r3 Flash MERGE.
+- premerge (throwaway PG :55645): OK 0 skipped 0 known-red, 40 PASS, exit 0 (m). CI billing-locked (m). base = team branch (m).
+- Implementer bug I caught: proxy lookup keyed on `account_id or user_id`, but session binding is by user_id (session_bootstrap :496). Fixed and pinned (red m).
+- Live: NOT confirmable safely. The legacy relay boots the automation executor, so there is no local run. Proof = tests at the transport seam (m) + merged sha (i).
+- Deferred → queue: corrupt proxies.json → "no proxy" → direct (pre-existing, shared with of_client); proxies.py probe → ipinfo.io direct.

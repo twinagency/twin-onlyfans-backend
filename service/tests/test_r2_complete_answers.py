@@ -307,10 +307,14 @@ def test_sell_result_carries_refusal_detail():
 def test_existing_offer_reply_reads_the_vault_send_rows_and_never_invents():
     from db.engine import engine, get_session
     from db.models import Base, Account, VaultItem, VaultSend
+    from db.schema import _metadata   # registers every model, so the foreign-key graph resolves
 
     async def go():
         async with engine.begin() as c:
-            await c.run_sync(Base.metadata.create_all)
+            # Retained SQLite integration: the PostgreSQL-only of_engine_* tables (which carry foreign keys to the
+            # PG-only of_launch_command) are not part of this fixture and cannot be created here.
+            await c.run_sync(lambda connection: Base.metadata.create_all(connection,
+                tables=[t for t in _metadata().sorted_tables if not t.name.startswith("of_engine_")]))
         async with get_session() as s:
             s.add(Account(id="of-t", nickname="x"))
             for mid, kind in ((11, "photo"), (12, "photo")):
@@ -346,8 +350,10 @@ class Harness:
 
     async def setup(self):
         engine, get_session, Base, Account, F, Message = _engine_env()
+        from db.schema import _metadata   # registers every model, so the foreign-key graph resolves
         self.get_session, self.Message, self.F = get_session, Message, F
-        tables = [t for t in Base.metadata.sorted_tables if not t.name.startswith("twin_bridge_")]
+        tables = [t for t in _metadata().sorted_tables
+                  if not t.name.startswith(("twin_bridge_", "of_engine_"))]   # of_engine_* is PostgreSQL-only (see above)
         async with engine.begin() as conn:
             await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=tables))
         async with get_session() as s:
@@ -405,8 +411,14 @@ def run_engine(coro_fn):
         await h.setup()
         return await coro_fn(h)
     import logging
+    # Quiet the engine for this test only. A process-wide disable that is never lifted silences every later test's
+    # logging in the same pytest process (test_plan_c_sim_pg reads the ledger's model_call_identity log lines).
+    previous = logging.root.manager.disable
     logging.disable(logging.CRITICAL)
-    return asyncio.run(go())
+    try:
+        return asyncio.run(go())
+    finally:
+        logging.disable(previous)
 
 
 def test_long_complete_reply_is_not_truncated_or_dropped():

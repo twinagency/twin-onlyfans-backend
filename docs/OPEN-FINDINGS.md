@@ -113,7 +113,7 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 | F10 | W1 L4 | YAGNI | wrong vs design (R2) |
 | S1, S2, S4, S5, S6, S7, S8, S9, S10 | W1 L4 | structure | |
 | CVA-02, CVA-03, CVA-05, CVA-07, CVA-17 | W1 L5 | latent | 0 vault rows m; CVA-05 red |
-| CVA-04, CVA-06, CVA-10, CVA-12, CVA-13, CVA-14, CVA-15, CVA-16, CVA-18 | W1 L5 | YAGNI | CVA-10 dispute open (V05 blocked) → W3 |
+| CVA-04, CVA-06, CVA-10, CVA-12, CVA-13, CVA-14, CVA-15, CVA-16, CVA-18 | W1 L5 | YAGNI | CVA-10 resolved W3: real (= W3RCT-23, red); DOC-20 retraction wrong |
 | CVA-09 | W1 L5 | dropped | withdrawn |
 | S1, S2, S3, S4, S5, S6, S7, S8 | W1 L5 | structure | |
 | L3-04, L3-06, L3-07, L3-10, L3-11, L3-12 | W1 L3 | latent | 0 sync jobs live (m) |
@@ -157,3 +157,167 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 ## Orphans carried (no lane)
 - worker.log `NativeProtocolError` 768 → 1,845 and `history_read_failed` 429 → 560 with 0 attempt rows (m, W1/W2 live-verify) — triage.
 - Live checks still blocked: W1 C14, C16, C17, C18 (credential / login / plan_c_worker down); W2 V05 (needs write).
+
+# W3 (a2f1dda6 + deltas, closed 2026-11-12)
+
+- Source: `.scratch/rwl-W3/STATE.md`, 12 review lanes `.scratch/rwl-W3/<lane>/FINDINGS.md`, live `.scratch/rwl-W3/live-verify/RESULTS.md` (14 confirmed / 2 failed / 1 blocked, 0 OF calls). Programme OQs `.scratch/rwl-programme/STATE.md`.
+- Pins: W3 = a2f1dda6 (same pin as W2 head) + delta-r0-live 659ea29..66a1da4a (R0 build) + delta-curl-80 PR #80 e8e90954..f5205ddd (unmerged).
+- Live stack (m): DB `0133`, sending off (0 policies / scopes / intents); skip_list 0, blacklist 0, fans webhooks 0, model calls 0 → those checks vacuous. Live-confirmed: W3RCB-02 (X09: 26 open recovery rows, generation ≥50, max 1,676), W3RCB-03 = W3RO-02 (X14: `conversation_deferred` +18 / 10 min), W3RCT-14 (X16: healthy() True with 2,230 failures), W3DR-06 (X01: R0 head past live DB). W3RCB-01 partial (X13: :133 rising, :154 flat). W3RCA-10 route configured (X17: 401 not 503), echo unverified. X06 blocked; W3RO-01/05 not reached.
+- Same rules as W1+W2 (severity = harm if reached; Reach = live|latent + guard + m/i/g). Groups G1/G2/G4/G5/G6 extended where the root cause is the same; G7–G12 new.
+
+## W3 counts
+
+- raw: 347 lane-local ids (CEA 31, DC 14, DR 22, FA 32, RCT 36, RCA 37, RCB 40, RD 32, RO 37, TH 15, TL 29, TSA 22) by grep of row / heading ids. Withdrawn, not counted: W3DR-21, W3RCB-T01 (+ runtime-content K16/K19/K22 labels).
+- picked: 182 ids in 11 groups (extended G1 11, G2 10, G4 7, G5 28, G6 13; new G7 49, G8 16, G9 20, G10 12, G11 11, G12 5). rest: 165 = fix 56, YAGNI 95, dup-of 8, policy 6.
+- live-confirmed: G7 only (m). G11 one route live-configured (X17). G12 in repo. All other groups latent behind sending off / 0 rows (m).
+- red tests on W3 lane branches (THERMO): 47; none run against the live stack.
+
+## W3 groups
+
+### G1 (extended) · Ownership gap → re-offer of already-bought media
+- same root cause as G1 (missing / pending / partial evidence reads as "not owned").
+- ids: W3CEA-07 = W3RCB-08 (onlyfans_runtime/commerce.py:69 `_provider_evidence_held` counts `held` only → pending evidence passes final wire check; red `rwl/W3-conversation-engine-a:service/tests/test_w3_cea_pending_evidence_pg.py` 4/4); W3RCB-06 (ledger.py:255-268 `coverage_proven` = recent scan done, no full history); W3FA-01 (fans_api/events.py:286-308 held projection final, never resets); W3FA-04 (backfill.py:166-177 window cut = chat done); W3FA-12 (backfill.py:74-89); W3CEA-08 (commerce.py:71, :101-102 binding-only); W3CEA-09 (history_ownership.py:88 NULL message_id dropped); W3CEA-25 (engine.py:180-244); W3RD-05 (text_delivery.py:427-430 paid manual attachment skips gate); W3RCB-17 (launch_operations.py:170-171).
+- live: latent — 0 evidence rows + sending off (m).
+- dispute resolved: **CS-02 narrowed by W3CEA-07** — hold exists but only for `held`; pending/dismissed still pass (red m).
+- fix: same G1 fix plus: any non-`held`-cleared evidence row (pending included) ⇒ `unknown` ⇒ refuse; coverage needs full-history scan, not recent window.
+- OQ: OQ-8.
+
+### G2 (extended) · Stop refusable; activate / config widens commercial scope
+- same root cause as G2 (stop runs through validating config writers; widen paths skip `assert_enable_allowed`).
+- ids: W3TSA-05 (launch_operations.py:127-128 stop refused on fingerprint change); W3RCA-02 (activation_status.py:295-301); W3RCA-03 (connections.py:353 pause refused + rolled back); W3RCA-15 (campaigns.py:254-256 cancel refused on revision); W3RD-06 (store.py:434-449 → pilot_scope.py:312-314 pause / no_contact refused on pilot fan); W3RCA-01 (activation_commands.py:204-254 second policy writer); W3RCA-S1 (four `OfDeliveryPolicy` writers); W3RCA-09 (activation_commands.py:131-132 no `fastt_scope` = every fan); W3CEA-14 (commercial_lifecycle.py:201-208 resume without validation); W3FA-15 (events.py:463 provider stop after projection commit). W2OR-04 new evidence: activate works on any account (m by reading).
+- live: latent — 0 scope / policy rows (m).
+- fix: G2 `stop_scope` (no validation, no revision check) used by every stop / pause / cancel / no_contact; one `policy_change(widen=…)` writer; missing fan scope ⇒ no fan.
+- OQ: OQ-7, OQ-11.
+
+### G4 (extended) · Unsellable media offered
+- same root cause as G4 (no single per-asset readiness gate; sync defaults open).
+- ids: W3RCT-01 (content_sync.py:357-362 `media_unusable` False when unknown — blocker); W3RCT-02 (content_sync.py:396-408); W3RCT-04 (content_sync.py:1450-1457 two readiness predicates); W3RCT-07 (content_sync_media.py:298, :332-354); W3RCT-28 (content_sync.py:351 window refusal → `unverified`); W3RD-02 (vault_management.py:876 vanished never re-checked); W3CEA-16 (catalogue.py:244, catalogue_select.py:108; blocker via W2S-05).
+- live: latent — 0 vault / catalogue rows + sending off (m).
+- dispute resolved: **W1 DOC-11 wrong** — catalogue.py:36 is an alias content-version check, not the readiness gate (W3CEA-16, m).
+- fix: G4 gate; unknown media state ⇒ unusable; one readiness predicate shared by sync + `catalog_terms`.
+- OQ: OQ-1..4, OQ-6.
+
+### G5 (extended) · Paid-call ledger: unknown re-called, refusal → unknown, reservations bypassed
+- same root cause as G5; R0 (66a1da4a) leaves W1-04 unchanged and fixes W1 F2.
+- ids: W3TL-01 = W3DR-07 (replay re-calls `unknown`; probe red m); W3TL-02 (model_runtime.py:210-222 timeout unlocks same-pass fallback); W3TL-04 (`reconcile_unknown` → `settled`); W3TL-05 (= W1 F1 malformed Retry-After); W3TL-06 (= W1 F2, fixed in R0); W3TL-07 (llm_client 3× under one reservation); W3TL-08, W3TL-11 (profile_learning budget / brake bypass); W3TL-09 = W3DR-23 (max attempts config 3); W3TL-10 = W3DR-08 (= W1 F5 cursor starvation); W3TL-14 (vision reservation sized by base64); W3TL-18 (`handle(ingest_only=False)` skips `uncertain` filter); W3TL-23 (cap / reserve-before-wire untested); W3TL-24, W3TL-25 (provider POST without reservation); W3TL-27 (native `model-timeout` requeue); W3TL-13 (SQLite budget concurrency; disputed, g); W3DR-01 (openrouter.py:291-303 gzip decoded twice → every 200/429 `unknown`; blocker if provider compresses, g); W3DR-02 (crash between release and handover hides request); W3DR-14, W3DR-15, W3DR-19, W3DR-22; W3RCB-10 (native_worker.py:168-175 paid model call per inbound while capped); W3RO-14 (provider_model.py:91-94 legacy non-ledger calls extended).
+- live: latent — 0 model-call rows (m); R0 not deployed (DB 0133 < R0 head, X01 m).
+- disputes: W1 F2 "fixed" claim false at a2f, fixed in R0 66a1da4a (m); W1-04 latent not live (W3TL); W3TL-13 unresolved.
+- fix: G5 fix plus: every provider POST takes a reservation (no optional budget); decode body once; release + handover in one txn; cap attempts at 2 in code, not config.
+- OQ: OQ-14 (W3DR-02), OQ-21 (hold R0 deploy).
+
+### G6 (extended) · Wrong price frozen / invented on a card
+- same root cause as G6 (price copied ×4, no single checked source).
+- ids: W3RD-01 (vault_management.py:452-454 manual product → `dynamic`, ladder reprices; blocker-conditional); W3RCB-14 = W3RO-11 (native_sales.py:113-130 ladder overwrites `terms["price"]`; = W1 DOC-09); W3RO-10 (quote.py:119-133 automatic 15/20 % discount; blocker-conditional); W3RO-09 (offer_import.py:978-1017 model-chosen category sets price); W3RO-12 (quote.py:439-447 `except Exception: return`); W3RCA-08 (configuration.py:258-333 shared-bearer editor sets prices); W3RD-10 (vault_editing.py:156-179 review ignores price); W3RD-28 (price copied ×4); W3RD-31, W3RD-32 (mutants: operator-price equality deletable); W3CEA-18 (claims.py:69-71 grounding from all grants); W3RCT-27 (content_sync.py:1468 rewrites approved item price).
+- live: latent — 0 vault rows + sending off (m).
+- fix: G6 fix plus: one price source (approved terms) read at send; ladder / discount only via an approved terms revision; manual product = `fixed`.
+- OQ: OQ-1, OQ-16 (W3RO-10), OQ-20 (W3RD-01).
+
+### G7 (new) · Failures retried forever or stuck forever; health stays green
+- root cause: no durable per-item failure record (attempts, backoff, terminal give-up) and no expired-lease reclaim; one bad row / fan / 401 poisons the whole page or account loop, and health reads only "polled recently".
+- ids: W3RCB-01 (native_connector.py:148 one bad row refuses 100-message page; native_protocol.py:133/:154) — blocker; W3RCB-04 (inbox_worker.py:111-118 identity 401 re-polled ~1 s) — blocker; W3RO-01 (recent_inbox.py:188-198 re-raise before `popleft` → account stuck on one fan) — blocker; W3RCB-03 = W3RO-02 (recent_inbox.py:187-197 retry every 60 s forever; red `rwl/W3-runtime-core-b:service/tests/test_w3_rcb_recent_inbox_retry_pg.py`, `rwl/W3-runtime-offers:service/tests/test_w3_ro_recent_inbox_pg.py`); W3RCB-02 (worker.py:108-128 recovery error ends account turn, lease kept); W3RCT-14 (inbox_health.py:13-16 healthy while failing); W3RCB-18 (heartbeat healthy when every turn refused); W3TSA-12 = W3RCT-10 = W3RD-07 = W3RCB-15 (fastt_manual.py:150-151, provider_connector.py:344-345: 401 / 429 → `unknown` instead of auth-failed / refused); W3RCB-05, W3RCB-11, W3RCB-12, W3RCB-13, W3RCB-16, W3RCB-22, W3RCB-24; W3RO-03, W3RO-04, W3RO-05, W3RO-18, W3RO-20, W3RO-21, W3RO-22, W3RO-23, W3RO-24 (= W1 F08, partly fixed), W3RO-25; W3RCA-06, W3RCA-12; W3RCT-05, W3RCT-06, W3RCT-08, W3RCT-09, W3RCT-13, W3RCT-16, W3RCT-18, W3RCT-19, W3RCT-21, W3RCT-22; W3RD-03, W3RD-04, W3RD-11, W3RD-12, W3RD-13, W3RD-29; W3FA-08, W3FA-09.
+- live: **live-confirmed m** (X09 W3RCB-02, X14 W3RCB-03, X16 W3RCT-14; X13 W3RCB-01 one site rising). Rest latent i. Explains W1/W2 orphan `NativeProtocolError` / `history_read_failed` growth (i).
+- fix (code judo): one `failure_ledger(lane, key)` row — attempts + next_at with exponential backoff, give-up after 5 → visible terminal state; parse per row, skip + record the bad one; identity 401 / 403 written onto the connection (stop polling); every lease query also reclaims `running` past `lease_until`; health = last success and open failure count, not last poll.
+- OQ: OQ-10 (recent_inbox loop: leave running).
+
+### G8 (new) · Fan / staff stop signals not honoured at send time
+- root cause: opt-out / stop / takeover is a point check on one message in one sender with its own partial reason set; no single hold chain read by every automated origin.
+- ids: W3CEA-01 (controls.py:98-100 any quote char disables opt-out detection); W3CEA-02 (controls.py:13-42 never reads global `blacklist`); W3CEA-03 (controls.py:22-25 skip_list subset); W3CEA-12 (engine.py:310-373 stop arriving mid-draft ignored); W3TSA-02 (conversation_policy.py:59-62 `ladder_stop` + `automated` passes; red `rwl/W3-trace-send-authority:service/tests/test_w3_tsa_ladder_stop.py`); W3RO-32 (stop-reason sets ×4); W3RO-06 (operator_cases.py:58-70 missing skip_list ⇒ no hold) — blocker; W3RO-07 (runtime_stop.py:69-88 pause overwrites stronger reason); W3RO-13 (stop case lifted by actor string); W3RCA-07 (safety_mode.py:13 detectors shadow by default); W3RCT-11 (engagement_worker.py:43-52 staff message doesn't hold nudges); W3RCT-12 (timed follow-ups bypass); W3TSA-09 (text_delivery.py:787-809, :1005-1030 holds 1/2 skipped for non-engine origins); W3TSA-14 (text_delivery.py:356-360 safety scan broad except); W3RCA-16, W3RO-35 (staff / imported rows misread). Red also `rwl/W3-conversation-engine-a:service/tests/test_w3_cea_custom_and_stop_red.py`.
+- live: latent — sending off, 0 policies (m); X04 skip_list 0 / X05 blacklist 0 vacuous; X06 blocked.
+- fix (code judo, IDEA-C): one `controls.reason(fan)` hold chain — canonical stop set, allow-list of non-blocking reasons, blacklist, opt-out over all inbound since last send — called at admit and consume by every automated origin; safety detectors enforce by default.
+- OQ: OQ-12, OQ-17, OQ-18.
+
+### G9 (new) · Account holds not uniform across senders (kill switch, gap, cap, concurrency)
+- root cause: holds are optional callables per sender; native pilot / FASTT manual / FansAPI client / campaigns each read their own subset.
+- ids: W3TSA-01 (native_pilot/runner.py:289-656 separate hold set; ledger.py:552-565) — blocker; W3TSA-03 (text_delivery.py:831, :875, :1093 send_gap never applied) — blocker; W3TSA-04 (text_delivery.py:1429-1440 kill switch only on FansAPI) — blocker-conditional; W3FA-02 (fans_api/protocol.py:251-274 public `send` outside holds) — blocker; W3FA-14 (real_transport.py:142-144 no pilot ⇒ `guard=None`); W3TSA-11 (concurrent_admission.py:145-147 cap probe error = 0); W3RCA-04 (daily cap one unit); W3RCA-05 (campaigns.py:353-358 lifetime only); W3RCA-14, W3RCA-19, W3RCA-22; W3RCB-09 (vault_upload_transport.py:112-122 real wall post); W3RCB-19, W3RCB-23; W3TSA-13, W3TSA-16, W3TSA-17 (`_signed_request` any POST), W3TSA-20; W3CEA-15, W3CEA-19.
+- live: latent — 0 policy rows, sending off (m).
+- fix (code judo): required `SendHolds` ctor arg (W3TSA-S3) with one `daily_cap_reason` + `send_gap` + kill switch; every wire POST goes through `consume_dispatch`; `_signed_request` GET-only, POSTs only via the allowlisted `_call`.
+- OQ: OQ-11, OQ-12.
+
+### G10 (new) · Cross-account / binding scoping gaps (inv. 8)
+- root cause: lookups keyed by account (or nothing) where the row carries tenant + binding.
+- ids: W3FA-03 (fans_api/events.py:218-227 `_resolve` by provider id, no account filter) — blocker; W3RO-36 (operator_cases.py:183-215 refused cross-tenant send still reads / writes); W3RO-27 (role_guard.py:34 account-less passes); W3RO-31; W3FA-07 (events.py:228-264 unknown `acct_` retires connection); W3RCT-03, W3RCT-15, W3RCT-17, W3RCT-25 (handover.py:24 `tenant_id=None` drops filter); W3CEA-21 (commerce.py:168-171 no binding filter); W3DC-03 (PR #80 ignores authenticated account); W3RD-30 (vault_management.py:444-459 replay match).
+- live: latent — single account live, 0 webhooks (m); harm i.
+- fix: every query by (tenant, account, binding); `None` never means "all"; refuse caller / row mismatch.
+- OQ: none.
+
+### G11 (new) · Credentials / key-shaped values exposed or persisted; direct egress
+- root cause: provider bodies, ids and secrets copied raw into responses, logs and immutable rows; capture fetches skip the proxy transport.
+- ids: W3RCA-10 (connections.py:110-129 → connection_api.py:71-83 `/capture-context` returns decrypted proxy URL); W3RCA-23 (activation_status.py:173-179 raw run error text); W3TL-03 (= W1 F3 key-shaped refusal evidence); W3TL-26 (llm_client keeps 500 chars raw body) — blocker; W3TL-28, W3TL-29 (raw provider strings / ids stored) — blocker-conditional; W3DC-01 (PR #80 `urllib` direct to OF CDN, session_bootstrap.py:522-527, :551-553) — blocker; W3DC-05, W3DC-06 (sign echoed in 400); W3RCA-20 (browser_capture.py:118-133 first capture direct); W3RCT-26 (content_sync_carrier.py:44-48 carrier skips family / budget).
+- live: W3RCA-10 route configured live (X17 m), credential echo unverified; PR #80 unmerged (m); rest latent.
+- fix: fixed error labels + sanitized log; never return decrypted secrets (return `configured: bool`); every OF fetch via the curl_cffi proxied transport.
+- OQ: none.
+
+### G12 (new) · Real-looking ids / creator name in the public repo
+- root cause: fixtures and recovery scripts copied from live data.
+- ids: W3RCB-07 (monitor_incident_recovery.py:77-81) — blocker; W3RO-08 (moxy_replacement/sources/account-bindings.v1.json; offer_import.py:851-868) — blocker; W3TL-22; W3TH-09 (test files share the literals) — blocker; W3TH-10 (fake_fans_server.py:10 reads live creator env).
+- live: present in repo HEAD (m by the lanes); values not repeated here.
+- fix: replace with synthetic ids; load real bindings from host-only config; history scrub = owner call.
+- OQ: OQ-15.
+
+## W3 rest
+
+| ids | verdict | note |
+|---|---|---|
+| W3CEA-04, W3CEA-11, W3CEA-22, W3CEA-23 | fix | customs claim check; "named human" deny-list; None deref → 5xx; RuntimeError in settle (g) |
+| W3CEA-05 | dup-of | W1 S1 (R11 / R13 no rule); red `test_w3_cea_rules_denylist_from_c2c09b01.py` |
+| W3CEA-06, W3CEA-13 | fix | tests pin takeover hold (mutants survive); claims suites uncollected |
+| W3CEA-10 | policy | = W3TSA-19, OQ-13 |
+| W3CEA-17, W3CEA-20 | YAGNI | minor |
+| W3CEA-24 | fix | doc |
+| W3CEA-S1 | dup-of | W3TSA-S1 |
+| W3CEA-S2 … W3CEA-S6 | YAGNI | structure |
+| W3DC-02, W3DC-04, W3DC-07, W3DC-08, W3DC-12, W3DC-13, W3DC-14 | fix | PR #80: fix before merge (tautological verify, cookie header, path input, unbounded read, 0 tests) |
+| W3DC-09, W3DC-10, W3DC-11 | YAGNI | |
+| W3DR-03, W3DR-05 | fix | disclosure: 0 `TEST-CHANGE:`; migration change unstated |
+| W3DR-04 | policy | network failure joins incident recovery |
+| W3DR-06 | policy | OQ-21: R0 cannot boot on live DB 0133 (X01 m) |
+| W3DR-09 | dup-of | W1-20 (worse) |
+| W3DR-11, W3DR-17, W3DR-18 | fix | Dockerfile outside §3; tests uncollected; downgrade guard |
+| W3DR-10, W3DR-12, W3DR-13, W3DR-16, W3DR-20 | YAGNI | structure / counter / test env |
+| W3FA-05, W3FA-16 | fix | unsupported verified events dropped; late `connected` flips auth state |
+| W3FA-06 | fix | `release_send_block` no production caller (fails closed). **W1 fans-api M1 wrong** |
+| W3FA-10, W3FA-11 | YAGNI | no prod caller / fails closed |
+| W3FA-17, W3FA-19, W3FA-20 | fix | doc |
+| W3FA-21, W3FA-22 | fix | tests pin kill-switch default / verify (→ W3TH-04) |
+| W3FA-S1 … W3FA-S12 | YAGNI | S3 code judo: one importer, delete backfill |
+| W3RCT-23 | fix | Misc withdrawal deletes operator memberships; red `rwl/W3-runtime-content:service/tests/test_w3_runtime_content_misc_withdrawal.py`. = CVA-10 → **W1 DOC-20 retraction wrong** |
+| W3RCT-24 | policy | OQ-19 provisioning defaults live (X03 inert m) |
+| W3RCT-20 | YAGNI | repair >1000 no paging |
+| W3RCT-T1 | fix | fan-messaging scheduler has 0 tests |
+| W3RCT-T2, W3RCT-S1 … W3RCT-S6 | YAGNI | structure / no caller |
+| W3RCA-11 | dup-of | W3RCA-S2 (`Refused` by message text) |
+| W3RCA-13, W3RCA-17, W3RCA-18 | fix | replay `applied`; window lower bound; GET 503 |
+| W3RCA-21, W3RCA-D1 | fix | doc |
+| W3RCA-S2 | fix | `Refused(code=…)` — removes text-matching under G7 / W3RD-23 |
+| W3RCA-S3 … W3RCA-S11 | YAGNI | S11 ideas: delete until owner asks |
+| W3RCA-T1, W3RCA-T2 | fix | stale head pin; PR CI skips `_pg` |
+| W3RCB-20 | fix | broad except → `draft_ref` |
+| W3RCB-21, W3RCB-25 | YAGNI | |
+| W3RCB-S01 … W3RCB-S14 | YAGNI | structure |
+| W3RCB-D01 | fix | doc |
+| W3RD-08, W3RD-09, W3RD-15 | fix | exclusive lock on GET; materialize compare; Misc filing silent |
+| W3RD-14 | YAGNI | clock skew window |
+| W3RD-16 … W3RD-25, W3RD-27 | YAGNI | structure (text_delivery 1588 L, store 1033 L) |
+| W3RD-26 | dup-of | W3RCA-T2 |
+| W3RO-16, W3RO-30, W3RO-37 | fix | Moxy path skips price bounds; duplicate single; truncated JSON |
+| W3RO-15, W3RO-17, W3RO-19, W3RO-26, W3RO-28, W3RO-29, W3RO-33, W3RO-34 | YAGNI | structure / phrase list |
+| W3TH-01, W3TH-02, W3TH-03, W3TH-04, W3TH-06, W3TH-12, W3TH-14 | fix | CI gate / runner false green; wire fakes swallow invariants |
+| W3TH-05, W3TH-07, W3TH-08, W3TH-11, W3TH-13, W3TH-15 | YAGNI | |
+| W3TL-12 | dup-of | W1-20 |
+| W3TL-15 | dup-of | W1-12 |
+| W3TL-16 | dup-of | W1-21 |
+| W3TL-17, W3TL-19 | YAGNI | |
+| W3TL-20, W3TL-21 | fix | REVIEW #6 list; 422 test gap (W1 T06) |
+| W3TSA-08 | fix | mutant M5 (delivery_block at consume) survives |
+| W3TSA-15 | policy | stop after consume can't recall in-flight POST (bounded) |
+| W3TSA-18 | fix | discounted resend: DELETE ok, POST 4xx → no card |
+| W3TSA-19 | policy | OQ-13 |
+| W3TSA-S1 … W3TSA-S5 | YAGNI | S1 / S3 are the G8 / G9 code judo |
+
+## W3 disputes resolved
+- CS-02 narrowed by W3CEA-07 (G1).
+- W1 DOC-11 wrong (W3CEA-16, G4).
+- W1 DOC-20 retraction wrong: CVA-10 real (W3RCT-23 red).
+- W1 fans-api M1 wrong (W3FA-06).
+- W1 F2 "fixed" false at a2f; fixed in R0 66a1da4a (W3TL-06).
+- W1-04 latent, not live (W3TL). Open: W3TL-13.

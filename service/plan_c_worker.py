@@ -82,15 +82,25 @@ def _response(status, code):
 
 
 def create_app(pilot, *, run_loop=True):
-    progress = {'ticks':0, 'failures':0, 'consecutive_failures':0, 'last_success':None}
+    progress = {'ticks':0, 'failures':0, 'consecutive_failures':0, 'last_success':None, 'in_flight':None}
 
     @asynccontextmanager
     async def lifespan(app):
         stop = asyncio.Event()
         async def loop():
             while not stop.is_set():
+                began=time.monotonic()
+                # The absolute bound also prevents an accidental busy loop from
+                # refreshing individual phase deadlines indefinitely.
+                hard_deadline=began+3600
+                def phase(name,seconds):
+                    now=time.monotonic()
+                    progress['in_flight']={'phase':name,'started':now,'deadline':min(now+seconds,hard_deadline)}
+                phase('tick',30)
                 try:
-                    await asyncio.to_thread(pilot.tick)
+                    from onlyfans_runtime.work_progress import observe
+                    with observe(phase):
+                        await asyncio.to_thread(pilot.tick)
                     progress['ticks'] += 1
                     progress['consecutive_failures'] = 0
                     progress['last_success'] = time.monotonic()
@@ -99,11 +109,14 @@ def create_app(pilot, *, run_loop=True):
                     progress['consecutive_failures'] += 1
                     # Preserve evidence and continue on transient failures; do not log message content or credentials.
                     _LOG.warning('pilot worker tick refused or unavailable')
+                finally:
+                    progress['in_flight']=None
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=2)
                 except asyncio.TimeoutError:
                     pass
         task = asyncio.create_task(loop()) if pilot is not None and run_loop else None
+        app.state.loop_task=task
         try:
             yield
         finally:
@@ -124,17 +137,22 @@ def create_app(pilot, *, run_loop=True):
         # Return counters and coarse states, never exception text or identities.
         mode, sending, reason = 'unavailable', False, 'unavailable'
         work = None
+        inflight=progress['in_flight']
+        now=time.monotonic()
+        bounded=inflight is not None and now<=inflight['deadline']
         current = app.state.pilot
         if current is not None:
             from model_transport.pilot_supervised import IntakeOnlyPilot
             mode = 'intake_only' if isinstance(current, IntakeOnlyPilot) else 'active'
             if not run_loop:
                 reason = 'loop_disabled'
+            elif getattr(app.state,'loop_task',None) is not None and app.state.loop_task.done():
+                reason = 'loop_dead'
             elif progress['consecutive_failures']:
                 reason = 'loop_failed'
-            elif progress['last_success'] is None:
+            elif progress['last_success'] is None and not bounded:
                 reason = 'loop_starting'
-            elif time.monotonic() - progress['last_success'] > 30:
+            elif (inflight is not None and not bounded) or (not bounded and progress['last_success'] is not None and now-progress['last_success']>30):
                 reason = 'loop_stale'
             else:
                 def check():
@@ -157,6 +175,7 @@ def create_app(pilot, *, run_loop=True):
         return JSONResponse({'ok':ready, 'mode':mode, 'sendingReady':sending, 'code':reason,
             'work':work, 'workHeld':bool(work and any(work[k] for k in (
                 'unreviewedInbound','unknownSends','pendingProviderEvents','malformedHolds'))),
+            'inFlight':None if inflight is None else {'phase':inflight['phase'], 'ageSeconds':max(0,now-inflight['started']), 'deadlineInSeconds':max(0,inflight['deadline']-now)},
             'ticks':progress['ticks'], 'failures':progress['failures'],
             'consecutiveFailures':progress['consecutive_failures']}, status_code=200 if ready else 503,
             headers={'Cache-Control':'private, no-store'})

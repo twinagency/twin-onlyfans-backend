@@ -202,6 +202,8 @@ class OpenRouterClient:
             raise Refused("invalid model mapping identity")
         author,slug=requested_model.split("/",1)
         url=self._url.removesuffix("/chat/completions")+"/model/"+quote(author,safe="")+"/"+quote(slug,safe=":")
+        from onlyfans_runtime.work_progress import started
+        started("model_identity",timeout_seconds)
         try:
             with httpx.Client(transport=self._transport,timeout=httpx.Timeout(timeout_seconds),
                     follow_redirects=False,trust_env=False) as client:
@@ -235,6 +237,8 @@ class OpenRouterClient:
         from onlyfans_runtime.store import Refused
         if type(generation_id) is not str or not re.fullmatch(r'[A-Za-z0-9._:-]{1,255}', generation_id):
             raise Refused('provider generation correlation is unavailable')
+        from onlyfans_runtime.work_progress import started
+        started("model_identity",timeout_seconds)
         try:
             with httpx.Client(transport=self._transport, timeout=httpx.Timeout(timeout_seconds),
                     follow_redirects=False, trust_env=False) as client:
@@ -287,6 +291,8 @@ class OpenRouterClient:
                 'max_price': {'prompt': prices[0] / 1_000_000, 'completion': prices[1] / 1_000_000}}
         headers = {'Authorization': 'Bearer ' + self._key, 'Content-Type': 'application/json', 'X-Title': self._title,
                    'X-OpenRouter-Metadata': 'enabled'}
+        from onlyfans_runtime.work_progress import started
+        started("model",request.timeout_seconds)
         try:
             with httpx.Client(transport=self._transport, timeout=httpx.Timeout(request.timeout_seconds),
                               follow_redirects=False, trust_env=False) as client:

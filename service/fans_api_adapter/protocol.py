@@ -153,6 +153,8 @@ class FansApiClient:
         if key is not None: headers['Idempotency-Key'] = key
         self.last_retry_after = None
         exchange = self.last_exchange = {'transport_error': None, 'body_kind': 'none', 'body_bytes': 0}
+        from onlyfans_runtime.work_progress import started
+        started("provider",self._timeout)
         try:
             response = self._http(method=method, url=url, headers=headers, body=body,
                                   timeout=self._timeout, follow_redirects=False)

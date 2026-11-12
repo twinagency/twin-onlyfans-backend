@@ -76,14 +76,43 @@ def status_request(url,method='GET',headers=None,*,timeout=6):
   with OPENER.open(req,timeout=timeout) as r:return r.status,r.read(2_000_001)
  except urllib.error.HTTPError as e:return e.code,e.read(2_000_001)
  except Exception:raise GuardFailure('network_check_failed') from None
+def retain_readiness_failure(status,body,data=None):
+ import hashlib,re
+ record={'at':now(),'http_status':status,'body_bytes':len(body),'body_sha256':hashlib.sha256(body).hexdigest()}
+ if type(data) is dict:
+  for key in ('code','mode'):
+   value=data.get(key)
+   if type(value) is str and re.fullmatch('[a-z_]{1,64}',value):record[key]=value
+  for key in ('ticks','failures','consecutiveFailures'):
+   value=data.get(key)
+   if type(value) is int and 0<=value<10**9:record[key]=value
+  phase=data.get('inFlight')
+  if type(phase) is dict and phase.get('phase') in ('tick','model','model_identity','provider'):
+   record['inFlight']={k:v for k,v in phase.items() if k=='phase' or k in ('ageSeconds','deadlineInSeconds') and type(v) in (int,float) and 0<=v<=3600}
+ # The journal record survives sender-container removal. The private host file
+ # also survives monitor restarts; no response prose or identifiers are retained.
+ print(json.dumps({'readinessFailure':record},sort_keys=True),file=sys.stderr,flush=True)
+ try:atomic(ROOT/'supervision-v11'/'readiness-last-failure.json',record)
+ except (OSError,ValueError):pass
+ return record
+
 def status_json(url):
- status,body=status_request(url)
- if status!=200 or len(body)>2_000_000:raise GuardFailure('readiness_unavailable')
+ try:status,body=status_request(url)
+ except GuardFailure:
+  retain_readiness_failure(None,b'')
+  raise
+ data=None
  try:
-  result=json.loads(body)
-  if type(result) is not dict:raise ValueError()
-  return result
- except Exception:raise GuardFailure('readiness_malformed') from None
+  if len(body)<=2_000_000:data=json.loads(body)
+ except Exception:pass
+ if status!=200 or len(body)>2_000_000:
+  retain_readiness_failure(status,body,data)
+  raise GuardFailure('readiness_unavailable')
+ if type(data) is not dict:
+  retain_readiness_failure(status,body,data)
+  raise GuardFailure('readiness_malformed')
+ return data
+
 def lookup(url,headers=None,**kw):
  # Network errors, 429 and 5xx are transient: nothing was learned, and nothing is published.
  try:status,body=status_request(url,headers=headers,**kw)
@@ -226,6 +255,20 @@ def run():
   failures=0;state=fresh;atomic(STATE,state)
   notify('READY=1\nWATCHDOG=1\nSTATUS=Pilot checks passed')
   time.sleep(10)
+def retain_sender_logs():
+ if CONFIG is None:return False
+ try:
+  import uuid
+  raw=subprocess.check_output(['docker','logs','--timestamps','--tail','200',CONFIG['senderContainer']],stderr=subprocess.STDOUT,timeout=3)
+  directory=ROOT/'evidence';directory.mkdir(exist_ok=True)
+  path=directory/('sender-before-stop-'+uuid.uuid4().hex+'.log')
+  fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+  with os.fdopen(fd,'wb') as stream:
+   stream.write(raw[:262144]);stream.flush();os.fsync(stream.fileno())
+  print('sender_logs_retained:'+str(path),file=sys.stderr,flush=True)
+  return True
+ except Exception:return False
+
 if __name__=='__main__':
  try:
   from operation_config import load
@@ -235,8 +278,10 @@ if __name__=='__main__':
    raise GuardFailure('persistent_state_scope_mismatch')
   run()
  except GuardFailure as exc:
+  retain_sender_logs()
   print('pilot_supervisor_stopped:'+str(exc),file=sys.stderr)
   raise SystemExit(1)
  except Exception:
+  retain_sender_logs()
   print('pilot_supervisor_stopped:unexpected_failure',file=sys.stderr)
   raise SystemExit(1)

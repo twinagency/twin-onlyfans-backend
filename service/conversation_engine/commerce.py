@@ -434,6 +434,55 @@ def prepare_commercial_offer(store, tenant, account, fan_id, message_id, *, cove
         return {'state': 'prepared', 'grantId': grant.grant_id, 'itemId': str(item_id), 'variant': variant, 'priceCents': price}
 
 
+def commercial_coverage(s, runtime, config):
+    """(evidence_ref, valid_until) from the commercial scope's own durable catalogue approval, or None with a reason.
+
+    The approval block is the agency's: this account, this binding, an explicit UTC expiry. Nothing is inferred; a missing,
+    foreign or expired block yields no coverage and therefore no new grant (ordinary chat is unaffected).
+    """
+    from datetime import datetime as _dt
+    block = config.get('catalogue')
+    if block is None:
+        return None, 'offer_coverage_missing'
+    if block['account_id'] != runtime.account_id or block['binding_id'] != runtime.binding_id:
+        return None, 'offer_coverage_scope_changed'
+    expiry = _dt.fromisoformat(block['valid_until'])
+    if expiry <= utcnow():
+        return None, 'offer_coverage_expired'
+    return (block['evidence_ref'], expiry), None
+
+
+def prepare_scoped_offer(store, tenant, account, fan_id, message_id, engine):
+    """The one preparation entry of the real worker, routed by the account's own scope contract.
+
+    legacy pilot (scope_id 1)  -> `prepare_pilot_offer`, unchanged
+    commercial.v1 scope        -> `prepare_commercial_offer` with the catalogue reference and expiry of the scope's durable
+                                  approval (standing agency permission; no per-fan grant exists before this call)
+    preparation / no scope     -> None (no offer authority of any kind)
+
+    A commercial result carries `commercial: True`. It is never a reason to stop the conversation: when the paid action is
+    unavailable (no coverage, held, owned, ambiguous, nothing suitable) the writer simply gets no approved offer and chats.
+    """
+    from .pilot_scope import current
+    from . import scope_contract as contracts
+    with Session(store.engine) as s:
+        runtime = store._runtime(s, tenant, account, lock=False)
+        pilot, config = current(s, runtime)
+        if pilot is None:
+            return None
+        if not contracts.is_commercial(config):
+            coverage = reason = None
+        else:
+            coverage, reason = commercial_coverage(s, runtime, config)
+            audience = config['fans']
+    if coverage is None and reason is None:
+        return prepare_pilot_offer(store, tenant, account, fan_id, message_id, engine)
+    if reason is not None or fan_id not in audience or pilot.status != 'active':
+        return {'state': 'unavailable', 'reason': reason or 'offer_not_authorized', 'commercial': True}
+    result = prepare_commercial_offer(store, tenant, account, fan_id, message_id, coverage_ref=coverage[0], valid_until=coverage[1])
+    return None if result is None else {**result, 'commercial': True}
+
+
 def _real_catalogue_terms(s, account, item_id, *, lock=True, price_cents=None):
     """Shared preparation/availability/send provenance checks; read-only when lock=False."""
     from db.models import VaultItem

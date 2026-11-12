@@ -168,9 +168,26 @@ def view(store, tenant, account):
 
 # ---------------------------------------------------------------- launch prerequisites (decision D4)
 def catalogue_ready(s, runtime, config):
-    """Hook for the catalogue contract of a later step. No product contract exists yet, so a full-delivery
-    commercial scope can be configured but never launched: nothing may sell through a half-built contract."""
-    raise Refused(contracts.PRODUCT_UNAVAILABLE)
+    """A full-delivery commercial scope launches only on an approved, unexpired, still-current catalogue (Step 3 terms).
+
+    The scope's `catalogue` block is the agency's standing approval: its binding, its explicit expiry and the aggregate commercial
+    catalogue version it approved. No approved product at all, or no approval block, keeps the old refusal
+    (`commercial_product_contract_unavailable`): nothing sells through a missing contract. A catalogue that changed after the
+    approval, or an expired one, is a different, named refusal; the agency re-approves and the operator re-launches.
+    Per-item freshness after launch is not this hash's job: every grant freezes the live approved terms and is re-verified at
+    draft, approval, queue and the final wire check.
+    """
+    from sqlalchemy import select as _select
+    from db.onlyfans_catalogue_terms_models import OfCatalogueTerms
+    from .catalogue import _catalogue_version
+    catalogue = config.get('catalogue')
+    approved = s.scalar(_select(OfCatalogueTerms.item_id).where(OfCatalogueTerms.account_id == runtime.account_id,
+                                                                OfCatalogueTerms.status == 'approved').limit(1))
+    if catalogue is None or approved is None:
+        raise Refused(contracts.PRODUCT_UNAVAILABLE)
+    check_catalogue(runtime, config)
+    if catalogue['snapshot_hash'] != _catalogue_version(s, runtime):
+        raise Refused('commercial catalogue changed since its approval')
 
 
 def assert_launchable(s, runtime, row, config):

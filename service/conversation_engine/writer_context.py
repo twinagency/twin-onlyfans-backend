@@ -335,6 +335,20 @@ def pick_offer(snapshot, fan_text):
     return sorted(grants, key=score)[0]
 
 
+def may_offer_item(profile, item_id, snapshot):
+    """May the creator profile let this catalogue item be offered?
+
+    Legacy scope: the profile itself names the approved item(s). A commercial scope (`terms_mode == 'commercial.v1'`) approves each
+    product through its live agency terms and the account's catalogue approval; the profile then carries only the general
+    permission (`offers_permitted`), because a 1,000-product catalogue cannot be a twenty-id list. A missing permission is "no
+    offer" in both modes."""
+    if profile is None:
+        return False
+    if (snapshot or {}).get('terms_mode') == 'commercial.v1':
+        return profile.offers_permitted is True
+    return profile.may_offer(item_id)
+
+
 def offer_for(snapshot, profile, fan_text):
     """The ONE approved offer this turn may use, or None.
 
@@ -346,7 +360,7 @@ def offer_for(snapshot, profile, fan_text):
     if journey.get('offers_allowed') is False or snapshot.get('delivery_mode') == 'text_only':
         return None   # text-only delivery has no commercial action at all
     offer = pick_offer(snapshot, fan_text)
-    if offer is None or profile is None or not profile.may_offer(offer['itemId']):
+    if offer is None or not may_offer_item(profile, offer['itemId'], snapshot):
         return None
     return offer
 
@@ -595,7 +609,7 @@ def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, bud
         request_context=request_context_from(snapshot, budget),
         sales_mode=snapshot.get('sales_mode', 'open'), sales_scope=scope, scope_items=scope_items, offer=offer,
         price_information=(() if snapshot.get('delivery_mode') == 'text_only' else
-                           tuple(i for i in snapshot.get('price_information', []) if profile.may_offer(i['itemId']))),
+                           tuple(i for i in snapshot.get('price_information', []) if may_offer_item(profile, i['itemId'], snapshot))),
         outstanding_card=matched[0] if matched else None,
         purchases=tuple(p['label'] for p in purchases[:budget.purchases]) if isinstance(purchases, list) else None,
         identity_line=identity_line, recent_questions=recent_her_questions(snapshot),

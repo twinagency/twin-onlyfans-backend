@@ -34,7 +34,7 @@ from onlyfans_runtime.text_delivery import TextAuthority
 
 SECRET = b'commercial-worker-secret'
 OPERATOR = 'op-session:' + 'a' * 64
-FAN_A, FAN_B = 401, 402
+FAN_A, FAN_B, FAN_C, FAN_D = 401, 402, 403, 404
 HASH_KIND = 'vault-metadata-v1'
 PERMISSIONS = ['configure', 'activate', 'approve', 'reject', 'edit', 'stop', 'takeover', 'handback', 'reconcile', 'correct', 'read']
 
@@ -72,7 +72,7 @@ class World:
         return item
 
     # ---------------------------------------------------------------- scope
-    def launch(self, *, valid_for=timedelta(days=1), authorization_mode='supervised'):
+    def launch(self, *, valid_for=timedelta(days=1), authorization_mode='supervised', after_snapshot=None):
         env = self.env
         profile = CreatorProfile(name='Fixture creator', limits=('no meetups',), role_statement='the creator herself',
                                  offers_permitted=True, approved_item_ids=())
@@ -81,6 +81,8 @@ class World:
         valid_until = (utcnow() + valid_for).replace(microsecond=0)
         snapshot = cs.catalogue_snapshot(self.store, TENANT, self.account, evidence_ref='vault:agency-catalogue-1',
                                          valid_until=valid_until)
+        if after_snapshot is not None:
+            after_snapshot(self)                       # a catalogue change AFTER the agency's approval
         body = {'fans': list(self.fans), 'creator_profile': self.profile, 'delivery_mode': 'full', 'catalogue': snapshot,
                 'operator': {'actor': OPERATOR, 'name': 'Fixture operator', 'permissions': PERMISSIONS},
                 'model': pilot_scope.model_spec(ModelConfig.from_env(env)),
@@ -97,7 +99,10 @@ class World:
                                          reason='Operator selects autonomous replies')
             revision = done['revision']
         with Session(self.database[1], expire_on_commit=False) as s, s.begin():
-            s.get(OfRuntime, self.account).enabled = True
+            runtime = s.get(OfRuntime, self.account)
+            # Explicit fixture evidence of a completed recent synchronization, exactly as the legacy suites state it
+            # (`test_onlyfans_text_delivery_pg.current`). It is not coverage and grants nothing.
+            runtime.enabled, runtime.recovery_needed, runtime.last_sync_at = True, False, utcnow()
             policy = s.get(OfDeliveryPolicy, self.account)
             policy.daily_limit_units = 100
             policy_revision, throttle = policy.revision, policy.throttle_seconds
@@ -190,7 +195,7 @@ def writer(world, *, choose=None):
     return httpx.MockTransport(respond)
 
 
-def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B), choose=None):
+def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B, FAN_C, FAN_D), choose=None, read=None):
     """A prepared account with complete per-fan history for `fans`, and the fake model/provider transports. Not yet launched."""
     monkeypatch.setenv('TWIN_PLAN_C_FIXTURE_ONLY', '1')
     monkeypatch.setenv('ONLYFANS_PROCESS_ROLE', 'worker')
@@ -201,7 +206,7 @@ def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B), ch
     wire = Provider(cfg)
     for fan in fans:
         wire.chats[fan] = [chat_page([])]
-    read_everything(store, database, account, wire, tuple(fans))
+    read_everything(store, database, account, wire, tuple(fans if read is None else read))   # `read`: only these fans' history is imported
     unblock(database[1], account, cfg['creator_id'])
     w = World()
     w.database, w.store, w.account, w.cfg, w.fans = database, store, account, cfg, tuple(fans)
@@ -226,3 +231,11 @@ def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B), ch
     w.choose = choose
     w.model_transport = writer(w)
     return w
+
+
+@pytest.fixture
+def world(database, tmp_path, monkeypatch):
+    w = build_world(database, tmp_path, monkeypatch)
+    yield w
+    set_active_profiles(None)
+    w.store.close()

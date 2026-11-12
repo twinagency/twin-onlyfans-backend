@@ -496,6 +496,9 @@ def main():
         os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///"+str(path)
         os.environ["VAULT_SPOOL_DIR"] = str(Path(tmp)/"spool")
         os.environ["VAULT_IMAGE_DIR"] = str(Path(tmp)/"images")
+        # The unread-flag journal otherwise defaults to the production spool volume (/var/lib/twin-vault), which a
+        # read-only test container (rightly) cannot create; keep this isolated fixture on private temp paths.
+        os.environ["ONLYFANS_UNREAD_JOURNAL_DIR"] = str(Path(tmp)/"unread-journal")
         os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
         def deny(*a, **kw): raise AssertionError("network forbidden in isolated fixture")
         with asyncio.Runner() as runner:

@@ -422,7 +422,9 @@ def _product_mentions(text, bound):
     `seconds` is a duration stated in the same noun phrase ("a ten-minute video")."""
     for clause, question in _clauses(text.replace('\u2019', "'")):
         for match in _MEDIA_NOUN.finditer(clause):
-            if _NON_PRODUCT_COMPOUND.match(clause[match.end():]) or not _asserted(clause, question, match.start(), anchored=True):
+            # On a card every mention is about the card, so a demonstrative re-anchors a negated phrase; in a plain reply a
+            # demonstrative is usually the fan's own reference ("I cannot discuss that video"), so ordinary negation applies.
+            if _NON_PRODUCT_COMPOUND.match(clause[match.end():]) or not _asserted(clause, question, match.start(), anchored=bound):
                 continue
             if not bound and not _directed(clause, match.start(), match.end()):
                 continue
@@ -587,7 +589,9 @@ def check_plain_text(texts, proposal, sales_mode, verified_prices=frozenset(), g
         verified_prices = set(verified_prices) | set(grounding.current_offer_prices)
     elif grounding.offer_bound:
         # Another card's price, an informational listing or an older offer never authorizes an amount in this card's lead-in.
-        verified_prices = set(grounding.current_offer_prices)
+        # The amount must be this grant's price AND be the price the engine matched for this turn (an informational listing
+        # or an unmatched grant never makes an offer lead-in a source of amounts).
+        verified_prices = set(grounding.current_offer_prices) & set(verified_prices)
     labels = [label for label in (_norm(l) for l in grounding.purchase_labels) if len(label) >= 3]
     access_labels = labels + [label for label in (_norm(l) for l in grounding.access_labels) if len(label) >= 3]
     if any(cents not in verified_prices for cents in proposal.price_claims):

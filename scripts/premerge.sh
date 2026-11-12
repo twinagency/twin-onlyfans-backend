@@ -33,8 +33,13 @@ tests=()
 for f in "${changed[@]+"${changed[@]}"}"; do
   case "$f" in
     service/tests/*) case "$(basename "$f")" in test_*.py) tests+=("$f");; esac;;
-    service/*) mod="$(basename "$f" .py)"; [ "$mod" = __init__ ] && continue
-      while IFS= read -r t; do tests+=("$t"); done < <(grep -rlw --include='test_*.py' "$mod" service/tests || true);;
+    service/*) [ "$(basename "$f")" = __init__.py ] && continue
+      # tests that import the module by its dotted path (or name it in a string, e.g. monkeypatch);
+      # a bare word match pulled in prose and stdlib (`from http.server import`) for server.py
+      dot="${f#service/}"; dot="${dot%.py}"; dot="${dot//\//.}"; mod="${dot##*.}"; parent="${dot%.*}"; dq="${dot//./\\.}"
+      re="^[[:space:]]*(import|from)[[:space:]]+(service\\.)?$dq([[:space:]]|\\.|,|\$)|[\"'](service\\.)?$dq[.\"']"
+      [ "$parent" != "$dot" ] && re="$re|^[[:space:]]*from[[:space:]]+(service\\.)?${parent//./\\.}[[:space:]]+import[[:space:]].*\\b$mod\\b"
+      while IFS= read -r t; do tests+=("$t"); done < <(grep -rlE --include='test_*.py' "$re" service/tests || true);;
   esac
 done
 promoted=(); while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) promoted+=("$l");; esac; done <"$PROMOTED"
@@ -52,6 +57,9 @@ run() {  # one process per target, like run-service-tests.py isolation
     elif [ "$id" = "$t" ]; then expect="$rest"; fi; done
   [ "$t" = "$file" ] && is_script "$file" && cmd=("$file")
   if res="$("$PY" "${cmd[@]}" 2>&1)"; then
+    # pytest exits 0 on in-test skips/xfails: those cases did not run, so they are not a PASS.
+    if [ "${cmd[0]}" = -m ] && tail -1 <<<"$res" | grep -qE '[0-9]+ (skipped|xfailed)'; then
+      echo "SKIP (pytest: $(tail -1 <<<"$res")) $t"; skip=$((skip+1)); return 0; fi
     if [ -z "$expect" ]; then echo "PASS $t: $(tail -1 <<<"$res")"; else echo "FAIL $t: known-red but passed; drop it from $KNOWN"; fail=1; fi
   elif [ -n "$expect" ] && [ "$(tail -1 <<<"$res")" = "$expect" ]; then echo "KNOWN-RED $t: $expect"; kr=$((kr+1))
   else echo "FAIL $t: $(tail -1 <<<"$res")"; tail -30 <<<"$res"; fail=1; fi

@@ -61,3 +61,13 @@ def test_legacy_from_curl_refuses_auth_id_mismatch_before_any_write(wire, monkey
     with pytest.raises(sb.OwnerMismatch):
         sb.from_curl(curl("-b 'auth_id=999; sess=FAKE'"))
     assert wire == []
+
+
+def test_bootstrap_route_maps_owner_mismatch_to_409_not_500(wire):
+    from fastapi import HTTPException
+    import server
+    body = server._BootstrapBody(mode="paste-curl", curl=curl("-b 'auth_id=999; sess=FAKE'"))
+    with pytest.raises(HTTPException) as e:
+        server.bootstrap_session(body)
+    assert (e.value.status_code, e.value.detail) == (409, "owner_mismatch")
+    assert wire == []

@@ -8298,6 +8298,8 @@ def bootstrap_session(body: _BootstrapBody = Body(...)) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")
     except session_bootstrap.CurlParseError as e:
         raise HTTPException(status_code=400, detail=f"curl parse error: {e}")
+    except session_bootstrap.OwnerMismatch:
+        raise HTTPException(status_code=409, detail="owner_mismatch")
     except HTTPException:
         raise
     except Exception as e:

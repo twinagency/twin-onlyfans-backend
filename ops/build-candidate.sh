@@ -64,7 +64,7 @@ suite_files() {
     completion)   echo "tests/test_commercial_qualification_gate.py tests/test_commercial_completion_pg.py tests/test_commercial_stopped_activation_pg.py tests/conversation_engine/test_claims_semantics.py tests/test_openrouter_decoding.py tests/test_plan_c_unknown_send_evidence_pg.py" ;;
     preparation)  echo "tests/test_commercial_preparation_pg.py tests/test_preparation_retry_state_pg.py tests/test_commercial_classification_refresh_pg.py tests/test_history_import_pg.py" ;;
     normal)       echo "tests/test_commercial_normal_control_journey_pg.py tests/test_commercial_terms_http_pg.py tests/test_commercial_shared_provider_pg.py tests/test_commercial_parallel_workers_pg.py tests/test_plan_c_inflight_readiness.py tests/test_commercial_readiness_budget_pg.py" ;;
-    legacy)       echo "tests/test_commercial_progress.py tests/test_commercial_full_path.py tests/test_history_capacity_turns.py tests/test_r2_complete_answers.py tests/test_plan_c_sim_pg.py" ;;
+    legacy)       echo "tests/test_commercial_progress.py tests/test_commercial_full_path.py tests/test_history_capacity_turns.py" ;;   # + legacy-isolated, see LEGACY_ISOLATED
     recovery)     echo "tests/test_commercial_ops_recovery_pg.py tests/test_onlyfans_release_package_pg.py tests/test_onlyfans_recovery_pg.py" ;;
     delivery)     echo "tests/test_onlyfans_text_delivery_pg.py tests/test_concurrent_delivery_pg.py tests/test_plan_c_compressed_retry_pg.py tests/test_plan_c_auth_recovery_pg.py tests/test_plan_c_conflicting_webhook_pg.py" ;;
     ops)          echo "OPS" ;;       # handled specially: pytest in /app/ops/plan-c-supervision
@@ -73,6 +73,10 @@ suite_files() {
   esac
 }
 # Required groups cover the frozen release contract; custom tests supplement rather than replace them.
+# Run in their OWN pytest process, as part of the legacy group: test_r2_complete_answers binds the process-global db.engine to a private SQLite
+# file at import, which any earlier-collected module that imports db.models first (test_commercial_progress) has already fixed to the
+# default path. A failing row of this process fails the group and the harness exactly like any other.
+LEGACY_ISOLATED="tests/test_r2_complete_answers.py tests/test_plan_c_sim_pg.py"
 
 # ---- argument parsing -------------------------------------------------------------------------------------------------
 REQUIRED_SUITES=(completion matrix step4 step5 r0 operator migrations ops preparation normal legacy recovery delivery)
@@ -297,7 +301,9 @@ for s in "${SUITES[@]:-}"; do
                  missing=0; for f in "${present[@]}"; do "${IMG_RUN[@]}" --entrypoint sh "$IMAGE_ID" -c "test -f /app/service/$f" || missing=1; done
                  [ "$missing" = 0 ] || { FAILED=1; printf '%s\t%s\t%s\t%s\n' "$s" BLOCKED "Step 6 matrix files are not in this commit" - | tee -a "$RESULTS"; continue; }
                fi
-               run_group "$s" "${present[@]}" ;;
+               run_group "$s" "${present[@]}"
+               # shellcheck disable=SC2086
+               [ "$s" != legacy ] || run_group legacy-isolated $LEGACY_ISOLATED ;;
   esac
 done
 if [ -n "$CUSTOM_TESTS" ]; then

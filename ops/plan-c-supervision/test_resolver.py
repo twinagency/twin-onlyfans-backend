@@ -19,7 +19,7 @@ class ResolverTests(unittest.TestCase):
   self.calls=[]
   self.ps=[patch.object(r,'ROOT',self.root),patch.object(r,'SUP',self.sup),patch.object(st,'APPROVED_INCIDENT',self.h),
            patch.object(r,'assert_sender_stopped'),patch.object(r,'command',side_effect=self.fake),
-           patch.object(r.sys,'argv',['resolver'])]
+           patch.object(r.sys,'argv',['resolver','--apply'])]
   for p in self.ps:p.start()
  def tearDown(self):
   for p in reversed(self.ps):p.stop()
@@ -57,7 +57,7 @@ class ResolverTests(unittest.TestCase):
    with self.assertRaises(RuntimeError):r.main()
   self.assertTrue(st.unresolved(self.sup/'outage-open.json'))
   evidence=next(p for p in (self.root/'evidence').iterdir() if p.is_dir())
-  with patch.object(r.sys,'argv',['resolver','--resume',str(evidence)]):r.main()
+  with patch.object(r.sys,'argv',['resolver','--apply','--resume',str(evidence)]):r.main()
   self.assertFalse(st.unresolved(self.sup/'outage-open.json'))
   self.assertEqual(len([x for x in self.calls if x[0]==r.sys.executable]),1)
  def test_second_command_case_succeeds_and_replay_does_not_recollect(self):
@@ -78,7 +78,7 @@ class ResolverTests(unittest.TestCase):
     with self.assertRaises(RuntimeError):r.main()
    evidence=next(p for p in (self.root/'evidence').iterdir() if p.is_dir())
    st.record_failure(self.sup,{'failure':'third failure'})
-   with patch.object(r.sys,'argv',['resolver','--resume',str(evidence)]):
+   with patch.object(r.sys,'argv',['resolver','--apply','--resume',str(evidence)]):
     with self.assertRaises(RuntimeError):r.main()
    self.assertTrue(st.unresolved(self.sup/'outage-open.json'))
  def test_changed_incident_refuses_before_collection(self):

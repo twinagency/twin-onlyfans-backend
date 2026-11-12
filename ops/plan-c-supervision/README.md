@@ -161,3 +161,24 @@ reducing the external baseline is a new budget authorization. Fixture transports
 may omit this file. Missing/invalid real configuration refuses provider requests,
 activation and planning. The monitor remains an additional detection boundary,
 not a substitute for transaction-level admission.
+
+
+### Stopped monitor recovery and conflicting event review
+
+Monitor recovery reads the same reviewed per-account supervision configuration as the supervisor.
+The database audit validates the current tenant, binding and active connection epoch from locked
+runtime/scope rows. Historical pinned v1 receipts remain limited to their original legacy identity.
+Current v2/v3 receipts cannot enable sending, settle an unknown send or release application holds.
+
+Resolve a reviewed conflicting message-event key while stopped before collecting the final monitor
+interval evidence when that conflicting delivery falls inside the interval. Retain every variant;
+only the existing stopped-scope conflict review may mark that exact key reviewed. A later variant
+restores the hold. Money, ownership, in-scope fan events and projected/quarantined keys remain refused.
+
+`resolve_monitor_incident.py` defaults to preview. It may collect and retain evidence, but cannot
+write the database audit, publish the incident resolution or update budget state without `--apply`.
+Review its saved evidence and receipt, then use `--apply --resume <evidence-directory>`. Resume
+checks source hashes and current incident identity before audit; retries preserve command identity.
+For readiness_unavailable, supply an operator evidence reference and name exactly all unresolved
+sends. The receipt acknowledges those sends and retains uncertainty; it does not resolve them.
+Unknown-send retirement remains a separate owner policy and is not authorized by monitor recovery.

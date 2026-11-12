@@ -34,7 +34,7 @@ class ClassResolver(unittest.TestCase):
         self.calls = []; self.manifest = {}
         self.ps = [patch.object(r, 'ROOT', self.root), patch.object(r, 'SUP', self.sup),
                    patch.object(r, 'assert_sender_stopped'), patch.object(r, 'command', side_effect=self.fake),
-                   patch.object(r.sys, 'argv', ['resolver']), patch.object(r.os, 'chown'),
+                   patch.object(r.sys, 'argv', ['resolver','--apply']), patch.object(r.os, 'chown'),
                    patch.object(st, 'share_verified_marker')]
         for p in self.ps: p.start()
 

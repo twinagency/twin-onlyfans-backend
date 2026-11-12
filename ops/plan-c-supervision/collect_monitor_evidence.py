@@ -6,7 +6,7 @@ from operation_config import load
 config=load();supervisor.configure(config);ROOT=config['root']
 account=config['account'];epoch=config['epoch']
 import delivery_history
-from incident_state import classify_journal,journal_class,incident_spec,WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT
+from incident_state import classify_journal,journal_class,incident_spec,WEBHOOK_INCIDENT,REPEATED_WEBHOOK_INCIDENT,READINESS
 from guard_core import credit_estimate
 if len(sys.argv)!=2:raise SystemExit('one exclusive collection directory is required')
 d=Path(sys.argv[1]).resolve()
@@ -21,6 +21,9 @@ def save(name,raw):
 def sql(query):
  cmd=['docker','exec',config['databaseContainer'],'psql','-X','-qAt','-U',config['databaseRole'],'-d',config['databaseName'],'-v','ON_ERROR_STOP=1','-c',query]
  return subprocess.check_output(cmd,timeout=15)
+# Text intents that are still queued, dispatching or unknown, and independent admissions that are dispatching or unknown.
+# The account id comes from incident_state.ACCOUNT so the same code is correct for the repo pilot and for the host copy.
+READINESS_SENDS_SQL="select coalesce(json_agg(x order by x),'[]'::json) from (select intent_id as x from of_text_intent where account_id='%s' and status in ('queued','dispatching','unknown') union select attempt_id from of_engine_independent_admission where account_id='%s' and status in ('dispatching','unknown')) t;"%(account,account)
 out={'state':'blocked','incident_sha256':None}
 try:
  marker=(ROOT/'supervision-v11/outage-open.json').read_bytes();out['incident_sha256']=sha(marker)
@@ -34,6 +37,13 @@ try:
  if spec['pinned']:classify_journal(journal,spec['classification'])
  else:spec['classification']=journal_class(journal);spec['scope_revision']=state['revision']
  out['journal_sha256']=save('journal.txt',journal)
+ if spec['classification']==READINESS:
+  # readiness_unavailable: record the facts the receipt rests on. The sender check above already refused a running sender and
+  # the stopped check refused any other scope; every send the database still considers unresolved is listed for the operator to name.
+  out.update(sender_absent=True,scope_status=state['status'])
+  sends=json.loads(sql(READINESS_SENDS_SQL))
+  if type(sends) is not list:raise RuntimeError('unresolved send listing is malformed')
+  save('unresolved-sends.json',json.dumps(sends,sort_keys=True).encode())
  env={}
  for line in supervisor.ENV.read_text().splitlines():
   if line.strip() and not line.lstrip().startswith('#'):
@@ -88,6 +98,8 @@ try:
  local=json.loads(local)
  queue_reviews=sql(f"select coalesce(json_agg(json_build_object('before',c.before_json::json,'result',c.result_json::json)),'[]'::json) from of_launch_command c join of_runtime r on r.account_id=c.account_id and r.binding_id=c.binding_id where c.account_id='{account}' and c.kind='plan_c_queue_review';")
  local['queue_reviews']=json.loads(queue_reviews)
+ conflict_reviews=sql("select coalesce(json_agg(json_build_object('before',c.before_json::json,'result',c.result_json::json)),'[]'::json) from of_launch_command c join of_runtime r on r.account_id=c.account_id and r.binding_id=c.binding_id where c.account_id='%s' and c.kind='plan_c_conflict_review';"%account)
+ local['conflict_reviews']=json.loads(conflict_reviews)
  save('local-receipts.json',json.dumps(local,sort_keys=True).encode())
  receipts={r['key']:r for r in local['receipts']};digests={}
  for r in local['digests']:digests.setdefault(r['key'],[]).append(r)
@@ -116,6 +128,11 @@ try:
    if queue_candidate:break
   if queue_candidate:
    matched.append({'key':key,'local_kind':'audited_queue_group_review'});continue
+  # Candidate only; the image-owned validator re-proves every reviewed variant (conflicting_webhook.reviewed_conflicting_delivery).
+  if any(a.get('before',{}).get('eventKey')==key and a.get('before',{}).get('providerAccount')==env['FANSAPI_ACCT']
+         and set(a.get('before',{}).get('payloadSha256s',[]))==hashes and a.get('result',{}).get('resolved') is True
+         and a.get('result',{}).get('outcome')=='conflicting_event_group_reviewed' for a in local['conflict_reviews']):
+   matched.append({'key':key,'local_kind':'audited_conflicting_event_review'});continue
   rec=receipts.get(key)
   if rec:
    raw=base64.b64decode(rec['raw'])

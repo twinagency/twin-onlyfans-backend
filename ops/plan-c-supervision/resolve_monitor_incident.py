@@ -13,7 +13,38 @@ def assert_sender_stopped():
  if subprocess.run(['systemctl','is-active','--quiet',CONFIG['senderUnit']]).returncode==0:
   raise RuntimeError('sender service must remain stopped')
 CONFIG={}
+def parse_args(argv):
+ """No arguments, or --resume DIR, or (readiness_unavailable only) --evidence-ref REF with any number of --named-send ID."""
+ usage='expected no args, --resume evidence-directory, or --evidence-ref REF [--named-send ID ...]'
+ resume=ref=None;named=[];args=[a for a in argv[1:] if a not in ('--apply','--dry-run')];i=0
+ if argv.count('--apply')>1 or argv.count('--dry-run')>1 or ('--apply' in argv and '--dry-run' in argv):raise RuntimeError(usage)
+ while i<len(args):
+  flag=args[i]
+  if flag not in ('--resume','--evidence-ref','--named-send') or i+1>=len(args):raise RuntimeError(usage)
+  value=args[i+1];i+=2
+  if flag=='--named-send':named.append(value);continue
+  if (flag=='--resume' and resume is not None) or (flag=='--evidence-ref' and ref is not None):raise RuntimeError(usage)
+  if flag=='--resume':resume=value
+  else:ref=value
+ if resume is not None and (ref is not None or named):raise RuntimeError(usage)
+ if named and ref is None:raise RuntimeError(usage)
+ return resume,ref,named
+def attest_readiness(evidence,manifest,ref,named):
+ """readiness_unavailable: the operator's evidence reference and the exact sends named are retained and hashed with the evidence."""
+ if not state.evidence_reference_ok(ref):
+  raise RuntimeError('readiness_unavailable needs an operator evidence reference: --evidence-ref operator:fansapi:<statement>')
+ if len(named)!=len(set(named)):raise RuntimeError('named sends are duplicated')
+ named=sorted(named)
+ if not state.named_sends_ok(named):raise RuntimeError('named sends are malformed')
+ sends=read(evidence/'unresolved-sends.json')
+ if not state.named_sends_ok(sends) or sends!=named:
+  raise RuntimeError('every unresolved send must be named with --named-send, and only unresolved sends: unresolved='+json.dumps(sends))
+ (evidence/'operator-attestation.json').write_bytes(state.encoded(
+  {'evidence_reference':ref,'named_sends':named,'cause_caveat':state.READINESS_CAVEAT}))
+ return named
 def main():
+ resume,ref,named=parse_args(sys.argv)
+ apply='--apply' in sys.argv
  # The release pin is staged only after independent review; never chosen implicitly.
  release=read(SUP/'reviewed-recovery-release.json')
  image=release['image'];commit=release['commit']
@@ -29,10 +60,8 @@ def main():
  if not state.unresolved(SUP/'outage-open.json'):
   print(json.dumps({'result':'replayed','sendingEnabled':False,'incident_sha256':incident_hash}))
   return
- resume=len(sys.argv)==3 and sys.argv[1]=='--resume'
- if len(sys.argv)!=1 and not resume:raise RuntimeError('expected no args or --resume evidence-directory')
- if resume:
-  evidence=Path(sys.argv[2]).resolve()
+ if resume is not None:
+  evidence=Path(resume).resolve()
   if evidence.parent!=ROOT/'evidence' or not evidence.name.startswith('monitor-incident-recovery-'):
    raise RuntimeError('invalid saved evidence path')
   manifest=read(evidence/'manifest.json');sources=read(evidence/'source-hashes.json')
@@ -44,12 +73,16 @@ def main():
   evidence=ROOT/'evidence'/name
   command([sys.executable,str(HERE/'collect_monitor_evidence.py'),str(evidence)])
   manifest=read(evidence/'manifest.json')
+  readiness=manifest.get('classification')==state.READINESS
+  if readiness:named=attest_readiness(evidence,manifest,ref,named)
+  elif ref is not None or named:raise RuntimeError('--evidence-ref and --named-send are only for readiness_unavailable incidents')
   validator=['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL',
     '--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service:/app/ops/plan-c-supervision',
     '-v',str(evidence)+':/proof:ro','-v',str(HERE/'validate_interval.py')+':/opt/validate.py:ro',
     '-e','TWIN_SUPERVISION_ACCOUNT='+CONFIG.get('account',state.ACCOUNT),
     '-e','TWIN_SUPERVISION_BINDING='+CONFIG.get('binding',state.BINDING),
     '-e','TWIN_SUPERVISION_EPOCH='+str(CONFIG.get('epoch',state.EPOCH)),
+    '-e','TWIN_SUPERVISION_CONTEXT='+json.dumps({k:CONFIG[k] for k in ('account','binding','epoch','providerAccount','fans','publicUrl') if k in CONFIG},sort_keys=True),
     '--entrypoint','python',image,'/opt/validate.py']
   findings=json.loads(command(validator))
   if findings.get('interval_valid_for_bounded_scope') is not True:raise RuntimeError('interval proof refused')
@@ -79,10 +112,23 @@ def main():
     'affected_interval':interval,'delivery_url_sha256':manifest['delivery_url_sha256'],'config_version':manifest['config_version'],
     'actor':actor,'audit_command_key':state.command_key_v2(incident_hash,evidence_hash,interval['start'],interval['end'],manifest['scope_revision']),
     'evidence_sha256':evidence_hash,'resolved_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+   if readiness:
+    # v3: the thin v2 form can never carry readiness_unavailable. Reference, named sends and the caveat are part of the identity.
+    receipt.update(version=state.V3,evidence_reference=ref,named_sends=named,cause_caveat=state.READINESS_CAVEAT,
+     audit_command_key=state.command_key_v3(incident_hash,evidence_hash,interval['start'],interval['end'],manifest['scope_revision'],ref,named))
   (evidence/'receipt.json').write_bytes(state.encoded(receipt))
-  os.chmod(evidence,0o750);os.chown(evidence,0,65532)
-  for f in evidence.iterdir():
-   os.chmod(f,0o640);os.chown(f,0,65532)
+ # A preview may retain its collected proof, but cannot audit, publish a
+ # resolution marker, or modify the budget/incident state.
+ for name,h in sources.items():
+  if Path(name).name!=name or state.digest((evidence/name).read_bytes())!=h:raise RuntimeError('evidence changed')
+ if not state._valid_resolution(receipt,incident_hash,marker):raise RuntimeError('receipt does not match stopped incident')
+ if not apply:
+  print(json.dumps({'result':'dry_run','evidence':str(evidence),'sendingEnabled':False,'holdsReleased':False,
+    'incident_sha256':incident_hash,'receipt':receipt,'nextAction':'Review this evidence, then use --apply --resume with this evidence directory'},sort_keys=True))
+  return
+ os.chmod(evidence,0o750);os.chown(evidence,0,65532)
+ for f in evidence.iterdir():
+  os.chmod(f,0o640);os.chown(f,0,65532)
  def audit(proof):
   assert_sender_stopped()
   # Prevent source substitution between collection and DB commit.
@@ -104,9 +150,11 @@ def main():
   budget['prior_estimate']=max(budget['prior_estimate'],manifest['credit_estimate'])
   budget['scope_status']='stopped'
   state.atomic(SUP/'budget-state.json',state.encoded(budget))
+ caveat=receipt.get('cause_caveat')
+ if caveat:print('CAVEAT: '+caveat,file=sys.stderr)   # shown to the operator before and with the outcome
  result=state.resolve(SUP,receipt,audit)
  print(json.dumps({'result':result,'evidence':str(evidence),'sendingEnabled':False,
-                   'incident_sha256':incident_hash},sort_keys=True))
+                   'incident_sha256':incident_hash,**({'cause_caveat':caveat} if caveat else {})},sort_keys=True))
 if __name__=='__main__':
  from operation_config import load
  CONFIG=load();ROOT=CONFIG['root'];SUP=ROOT/'supervision-v11'

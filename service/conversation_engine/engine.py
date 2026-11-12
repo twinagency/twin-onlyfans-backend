@@ -481,6 +481,14 @@ class EngineService:
                     if (current_pilot_scope(s, runtime)[1] or {}).get('delivery_mode') == 'text_only':
                         # Only text-only snapshots carry this key, so full-mode snapshots and their digests are unchanged.
                         snapshot['delivery_mode'] = 'text_only'
+                # STEP 5: honest attribution of outside sends (coexistence accounts only) and the established, unacknowledged tip
+                # facts of this fan (commercial accounts only). Neither key exists for any other account: their bytes are unchanged.
+                from .coexistence import tag_outside_history
+                tag_outside_history(s, runtime, fan_id, snapshot['history'])
+                from .tips import snapshot_facts as tip_snapshot_facts
+                _tips = tip_snapshot_facts(s, runtime, fan_id, request.request_id)
+                if _tips:
+                    snapshot['tip_facts'] = _tips
                 if type(self.model).__name__ == 'ModelRuntime':
                     # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
                     snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)
@@ -630,6 +638,9 @@ class EngineService:
                 invalidate_generation_in_session(s, account, request_id, existing[0].generation, 'superseded_by_regeneration')
                 request.next_step, request.updated_at = 'prepare_reply', utcnow()
                 request.revision += 1
+            from .tips import snapshot_facts as tip_snapshot_facts, pair as pair_tips
+            if tip_snapshot_facts(s, runtime, fan_id, request_id) != (snapshot.get('tip_facts') or []):
+                raise Refused('conversation changed during generation')      # a tip arrived or was settled under the model call
             decision = OfEngineDecision(account_id=account, decision_id=decision_id, request_id=request_id, generation=generation, part_index=0, fan_id=fan_id,
                 binding_id=binding, owner_epoch=epoch, connection_epoch=connection_epoch, input_revision=state.input_revision, control_revision=state.revision,
                 action=proposal.action, offer_grant_id=grant.grant_id if grant else None,
@@ -643,6 +654,7 @@ class EngineService:
             bind_memory(s, runtime, decision, source, current_memory, current_fingerprint, offer_fingerprint)
             from .independence import create_proof
             create_proof(s, runtime, decision, source, state, policy, extra_parts=bool(proposal.parts))
+            carried = [(decision_id, body)]
             for index, part in enumerate(proposal.parts, start=1):
                 additional = OfEngineDecision(account_id=account, decision_id=str(uuid.uuid4()), request_id=request_id,
                     generation=generation, part_index=index, fan_id=fan_id, binding_id=binding, owner_epoch=epoch,
@@ -652,6 +664,8 @@ class EngineService:
                     snapshot_hash=_digest(snapshot), status='ready', created_at=utcnow(), updated_at=utcnow())
                 s.add(additional); s.flush()
                 bind_memory(s, runtime, additional, source, current_memory, current_fingerprint, offer_fingerprint)
+                carried.append((additional.decision_id, part))
+            pair_tips(s, runtime, fan_id, request_id, carried)           # the one acknowledgement rides this plan, if it names the tip
             return decision_id
 
     def _model_recheck(self, tenant, account, fan_id, source_message_id, request_id, epoch, binding, snapshot,

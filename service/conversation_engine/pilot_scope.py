@@ -433,7 +433,11 @@ def delivery_block(s, runtime, fan, *, commercial=False):
         OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
         OfFansEvidence.kind.in_(('unlock','transaction','chargeback')),
         OfFansEvidence.status.in_(('pending','held'))).limit(1)) if commercial else None
-    blocked = pending is not None or human is not None or money is not None or digest_blocks_fan(s, runtime, fan)
+    # Step 5.2: conflicting money evidence for a tip holds THIS fan only until a person dismisses the held row (never automatic).
+    tip_hold = s.scalar(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == runtime.account_id,
+        OfFansEvidence.fan_id == fan, OfFansEvidence.kind == 'tip', OfFansEvidence.status == 'held').limit(1))
+    blocked = (pending is not None or human is not None or money is not None or tip_hold is not None
+               or digest_blocks_fan(s, runtime, fan))
     return 'pilot_evidence_pending' if blocked else None
 
 
@@ -457,6 +461,8 @@ def digest_hold_scope(s, runtime):
     if len(keys) > _DIGEST_SCAN:
         return True, frozenset()
     excepted = trial_exception_covers_pilot(s, runtime)
+    from .coexistence import enabled as coexistence_enabled
+    coexist = coexistence_enabled(s, runtime)
     fans = set()
     for epoch, event_key, digest in keys:
         receipt = s.get(Receipt, (runtime.account_id, epoch, event_key, digest))
@@ -470,6 +476,19 @@ def digest_hold_scope(s, runtime):
                 from fans_api_adapter.queue_review import queue_envelope
                 body, _ = queue_envelope(bytes(receipt.raw_body))
                 if body['account_id'] == connection.provider_account_id:
+                    continue
+            except (Refused, ValueError, TypeError, KeyError):
+                pass
+        if coexist:
+            # Step 5.1: a documented chat_queue notification for THIS provider account is outside activity on a coexistence account.
+            # Exact documented shape only, exact retained bytes only, and never when any other payload exists under the same key
+            # (a conflicting variant stays held). Everything else (unknown, malformed, other accounts) falls through to the hold.
+            try:
+                from fans_api_adapter.queue_review import queue_envelope
+                body, _ = queue_envelope(bytes(receipt.raw_body))
+                conflicting = s.scalar(select(Row.payload_sha256).where(Row.account_id == runtime.account_id, Row.epoch == epoch,
+                    Row.event_key == event_key, Row.payload_sha256 != digest).limit(1))
+                if body['account_id'] == connection.provider_account_id and conflicting is None:
                     continue
             except (Refused, ValueError, TypeError, KeyError):
                 pass

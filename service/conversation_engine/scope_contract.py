@@ -30,6 +30,7 @@ _HEX64 = re.compile(r'[0-9a-f]{64}\Z')
 _LIMIT_KEYS = ('send_units', 'daily_send_units', 'throttle_seconds', 'provider_requests',
                'provider_credit_budget', 'provider_credits_per_request')
 _PROMOTE_KEYS = frozenset({'fans', 'creator_profile', 'delivery_mode', 'operator', 'model', 'limits'})
+_PROMOTE_OPTIONAL = ('catalogue', 'coexistence')
 _CATALOGUE_KEYS = frozenset({'account_id', 'binding_id', 'complete', 'evidence_ref', 'valid_until', 'snapshot_hash', 'snapshot_kind'})
 _TRANSITION_KEYS = frozenset({'from', 'from_revision', 'from_fingerprint', 'command_key'})
 # Fields that identify the provider account and its qualification evidence; promotion copies them, nothing edits them.
@@ -60,6 +61,28 @@ def contract_kind(config):
 
 def is_commercial(config):
     return type(config) is dict and config.get('contract_version') == COMMERCIAL_VERSION
+
+
+# Step 5.1: the per-account staff coexistence setting. OPTIONAL and commercial only. Absent (and 'takeover') keeps today's rule: a
+# creator-account send this engine did not make asks for a human takeover of that fan. 'coexist' records ordinary outside
+# activity (staff replies, broadcasts, queue sends) as context attributed to the outside, without requesting a takeover. It
+# relaxes nothing else: explicit takeover, fan stop/no-contact, unresolved delivery, freshness, authentication and every
+# unknown/malformed/conflicting/financial event keep their holds. The trial exception (legacy scope only) is a different thing.
+COEXISTENCE_TAKEOVER, COEXISTENCE_COEXIST = 'takeover', 'coexist'
+COEXISTENCE_MODES = (COEXISTENCE_TAKEOVER, COEXISTENCE_COEXIST)
+
+
+def validate_coexistence(value):
+    if type(value) is not dict or set(value) != {'mode'} or type(value['mode']) is not str or value['mode'] not in COEXISTENCE_MODES:
+        raise Refused('invalid commercial coexistence setting')
+    return {'mode': value['mode']}
+
+
+def coexistence_mode(config):
+    """'coexist' only when a validated commercial configuration says so explicitly; every other shape is the takeover default."""
+    if is_commercial(config) and type(config.get('coexistence')) is dict:
+        return config['coexistence'].get('mode') if config['coexistence'].get('mode') in COEXISTENCE_MODES else COEXISTENCE_TAKEOVER
+    return COEXISTENCE_TAKEOVER
 
 
 def validate_catalogue(catalogue):
@@ -100,7 +123,7 @@ def validate_commercial(config):
     from . import pilot_scope as base
     required = {'contract_version', 'provider_account', 'creator_id', 'qualification', 'limits', 'fans', 'creator_profile',
                 'authorization_mode', 'delivery_mode', 'operator', 'model', 'transition'}
-    if type(config) is not dict or not required <= set(config) <= required | {'catalogue'}:
+    if type(config) is not dict or not required <= set(config) <= required | set(_PROMOTE_OPTIONAL):
         raise Refused('invalid commercial scope fields')
     if config['contract_version'] != COMMERCIAL_VERSION:
         raise Refused('unsupported commercial scope contract')
@@ -140,6 +163,8 @@ def validate_commercial(config):
                          'provider_requests': requests, 'provider_credit_budget': credits,
                          'provider_credits_per_request': per_request},
               'transition': validate_transition(config['transition'])}
+    if 'coexistence' in config:
+        result['coexistence'] = validate_coexistence(config['coexistence'])
     if 'catalogue' in config:
         result['catalogue'] = validate_catalogue(config['catalogue'])
     elif config['delivery_mode'] == 'full':
@@ -173,7 +198,7 @@ def promotion_config(preparation_config, preparation_revision, preparation_finge
     The caller names the audience, creator profile, operator, model, delivery mode and limits. Authorization is always
     ``supervised`` at promotion: autonomy is a later decision of the named operator, not of the promoting agency.
     """
-    if type(body) is not dict or set(body) not in (_PROMOTE_KEYS, _PROMOTE_KEYS | {'catalogue'}):
+    if type(body) is not dict or not _PROMOTE_KEYS <= set(body) <= _PROMOTE_KEYS | set(_PROMOTE_OPTIONAL):
         raise Refused('invalid promotion fields')
     if contract_kind(preparation_config) != PREPARATION:
         raise Refused('only a preparation scope can be promoted')

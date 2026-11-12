@@ -55,7 +55,7 @@ class OfFansEvidence(Base):
     __tablename__ = "of_fans_evidence"
     __table_args__ = (
         UniqueConstraint("account_id", "dedupe_key", name="uq_fans_evidence_dedupe"),
-        CheckConstraint("kind IN ('unlock','transaction','chargeback','human_sent')", name="kind"),
+        CheckConstraint("kind IN ('unlock','transaction','chargeback','human_sent','tip')", name="kind"),
         CheckConstraint("status IN ('pending','paired','applied','held','dismissed')", name="status"),
         Index("ix_fans_evidence_match", "account_id", "fan_id", "kind", "status"),
         {"info": INFO},

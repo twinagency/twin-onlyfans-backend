@@ -33,7 +33,7 @@ NOW = datetime.datetime(2026, 11, 11, 3, 0, 0)
 H = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
 MIGRATIONS = S.HERE / "migrations"
 ORIGINAL_LINEAGE_REVISIONS = {"0129b_model_retry_due", "0134_commercial_scope_contract", "0135_commercial_catalogue_terms",
-                              "0136_history_coverage", REPAIR}
+                              "0136_history_coverage", REPAIR, "0138_tip_evidence_kind"}
 
 
 def _old_lineage_config(tmp_path, conn):
@@ -164,7 +164,7 @@ def _retry_columns(conn):
 def _assert_complete(engine):
     with engine.begin() as c:
         check_schema(c)
-        assert c.scalar(text("SELECT version_num FROM alembic_version")) == HEAD == REPAIR
+        assert c.scalar(text("SELECT version_num FROM alembic_version")) == HEAD == "0138_tip_evidence_kind"
         assert _retry_columns(c) == ["failure_detail_json", "retry_not_before"]
         assert _guard_digest(c) == R0_GUARD_DIGEST
         assert {r[0] for r in c.execute(text("SELECT conname FROM pg_constraint WHERE conrelid='of_engine_model_call'::regclass"))} >= {
@@ -176,12 +176,13 @@ STARTS = [("original", "0129_reconnect_receipt"), ("original", "0130_commercial_
           ("original", "0133_preparation_retry_state"), ("current", "0129b_model_retry_due")]
 
 
-def test_head_is_the_repair_and_follows_0136():
-    assert HEAD == REPAIR and S.REVISION_RANK[REPAIR] == 137
+def test_the_repair_follows_0136_and_the_head_is_0138_on_top_of_it():
+    assert HEAD == "0138_tip_evidence_kind" and S.REVISION_RANK[REPAIR] == 137 and S.REVISION_RANK[HEAD] == 138
     from alembic.script import ScriptDirectory
     script = ScriptDirectory.from_config(Config(str(MIGRATIONS / "alembic.ini")))
-    assert script.get_heads() == [REPAIR]
+    assert script.get_heads() == [HEAD]
     assert script.get_revision(REPAIR).down_revision == "0136_history_coverage"
+    assert script.get_revision(HEAD).down_revision == REPAIR
 
 
 @pytest.mark.parametrize("lineage,start", STARTS)

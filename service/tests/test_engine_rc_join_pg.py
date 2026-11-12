@@ -42,11 +42,11 @@ def _revisions():
 
 
 def test_single_linear_head_and_declared_chain():
-    from db.schema import ENGINE_APPROVAL, ENGINE_GENERATIONS, ENGINE_MODEL_CALLS, FANS_INTAKE, FANSAPI_TRANSPORT, HEAD, PLAN_C_SCOPE, PLAN_C_INGRESS, OFFER_GRANT_LINEAGE, MODEL_BILLING_EVIDENCE, RECONNECT_RECEIPT, MODEL_RETRY_DUE, COMMERCIAL_SCOPE, CATALOGUE_TERMS, HISTORY_COVERAGE, MODEL_RETRY_DUE_REPAIR, REVISION_RANK
+    from db.schema import ENGINE_APPROVAL, ENGINE_GENERATIONS, ENGINE_MODEL_CALLS, FANS_INTAKE, FANSAPI_TRANSPORT, HEAD, PLAN_C_SCOPE, PLAN_C_INGRESS, OFFER_GRANT_LINEAGE, MODEL_BILLING_EVIDENCE, RECONNECT_RECEIPT, MODEL_RETRY_DUE, COMMERCIAL_SCOPE, CATALOGUE_TERMS, HISTORY_COVERAGE, MODEL_RETRY_DUE_REPAIR, TIP_EVIDENCE_KIND, REVISION_RANK
     script = _revisions()
-    assert script.get_heads() == [HEAD] == [MODEL_RETRY_DUE_REPAIR]  # commercial line: 0129 -> 0129b (R0) -> 0130..0133 -> 0134 (step 2) -> 0135 (step 3) -> 0136 (step 1) -> 0137 (0129b repair)
+    assert script.get_heads() == [HEAD] == [TIP_EVIDENCE_KIND]  # commercial line: 0129 -> 0129b (R0) -> 0130..0133 -> 0134 (step 2) -> 0135 (step 3) -> 0136 (step 1) -> 0137 (0129b repair) -> 0138 (tip evidence kind)
     chain = [r.revision for r in script.walk_revisions('base', HEAD)]
-    assert chain[:20] == ['0137_model_retry_due_repair', '0136_history_coverage', '0135_commercial_catalogue_terms', '0134_commercial_scope_contract', '0133_preparation_retry_state', '0132_account_preparation', '0131_manual_category_prices', '0130_commercial_vault_provenance', '0129b_model_retry_due', '0129_reconnect_receipt', '0128_model_billing_evidence', '0127_offer_grant_lineage', '0126_plan_c_ingress', '0125_plan_c_scope', '0124_engine_approval', '0123_engine_model_calls', '0122_fansapi_transport', '0121_engine_generations', '0120_fans_intake', '0119_identity_independence']
+    assert chain[:21] == ['0138_tip_evidence_kind', '0137_model_retry_due_repair', '0136_history_coverage', '0135_commercial_catalogue_terms', '0134_commercial_scope_contract', '0133_preparation_retry_state', '0132_account_preparation', '0131_manual_category_prices', '0130_commercial_vault_provenance', '0129b_model_retry_due', '0129_reconnect_receipt', '0128_model_billing_evidence', '0127_offer_grant_lineage', '0126_plan_c_ingress', '0125_plan_c_scope', '0124_engine_approval', '0123_engine_model_calls', '0122_fansapi_transport', '0121_engine_generations', '0120_fans_intake', '0119_identity_independence']
     assert [REVISION_RANK[v] for v in (FANS_INTAKE, ENGINE_GENERATIONS, FANSAPI_TRANSPORT, ENGINE_MODEL_CALLS, ENGINE_APPROVAL, PLAN_C_SCOPE, PLAN_C_INGRESS, OFFER_GRANT_LINEAGE, MODEL_BILLING_EVIDENCE, RECONNECT_RECEIPT, MODEL_RETRY_DUE)] == [120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 129]
     # no fork anywhere above the live Moxy base (older history legitimately contains merge points)
     assert all(len(r.nextrev) <= 1 for r in script.walk_revisions('0111_moxy_owner', HEAD))

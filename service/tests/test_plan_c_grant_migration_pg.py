@@ -35,7 +35,7 @@ def test_populated_legacy_grant_is_preserved_and_lineage_constraints_are_enforce
     with world.database[1].begin() as c:upgrade(c)
     with world.database[1].begin() as c:
         check_schema(c)
-        assert HEAD == c.scalar(text('SELECT version_num FROM alembic_version')) == '0137_model_retry_due_repair'
+        assert HEAD == c.scalar(text('SELECT version_num FROM alembic_version')) == '0138_tip_evidence_kind'
         saved = c.execute(text('SELECT * FROM of_engine_offer_grant')).mappings().one()
         assert {key:saved[key] for key in old} == old
         assert saved['issuance'] == 0 and saved['predecessor_grant_id'] is None

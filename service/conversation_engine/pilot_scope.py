@@ -688,7 +688,16 @@ def _configure_commercial(s, runtime, row, config, *, expected_revision, command
 
 
 def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
-    """Activate only the existing two-fan text pilot under the runtime lock."""
+    """Preserve the existing text-only activation boundary."""
+    return _activate_fansapi_scope(s, store, runtime, row, config, actor=actor, reason=reason, media_enabled=False)
+
+
+def _activate_fansapi_scope(s, store, runtime, row, config, *, actor, reason, media_enabled):
+    """Enable a verified stopped scope atomically; paid activation also needs the current commercial catalogue."""
+    from .scope_contract import is_commercial
+    if media_enabled and (not is_commercial(config) or config.get('delivery_mode') != 'full'):
+        raise Refused('paid activation requires a commercial full scope')
+    activation_name = 'commercial' if media_enabled else 'text-only'
     from db.models import Fan, OfConversationState
     from db.onlyfans_models import OfIngress, OfRecovery
     from db.onlyfans_delivery_models import OfTextIntent
@@ -698,11 +707,12 @@ def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
     from .controls import reason as hold_reason
 
     if runtime.enabled or row.status not in ('configured', 'stopped'):
-        raise Refused('text-only activation requires stopped runtime')
+        raise Refused(activation_name + ' activation requires stopped runtime')
     policy = s.scalar(select(OfDeliveryPolicy).where(
         OfDeliveryPolicy.account_id == runtime.account_id).with_for_update())
-    if policy is None or policy.enabled or policy.transport_kind != 'fansapi' or policy.media_enabled:
-        raise Refused('text-only activation requires disabled fansapi policy')
+    if (policy is None or policy.enabled or policy.transport_kind != 'fansapi'
+            or not media_enabled and policy.media_enabled):
+        raise Refused(activation_name + ' activation requires disabled fansapi policy')
     limits = config['limits']
     send_limit = min(policy.limit_units, limits['send_units']) if policy.limit_units else limits['send_units']
     daily_limit = (min(policy.daily_limit_units, limits['daily_send_units'])
@@ -750,7 +760,7 @@ def _activate_text_only(s, store, runtime, row, config, *, actor, reason):
     previous_policy_revision = policy.revision
     TextAuthority(store)._configure_in_session(s, runtime, expected_revision=policy.revision,
         enabled=True, limit_units=send_limit, daily_limit_units=daily_limit,
-        throttle_seconds=throttle, media_enabled=False, transport_kind='fansapi',
+        throttle_seconds=throttle, media_enabled=media_enabled, transport_kind='fansapi',
         actor=actor, reason=reason)
     runtime.enabled = True
     return {'runtimeEnabledBefore': False, 'policyRevisionBefore': previous_policy_revision,
@@ -790,6 +800,10 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
                 raise Refused('pilot activation prerequisites are not met')
             if config.get('delivery_mode') == 'text_only':
                 activation_evidence = _activate_text_only(s, store, runtime, row, config, actor=actor, reason=reason)
+                policy = s.get(OfDeliveryPolicy, account)
+            elif commercial and not runtime.enabled:
+                activation_evidence = _activate_fansapi_scope(s, store, runtime, row, config,
+                    actor=actor, reason=reason, media_enabled=True)
                 policy = s.get(OfDeliveryPolicy, account)
             if not runtime.enabled or not policy_matches(policy, config, enabled=True):
                 raise Refused('pilot activation prerequisites are not met')

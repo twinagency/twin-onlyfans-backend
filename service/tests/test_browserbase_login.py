@@ -129,6 +129,7 @@ def test_unconfigured_is_503(client,world,monkeypatch):
     assert r.status_code==503 and r.json()['code']=='browserbase_unconfigured'
     assert r.json()['error']=='BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'
     assert r.headers[HEADER]==SCHEMA and bb._jobs=={}
+    assert 'scope' not in world  # N1: no proxy lookup before the config gate
 
 
 def test_auth_and_body_gates(client,world):

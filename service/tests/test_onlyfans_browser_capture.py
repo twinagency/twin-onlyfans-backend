@@ -36,15 +36,15 @@ def test_real_signer_conversion_and_fixed_provider_inputs(monkeypatch):
     assert [c[0] for c in calls]==["rules","hash"]
     assert all(c[1]["owner"]==OWNER and c[1]["rev"]=="synthetic-rev" and c[1]["proxy"]=="http://synthetic.proxy:8080" for c in calls)
     p["browser"]["headers"]["x_hash"]="captured-hash";calls.clear()
-    assert browser.normalize_browser_payload(p)["xHash"]=="captured-hash"
+    assert browser.normalize_browser_payload(p,proxy=None)["xHash"]=="captured-hash"
     assert len(calls)==1
 
 def test_wrong_static_parameter_and_mixed_samples_fail_closed(monkeypatch):
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","worker");assets(monkeypatch)
     p=payload();p["browser"]["staticParam"]="wrong"
-    with pytest.raises(Refused):browser.normalize_browser_payload(p)
+    with pytest.raises(Refused):browser.normalize_browser_payload(p,proxy=None)
     p=payload();p["browser"]["samples"][1]["url"]="https://onlyfans.com/api2/v2/users/different"
-    with pytest.raises(Refused):browser.normalize_browser_payload(p)
+    with pytest.raises(Refused):browser.normalize_browser_payload(p,proxy=None)
 
 def test_browser_shape_owner_cookies_freshness_and_target_restrictions(monkeypatch):
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","api")
@@ -56,7 +56,7 @@ def test_browser_shape_owner_cookies_freshness_and_target_restrictions(monkeypat
     for change in changes:
         p=payload();change(p)
         with pytest.raises(Refused):browser.validate_browser_payload(p)
-    with pytest.raises(Refused):browser.normalize_browser_payload(payload())
+    with pytest.raises(Refused):browser.normalize_browser_payload(payload(),proxy=None)
 
 def test_asset_loader_has_no_redirect_retry_cookie_or_arbitrary_url(monkeypatch):
     import sys,types

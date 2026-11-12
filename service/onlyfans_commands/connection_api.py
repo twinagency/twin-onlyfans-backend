@@ -152,9 +152,10 @@ async def browserbase_login_start(request:Request,account_id:str):
     try:
         if await read_json(request)!={}:raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid Browserbase login request.'},400)
+    import browserbase_login
+    if not browserbase_login.configured():return response({'ok':False,'code':'browserbase_unconfigured','error':'BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'},503)
     try:proxy=await asyncio.to_thread(get_capture_proxy,*context,account_id)  # W3DC-01, as capture-from-curl
     except Exception as exc:return failure(exc)
-    import browserbase_login
     try:job=browserbase_login.start(context[1],account_id,proxy=proxy)
     except browserbase_login.Unconfigured:return response({'ok':False,'code':'browserbase_unconfigured','error':'BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'},503)
     except browserbase_login.Busy:return response({'ok':False,'code':'browserbase_busy','error':'Too many Browserbase logins are running. Try again in a few minutes.'},429)

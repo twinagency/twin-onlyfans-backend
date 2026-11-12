@@ -116,7 +116,7 @@ def fetch_asset(kind, *, owner, rev, user_agent, proxy):
         raise Refused("connection asset unavailable") from None
 
 
-def normalize_browser_payload(payload, *, proxy=None):
+def normalize_browser_payload(payload, *, proxy):
     NativeProviderConnector._ready()
     b = validate_browser_payload(payload, fresh=False)
     h, owner = b["headers"], payload["ownerId"]

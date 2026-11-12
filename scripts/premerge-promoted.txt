@@ -14,3 +14,4 @@ service/tests/test_onlyfans_connections_pg.py::test_capture_proxy_is_the_saved_c
 service/tests/test_w3_delta_curl_80_capture.py::test_asset_fetch_is_byte_capped
 service/tests/test_w3_delta_curl_80_capture.py::test_capture_build_requires_explicit_proxy
 service/tests/test_browserbase_login.py::test_login_fetches_assets_through_saved_proxy
+service/tests/test_browserbase_login.py::test_unconfigured_is_503

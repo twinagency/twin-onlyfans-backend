@@ -368,7 +368,7 @@ def test_invalid_receipt_holds_prerequisite_and_both_later_parts_even_after_rest
         parts = list(s.scalars(select(OfEngineDecision).order_by(OfEngineDecision.part_index)))
         assert [p.status for p in parts] == ['unknown', 'ready', 'ready']
         intent = s.get(OfTextIntent, (ACCOUNT, parts[0].intent_id))
-        assert (intent.status, intent.reason) == ('unknown', 'invalid_receipt')
+        assert (intent.status, intent.reason) == ('unknown', 'malformed_success')
         first_id, intent_id = parts[0].decision_id, intent.intent_id
     w.advance(100000)
     restarted = w.new_pilot()

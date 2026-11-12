@@ -822,9 +822,7 @@ def test_owner_change_during_provider_io_discards_the_result(world):
 
 
 def second_account(w):
-    payload = connection_data()
-    payload["ownerId"] = OWNER + 1
-    payload["capture"]["headers"]["user_id"] = str(OWNER + 1)
+    payload = connection_data(owner=OWNER + 1)
     other = provision(w.store, creator_id="creator-two", owner_id=OWNER + 1, handle="two", command_key="2" * 64)
     assert save_connection(w.store, other, payload, key="2" * 64) == 1 if False else True
     from onlyfans_runtime.connections import load_worker_accounts, save_connection as save_raw

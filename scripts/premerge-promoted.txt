@@ -1,3 +1,8 @@
 # one path[::test] per line; run by scripts/premerge.sh
 service/tests/test_w5_bb_login_review.py::test_w5bb1_capture_of_another_creator_is_not_offered
+service/tests/test_w5_bb_login_review.py::test_w5bb1_curl_route_refuses_another_owner
 service/tests/test_w3_delta_curl_80_capture.py::test_auth_id_cookie_must_match_user_id
+service/tests/test_w3_delta_curl_80_capture.py::test_curl_of_another_owner_refused_for_account
+service/tests/test_w3_delta_curl_80_capture.py::test_missing_auth_id_is_a_parse_error_not_a_mismatch
+service/tests/test_w3_delta_curl_80_capture.py::test_legacy_from_curl_refuses_auth_id_mismatch_before_any_write
+service/tests/test_onlyfans_connections_pg.py::test_first_save_refuses_capture_of_another_owner

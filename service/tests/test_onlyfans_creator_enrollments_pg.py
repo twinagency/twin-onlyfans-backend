@@ -181,7 +181,7 @@ def test_bad_browser_proof_never_provisions_and_clears_pending_secrets(database,
     assert module.get_enrollments(store,TENANT,'creator-a')[0]['status']=='failed'
     with Session(database[1]) as s:assert s.get(OfConnectionEnrollment,first['id']).sealed_config is None
     store.close()
-def session_payload():return {key:value for key,value in data().items() if key in {'ownerId','capture','xHash','expiresAt'}}
+def session_payload(owner=OWNER):return {key:value for key,value in data(owner=owner).items() if key in {'ownerId','capture','xHash','expiresAt'}}
 def submit(store,payload=None,key='1'*64,creator='creator-a',actor=CREATOR):
     return module.submit_enrollment(store,TENANT,creator_id=creator,creator_name='Synthetic creator',handle='synthetic',payload=payload or session_payload(),command_key=key,actor=actor)
 def counts(engine):
@@ -348,7 +348,7 @@ def test_temporary_first_enrollment_retries_durably_without_blocking_other_creat
         assert row.last_error=="provider_connection_check_retry" and row.lease_until>utcnow()
     assert module.process_enrollments(store,TENANT)==0 and calls==["of-"+str(OWNER)]
     assert counts(database[1])==(0,0)
-    other=session_payload();other["ownerId"]=OWNER+1;other["capture"]["headers"]["user_id"]=str(OWNER+1)
+    other=session_payload(OWNER+1)
     submit(store,other,key="2"*64,creator="creator-b")
     monkeypatch.setattr(NativeProviderConnector,"verify_identity",lambda self:calls.append(self.account_id))
     assert module.process_enrollments(store,TENANT)==1

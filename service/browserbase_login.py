@@ -418,8 +418,6 @@ def _capture(job: Job, page, context) -> dict:
     parsed = request_from_capture(cap, cookies, ua)
     try:
         return session_bootstrap.build_connection_capture_from_request(parsed, account=job.account)
-    except session_bootstrap.OwnerMismatch:
-        raise
     except session_bootstrap.CurlParseError as e:
         raise RuntimeError(f"Logged in, but the capture could not be read: {e}") from None
 

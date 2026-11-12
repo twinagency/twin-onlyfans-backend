@@ -118,8 +118,9 @@ class _HistoryText(HTMLParser):
 
 
 _MENTION = re.compile(r'<a href="/[A-Za-z0-9_.-]{1,64}">(@[A-Za-z0-9_.-]{1,64})</a>')
-# An auto-linked URL shows exactly its target, so keeping the visible text hides nothing.
-_AUTOLINK = re.compile(r'<a href="(https?://[^\s"<>]{1,2048})">\1</a>')
+# An auto-linked URL shows exactly its target (OF may add the scheme), so the
+# visible text hides nothing.
+_AUTOLINK = re.compile(r'<a href="(https?://)([^\s"<>]{1,2048})">((?:\1)?\2)</a>')
 _BREAK = re.compile(r"<br />|<br/>|<br>")
 
 
@@ -132,7 +133,7 @@ def history_text(value):
         # Older archive and incoming bodies are bare text with only BR tags,
         # @mention links or auto-linked URLs (no paragraph wrapper). Keep their
         # visible text; any other markup still needs the bounded history parser.
-        bare = _BREAK.sub("\n", _AUTOLINK.sub(r"\1", _MENTION.sub(r"\1", value)))
+        bare = _BREAK.sub("\n", _AUTOLINK.sub(r"\3", _MENTION.sub(r"\1", value)))
         if bare != value and "<" not in bare and ">" not in bare:
             return html.unescape(bare)
         if not value.startswith("<p>") or not value.endswith("</p>"):

@@ -91,9 +91,12 @@ def test_bare_autolinked_url_keeps_its_visible_url():
     url = 'https://onlyfans.com/123/synthetic_creator'
     assert history_text(f'look at this <a href="{url}">{url}</a>') == f'look at this {url}'
     assert history_text(f'one<br /><a href="{url}">{url}</a>') == f'one\n{url}'
+    bare = 'onlyfans.com/123/synthetic_creator'
+    assert history_text(f'see <a href="/c">@c</a> <a href="https://{bare}">{bare}</a>') == f'see @c {bare}'
     for text in [f'x <a href="{url}">click here</a>', f'x <a href="javascript:alert(1)">javascript:alert(1)</a>',
                  f'x <a href="{url}" target="_blank">{url}</a>', f'x <a href="{url}">{url}</a><img src=x>',
-                 f'x <a href="{url}">{url}</a><br onclick=x>', 'x <a href="http://a b">http://a b</a>']:
+                 f'x <a href="{url}">{url}</a><br onclick=x>', 'x <a href="http://a b">http://a b</a>',
+                 'x <a href="https://evil.invalid/onlyfans.com">onlyfans.com</a>', 'x <a href="https://a.invalid">b.invalid</a>']:
         with pytest.raises(NativeProtocolError):
             history_text(text)
 

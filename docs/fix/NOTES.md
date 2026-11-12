@@ -30,3 +30,19 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - rwl r1 (Opus + Flash) FIX-THEN-MERGE: duplicate Sign parsing → `_sign_sample` helper; Cookie header left when -b given; loose tests; unused `as e`. All fixed. r2 delta: both MERGE (m).
 - premerge OK (0 skipped, 0 known-red), 26 PASS (m); ran on the tree committed 3s later (i). CI billing-locked (m).
 - Lesson: a resumed implementer (SendMessage) is cheaper for r1 fixes; it kept its context.
+
+## Live confirm F1–F3 (STACK.lock 21:29Z → released)
+- Stack: api+worker restarted onto bdc6ad2b from detached worktree /tmp/stack-live via patched of-up copy (init.sh copied in; it exists only on the takeover branch). api/worker were down ~2 min on the first failed attempt (m). Dashboard/sign-in/broker untouched (m). Evidence lives in .local-dev/evidence/fix/2026-11-12-F1-F3/.
+- HR-1 (pre-restart worker log, 943f3851, 19:47→22:29): 0 history_rows_skipped, 0 NativeProtocolError, 0 history_not_current (m). W6HR-1/-2 did not fire in this window.
+- capture-from-curl, synthetic curls (x-hash and static-param supplied, so no OF egress, no writes):
+  - F1 wrong owner → 409 owner_mismatch (m).
+  - F3 malformed sign → 400, no echo; non-hex checksum → 400, no echo (m).
+  - W3DC-04 `-H Cookie` form → 409 owner_mismatch, so the header is now parsed (m).
+- Log grep: synthetic secrets 0 (m).
+- W5BB-L1: unauth BB status → 401 (m). W5BB-L2: BB key/signingKey/connect URL in api log → 0 (m). W5BB-L3: key present in api env, as expected for BB start (m).
+- F2 (proxy on capture fetch): confirmed only by the running sha, inferred, because no safe probe exists (a probe would cause OF egress).
+- Probe gotcha: connection routes need the header `X-OnlyFans-Connection-Version: of-connections.v1`, else 400 unsupported_schema.
+
+## Fable consult @F3 → REDIRECT (accepted)
+- Order: HR-1 live first (done: no fire); check F2b reachability; then F5, then F6 (+W6HR-2/3 if HR-1 had fired; it did not); F4 later as shape (b) only.
+- F4 shape (b): MessagePage carries skipped fan-row ids; a store helper bumps input_revision above high_water; all 4 page-commit sites call it. Hard gate before sending is re-enabled. Reject (a): high_water=0 on first import would refuse all tips. Tip-note text loss queues behind D3.

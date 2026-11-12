@@ -173,7 +173,7 @@ class ReviewBeforeInterval(unittest.TestCase):
 
     def variants(self, fan=None):
         a = {'event': 'messages.sent', 'account_id': v.PROVIDER, 'payload': {
-            'id': 777001, 'toUser': {'id': fan or self.OUT}, 'text': 'first', 'createdAt': '2026-11-12T10:54:00+00:00',
+            'id': 777001, 'toUser': {'id': fan or self.OUT}, 'text': 'first', 'createdAt': '2026-11-12T09:00:00+00:00',
             'isFromQueue': True, 'isSentByMe': True}}
         b = copy.deepcopy(a)
         b['payload']['text'] = 'second'

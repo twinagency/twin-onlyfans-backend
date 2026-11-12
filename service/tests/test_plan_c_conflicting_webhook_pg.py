@@ -24,7 +24,7 @@ from test_plan_c_events_stage3_pg import (rig, stopped_text, configured_draft, w
 from test_plan_c_scope_pg import OTHER
 
 OUT = 900000001          # synthetic non-test fan id (stands in for the real incident fan)
-KEY = 'evt_ba4bc155_conflict'
+KEY = 'evt_synthetic_conflict'
 KINDS = ('plan_c_conflict_review', 'plan_c_conflict_marker')
 
 
@@ -45,8 +45,8 @@ def stop(rig, n=98000):
 
 def conflicted(rig, a=None, b=None, key=KEY):
     """Two different payloads under one key: the first (outside fan, not held) leaves a digest only; the second is held and retained."""
-    a = a or sent(OUT, 'first mass message 10:54')
-    b = b or sent(OUT, 'second mass message 11:33')
+    a = a or sent(OUT, 'first mass message')
+    b = b or sent(OUT, 'second mass message')
     raws = [rig.post(a, key=key), rig.post(b, key=key)]
     return raws, stop(rig)
 

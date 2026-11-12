@@ -31,7 +31,7 @@ import incident_state as ops  # noqa: E402
 
 READINESS = 'readiness_unavailable'
 INCIDENT_V3 = 'cd' * 32
-REF = 'operator:fansapi:journal 11:17:48 reviewed, sender container absent, scope stopped'
+REF = 'operator:fansapi:journal 09:15:30 reviewed, sender container absent, scope stopped'
 
 
 def iso(moment):

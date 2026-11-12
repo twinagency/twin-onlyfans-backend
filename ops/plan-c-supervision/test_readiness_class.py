@@ -28,13 +28,13 @@ READINESS = 'readiness_unavailable'
 START = '2026-11-12T10:00:00+00:00'
 END = '2026-11-12T13:00:00+00:00'
 DONE = '2026-11-12T13:01:00+00:00'
-REF = 'operator:fansapi:journal 11:17:48 reviewed, sender container absent, scope stopped'
-STOP = b'Nov 12 11:17:48 pilot_supervisor_stopped:readiness_unavailable\n'
+REF = 'operator:fansapi:journal 09:15:30 reviewed, sender container absent, scope stopped'
+STOP = b'Nov 12 09:15:30 pilot_supervisor_stopped:readiness_unavailable\n'
 
 
 def marker_bytes():
     return m.encoded({'incident_id': 'a' * 32, 'last_confirmed_healthy_utc': START, 'resolved': False,
-                      'detected_utc': '2026-11-12T11:17:49+00:00'})
+                      'detected_utc': '2026-11-12T09:15:31+00:00'})
 
 
 class Constants(unittest.TestCase):
@@ -357,7 +357,7 @@ class ReadinessIntervalValidation(unittest.TestCase):
 
     def setUp(self):
         self.t = tempfile.TemporaryDirectory(); self.p = Path(self.t.name)
-        payload = {'event': 'messages.received', 'account_id': v.PROVIDER, 'payload': {'fromUser': {'id': 318022380}, 'text': 'x'}}
+        payload = {'event': 'messages.received', 'account_id': v.PROVIDER, 'payload': {'fromUser': {'id': sorted(v.FANS)[0]}, 'text': 'x'}}
         raw = json.dumps(payload, separators=(',', ':')).encode()
         self.row = {'idempotency_key': 'k1', 'event': 'messages.received', 'payload': payload, 'succeeded': True,
                     'status_code': 202, 'url': v.URL}

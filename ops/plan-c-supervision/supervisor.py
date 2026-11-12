@@ -212,7 +212,7 @@ def sender_identity():
  except Exception:raise GuardFailure('sender_identity_unavailable') from None
 def check(state):
  started=time.monotonic()
- baseline=readjson(BASELINE);row=db_state();outside=external_reservations()+max(0,row.get('team_reserved',row['reserved'])-row['reserved'])
+ baseline=readjson(BASELINE);row=db_state();outside=external_reservations()
  public,_=status_request(PUBLIC,'POST');local,_=status_request(LOCAL+'/onlyfans/webhooks/plan-c','POST')
  intake=intake_readiness(row['status'])
  pending=False;transition_start=None
@@ -230,7 +230,7 @@ def check(state):
  else:require_health(public_status=public,local_status=local,intake=intake,scope_status=row['status'],active_sender=None)
  webhook_health(started+25)
  total,balance,cost=team_usage(baseline)
- estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=row['reserved'],external_reserved=outside,prior_estimate=state['prior_estimate'],credit_limit=CREDIT_STOP)
+ estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=row.get('team_reserved',row['reserved']),external_reserved=outside,prior_estimate=state['prior_estimate'],credit_limit=CREDIT_STOP)
  # Bound proof age before the caller can publish STATE; request timeouts are
  # socket/request limits, not a whole-check wall-clock guarantee.
  if time.monotonic()-started>30:raise GuardFailure('monitor_check_too_old')

@@ -611,7 +611,7 @@ def planning_block(s, runtime, fan):
     if row is None or row.status != 'active':
         return None
     try:
-        shared_provider_ceiling(s,row,config)
+        shared_provider_ceiling(s,row,config,serialize=False)
     except Refused as exc:
         return str(exc)
     return delivery_block(s, runtime, fan)
@@ -978,7 +978,7 @@ def describe(store, tenant, account, *, actor=None, require_read=False):
 
 
 
-def shared_provider_ceiling(session, row, config):
+def shared_provider_ceiling(session, row, config, *, serialize=True):
     """Serialize reservations across a reviewed provider team using existing scope counters.
 
     The deployment input is identical for all members. No second usage ledger,
@@ -1011,8 +1011,9 @@ def shared_provider_ceiling(session, row, config):
         raise Refused('shared provider ceiling is invalid') from None
     if session.bind.dialect.name != 'postgresql':
         raise Refused('shared provider ceiling requires PostgreSQL')
-    session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
-                    {'key':'twin-provider-team:'+team['team']})
+    if serialize:
+        session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+                        {'key':'twin-provider-team:'+team['team']})
     # Flush this transaction before the aggregate; all reservations use the same
     # team lock and commit their existing counter before another member proceeds.
     used = session.scalar(select(func.coalesce(func.sum(OfEnginePilotScope.provider_credits_reserved),0))

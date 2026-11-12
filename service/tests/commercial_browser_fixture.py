@@ -1,5 +1,6 @@
 """Offline browser/BFF/PG fixture. Synthetic identity/model/provider; real authority."""
-import hashlib,json,os,tempfile,time
+import hashlib,json,os,tempfile,time,base64
+import httpx
 from pathlib import Path
 from datetime import timedelta
 from contextlib import contextmanager
@@ -72,7 +73,7 @@ def worker_role():
 
 @app.get('/fixture')
 def info():
- return {'account':ACCOUNT,'creator':CREATOR,'fan':FAN_A,'actor':ACTOR,'preparation':cfg,'profile':profile}
+ return {'account':ACCOUNT,'creator':CREATOR,'fan':FAN_A,'actor':ACTOR,'preparation':cfg,'profile':profile,'database':owned[0]}
 @app.post('/fixture/prepare')
 def prepare():
  with worker_role():
@@ -103,22 +104,58 @@ def promotion():
   'operator':{'actor':ACTOR,'name':'Offline named operator','permissions':['configure','activate','approve','reject','edit','stop','takeover','handback','reconcile','correct','read']},
   'model':pilot_scope.model_spec(ModelConfig.from_env(env)),
   'limits':{'send_units':200,'daily_send_units':100,'throttle_seconds':1,'provider_requests':4000,'provider_credit_budget':8000,'provider_credits_per_request':2}}
+@app.get('/fixture/worker-config')
+def worker_config():
+ return {'env':env,'profile':profile}
+
+@app.post('/fixture/provider-relay')
+def provider_relay(body:dict):
+ request=httpx.Request(body['method'],body['url'],headers=body['headers'],content=base64.b64decode(body['body']))
+ response=world.fans_mock.handle(request)
+ return {'status':response.status_code,'headers':dict(response.headers),'body':base64.b64encode(response.read()).decode()}
+
+@app.post('/fixture/model-relay')
+def model_relay(body:dict):
+ request=httpx.Request(body['method'],body['url'],headers=body['headers'],content=base64.b64decode(body['body']))
+ response=world.model_transport.handle_request(request)
+ return {'status':response.status_code,'headers':dict(response.headers),'body':base64.b64encode(response.read()).decode()}
+
+def forward_event(event):
+ raw,signature,event_key=world.signed(event,'evt-browser-'+hashlib.sha256(json.dumps(event).encode()).hexdigest()[:20])
+ for _ in range(120):
+  try:
+   response=httpx.post('http://worker:8788/onlyfans/webhooks/plan-c',content=raw,
+     headers={'signature':signature,'x-ofapi-idempotency-key':event_key},timeout=3,trust_env=False)
+   assert response.status_code==202,response.text
+   return
+  except httpx.ConnectError:time.sleep(0.25)
+ raise RuntimeError('autonomous worker did not start')
+
 @app.post('/fixture/fan-message')
 def fan_message_event(body:dict):
- with worker_role():
-  if not hasattr(world,'pilot'):world.pilot=build_supervised_pilot(store,env,model_transport=world.model_transport,fans_transport=world.fans_mock.transport)
-  world.say(body['text'],FAN_A)
-  time.sleep(1.05);world.pilot.tick()
- return state()
+ before=len(world.fans_mock.posts)
+ world.mid+=1
+ forward_event(world.inbound(world.mid,body['text'],FAN_A))
+ for _ in range(300):
+  if len(world.fans_mock.posts)>before:
+   with Session(owned[1]) as session:
+    accepted=session.scalar(select(func.count()).select_from(OfTextIntent).where(OfTextIntent.account_id==ACCOUNT,OfTextIntent.status=='accepted'))
+   if accepted>=len(world.fans_mock.posts):return state()
+  time.sleep(0.2)
+ raise RuntimeError('autonomous worker did not answer the fixture inbound')
+
 @app.post('/fixture/unlock')
 def unlock():
- with worker_role():
-  with Session(owned[1]) as s:
-   intent=s.scalar(select(OfTextIntent).where(OfTextIntent.account_id==ACCOUNT,OfTextIntent.price_cents>0,OfTextIntent.status=='accepted'))
-   assert intent is not None
-   mid=intent.provider_message_id
-  world.deliver(world.unlock_event(mid,12));time.sleep(1.05);world.pilot.tick()
- return state()
+ with Session(owned[1]) as session:
+  intent=session.scalar(select(OfTextIntent).where(OfTextIntent.account_id==ACCOUNT,OfTextIntent.price_cents>0,OfTextIntent.status=='accepted'))
+  assert intent is not None
+  mid=intent.provider_message_id
+ forward_event(world.unlock_event(mid,12))
+ for _ in range(300):
+  value=state()
+  if value['access']==1:return value
+  time.sleep(0.2)
+ raise RuntimeError('autonomous worker did not fold the exact unlock')
 @app.get('/fixture/state')
 def state():
  with Session(owned[1]) as s:

@@ -20,9 +20,9 @@ def _work_counts(pilot):
     from sqlalchemy import select, and_
     from sqlalchemy.orm import Session
     from conversation_engine.pilot_scope import require, unresolved_webhook_digests, digest_hold_scope, delivery_block
-    from db.models import OfConversationState
+    from db.models import OfConversationState, Fan
     from conversation_engine.pilot_ingress import _unreviewed
-    from db.onlyfans_delivery_models import OfTextIntent
+    from db.onlyfans_delivery_models import OfTextIntent, OfDeliveryPolicy
     from db.onlyfans_fans_intake_models import OfFansProjection
     from datetime import timedelta
     from db.onlyfans_engine_models import OfEngineModelCall, OfFansConnection, OfEnginePilotWebhookDigest, OfEngineRequest
@@ -61,19 +61,33 @@ def _work_counts(pilot):
         from onlyfans_runtime.store import Refused
         shared_hold = None
         try:
-            shared_provider_ceiling(s,scope,config)
+            shared_provider_ceiling(s,scope,config,serialize=False)
         except Refused as exc:
             shared_hold = str(exc)
-            account_wide = True
+        policy=s.get(OfDeliveryPolicy,pilot.account)
+        limits=config['limits']
+        budget_hold=shared_hold
+        if not budget_hold and (scope.provider_requests_used>=limits['provider_requests']
+                or scope.provider_credits_reserved+limits['provider_credits_per_request']>limits['provider_credit_budget']):
+            budget_hold='provider_budget_exhausted'
+        if not budget_hold and (policy is None or not policy.enabled or policy.used_units>=policy.limit_units):
+            budget_hold='delivery_budget_exhausted'
+        if not budget_hold and policy.daily_limit_units is not None:
+            from onlyfans_runtime.concurrent_admission import daily_used
+            if daily_used(s,pilot.account,now)>=policy.daily_limit_units:
+                budget_hold='daily_delivery_budget_exhausted'
+        from conversation_engine.controls import reason as control_hold
         eligible = 0
         for fan in config['fans']:
             state = s.get(OfConversationState, (pilot.account, fan))
-            if (not account_wide and fan not in digest_fans and state is not None and state.mode == 'automated'
+            person=s.get(Fan,(pilot.account,fan))
+            if (not budget_hold and not account_wide and fan not in digest_fans and state is not None and state.mode == 'automated'
                     and state.takeover_state == 'none' and delivery_block(s, runtime, fan) is None
-                    and not unresolved_own_send(s, runtime, fan)):
+                    and not unresolved_own_send(s, runtime, fan)
+                    and control_hold(s,pilot.account,fan,state,person,unresolved=store._unresolved(s,pilot.account,fan,state)) is None):
                 eligible += 1
         return {**counts,'countsCapped':any(v==101 for v in counts.values()),
-                'accountHold':account_wide,'sharedProviderHold':shared_hold,'eligibleFans':eligible,'heldFans':len(config['fans'])-eligible}
+                'accountHold':account_wide,'sharedProviderHold':shared_hold,'budgetHold':budget_hold,'eligibleFans':eligible,'heldFans':len(config['fans'])-eligible}
 
 
 def _response(status, code):

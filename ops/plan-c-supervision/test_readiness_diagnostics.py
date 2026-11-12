@@ -41,3 +41,8 @@ def test_heartbeat_from_another_account_or_epoch_cannot_authorize_sender(tmp_pat
   assert not gate.permitted(7,account='creator-b',binding='binding-a',epoch=2)
   assert not gate.permitted(7,account='creator-a',binding='binding-b',epoch=2)
   assert not gate.permitted(7,account='creator-a',binding='binding-a',epoch=3)
+
+def test_shared_usage_and_retained_team_reservations_are_not_counted_twice():
+ from guard_core import credit_estimate
+ with patch.object(m,'readjson',return_value={'team_credits_observed':0,'team_balance':1000}),patch.object(m,'db_state',return_value={'status':'stopped','reserved':100,'team_reserved':200,'revision':7}),patch.object(m,'external_reservations',return_value=0),patch.object(m,'status_request',return_value=(401,b'')),patch.object(m,'intake_readiness',return_value={'ok':True}),patch.object(m,'webhook_health',return_value=True),patch.object(m,'team_usage',return_value=(200,800,0)),patch.object(m,'credit_estimate',credit_estimate),patch.object(m.time,'monotonic',return_value=100):
+  assert m.check({'prior_estimate':0})['prior_estimate']==200

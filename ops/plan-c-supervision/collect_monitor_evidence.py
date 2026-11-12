@@ -128,9 +128,9 @@ try:
    if len(found)!=1:missing.append({'key':key,'reason':'exact_digest_bytes_unproven'});continue
    matched.append({'key':key,'local_kind':'digest','raw_sha256':found[0]['hash'],'hold':found[0]['hold']})
  baseline=supervisor.readjson(supervisor.BASELINE)
- total,balance,cost=supervisor.team_usage(baseline);outside=supervisor.external_reservations()+max(0,state.get('team_reserved',state['reserved'])-state['reserved'])
+ total,balance,cost=supervisor.team_usage(baseline);outside=supervisor.external_reservations()
  previous=supervisor.readjson(supervisor.STATE)['prior_estimate']
- estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=state['reserved'],external_reserved=outside,prior_estimate=previous,credit_limit=config['creditStop'])
+ estimate=credit_estimate(baseline_total=baseline['team_credits_observed'],baseline_balance=baseline['team_balance'],team_total=total,team_balance=balance,usage_cost=cost,scope_reserved=state.get('team_reserved',state['reserved']),external_reserved=outside,prior_estimate=previous,credit_limit=config['creditStop'])
  if supervisor.db_state()!=state:raise RuntimeError('scope changed during collection')
  out.update(state='evidence_collected' if not missing else 'blocked',classification=spec['classification'],scope_revision=state['revision'],provider_delivery_count=len(rows),matched=matched,missing=missing,credit_estimate=estimate,external_reservations=outside,scope_reserved=state['reserved'],collected_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),continuity_claim='supported delivery records reconciled only; no inferred full event completeness')
 except Exception as e:

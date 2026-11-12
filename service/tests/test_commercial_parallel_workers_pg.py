@@ -32,19 +32,22 @@ def test_ten_concurrent_workers_keep_stalled_and_exhausted_accounts_local(databa
   spent=fleet[8]
   with Session(database[1]) as s:revision=s.get(OfDeliveryPolicy,spent.account).revision
   TextAuthority(spent.store).configure(TENANT,spent.account,expected_revision=revision,enabled=True,media_enabled=True,
-      limit_units=1,daily_limit_units=1,throttle_seconds=1,transport_kind="fansapi",actor=OPERATOR,reason="One-unit reviewed fixture budget")
+      limit_units=1,throttle_seconds=1,transport_kind="fansapi",actor=OPERATOR,reason="One-unit reviewed fixture budget")
   spent.say("hello",FAN_A);spent.pilot.tick()
   assert len(spent.fans_mock.posts)==1
   def ask(w):
    try:
-    w.say("show me the beach photo",FAN_A)
-    return w.pilot.tick()
+    staged,_=w.say("show me the beach photo",FAN_A)
+    return {"staged":staged,"tick":w.pilot.tick()}
    except Refused as exc:
     return {"refused":str(exc)}
   with ThreadPoolExecutor(max_workers=10) as pool:
    jobs=[pool.submit(ask,w) for w in fleet]
    try:
-    assert entered.wait(90),"stalled account never reached its model"
+    for _ in range(450):
+     if entered.wait(0.2):break
+     if all(job.done() for job in jobs):break
+    assert entered.is_set(),[(i+1,job.result() if job.done() else "not finished") for i,job in enumerate(jobs)]
     for job in jobs[:9]:job.result(timeout=120)
     assert not jobs[9].done(),"fixture must still have one in-flight model call"
     for i,w in enumerate(fleet[:8],1):

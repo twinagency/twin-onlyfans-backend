@@ -180,3 +180,64 @@ def test_sign_start_mismatch_not_echoed(wire):
             build(c)
         msg = str(e.value)
         assert "x-relay-sign-start disagrees" in msg and "SECRET" not in msg and "synthetic" not in msg, msg
+
+
+class _Stop(Exception):
+    pass
+
+
+@pytest.fixture
+def legacy(monkeypatch):
+    # W3DC-01b: legacy relay paste-curl (from_curl). Every fetch is stubbed and stops the
+    # flow (no session writes); proxies.get_for_account is the proxies.json binding seam.
+    import proxies
+    import onlyfans_runtime.browser_capture as bc
+    st = types.SimpleNamespace(assigned=None, looked=[], fetched=[], urlopen=[])
+    def get_for_account(aid):
+        st.looked.append(aid)
+        if isinstance(st.assigned, Exception): raise st.assigned
+        return st.assigned
+    def fetch_asset(kind, **kw):
+        st.fetched.append((kind, kw)); raise _Stop()
+    def urlopen(req, timeout=None):
+        st.urlopen.append(req); raise _Stop()
+    monkeypatch.setattr(proxies, "get_for_account", get_for_account)
+    monkeypatch.setattr(bc, "fetch_asset", fetch_asset)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    return st
+
+
+def test_legacy_bad_rev_refused_before_fetch(legacy):
+    with pytest.raises(sb.CurlParseError):
+        sb.from_curl(curl(rev="../../evil"))
+    assert legacy.fetched == [] and legacy.urlopen == []
+
+
+def test_legacy_assigned_proxy_reaches_fetch(legacy):
+    legacy.assigned = {"label": "p1", "scheme": "http", "host": "proxy.example", "port": 8080}
+    with pytest.raises(_Stop):
+        sb.from_curl(curl(), account_id="123")
+    assert legacy.looked == ["123"]
+    assert [(k, kw["proxy"]) for k, kw in legacy.fetched] == [("rules", "http://proxy.example:8080")]
+
+
+@pytest.mark.parametrize("bad", [{"label": "p1"}, OSError("unreadable")])
+def test_legacy_unresolvable_proxy_refused_without_fetch(legacy, bad):
+    legacy.assigned = bad
+    with pytest.raises(sb.CurlParseError):
+        sb.from_curl(curl())
+    assert legacy.looked == ["123"] and legacy.fetched == [] and legacy.urlopen == []
+
+
+def test_legacy_no_proxy_is_explicit_none(legacy):
+    with pytest.raises(_Stop):
+        sb.from_curl(curl())
+    assert legacy.looked == ["123"]
+    assert [(k, kw["proxy"]) for k, kw in legacy.fetched] == [("rules", None)]
+
+
+def test_legacy_uses_capped_fetcher_not_urllib(legacy):
+    with pytest.raises(_Stop):
+        sb.from_curl(curl())
+    assert legacy.urlopen == []
+    assert legacy.fetched == [("rules", dict(owner="123", rev="synthetic-rev", user_agent="Synthetic browser", proxy=None))]

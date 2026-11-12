@@ -34,7 +34,6 @@ import json
 import re
 import sys
 import shlex
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -387,6 +386,8 @@ def from_curl(curl_text: str, *,
     user_agent = h["user-agent"]
     sign = h["sign"]
     time_ms = h["time"]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", x_of_rev):
+        raise CurlParseError("x-of-rev header is not an OnlyFans revision")
     # The relay files a capture under its own user-id (rerouted below), so only
     # the auth_id cookie can disagree here.
     _check_owner(f"of-{user_id}", user_id, parsed["cookies"])
@@ -425,10 +426,19 @@ def from_curl(curl_text: str, *,
         )
 
     # ── Fetch 2313.js + derive checksum indexes/constant ─────
+    # Through the account's proxies.json proxy (curl_cffi, capped, no redirects);
+    # assigned-but-unusable refuses, never falls back to direct. None = no proxy assigned.
+    import proxies as proxy_registry
+    from onlyfans_runtime import browser_capture
+    try:
+        p = proxy_registry.get_for_account(account_id or user_id)
+        proxy = proxy_registry.proxy_url(p) if p is not None else None
+    except Exception:
+        raise CurlParseError("assigned proxy for this account is unusable; fix it under Setup → Proxies") from None
     chunk_url = CHUNK_URL_TPL.format(rev=x_of_rev)
     print(f"[bootstrap] Fetching {chunk_url}")
-    with urllib.request.urlopen(chunk_url, timeout=20) as r:
-        chunk_code = r.read().decode("utf-8", errors="replace")
+    chunk_code = browser_capture.fetch_asset("rules", owner=user_id, rev=x_of_rev,
+                                             user_agent=user_agent, proxy=proxy)
     print(f"[bootstrap] Got chunk ({len(chunk_code)} bytes)")
 
     derived = derive_rules_from_chunk(chunk_code, [sample])

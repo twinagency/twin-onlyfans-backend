@@ -117,6 +117,9 @@ class _HistoryText(HTMLParser):
         raise NativeProtocolError("unsupported native history formatting")
 
 
+_MENTION = re.compile(r'<a href="/[A-Za-z0-9_.-]{1,64}">(@[A-Za-z0-9_.-]{1,64})</a>')
+
+
 def history_text(value):
     try:
         return plain_text(value)
@@ -129,6 +132,11 @@ def history_text(value):
         unwrapped = value.replace("<br />", "\n").replace("<br/>", "\n").replace("<br>", "\n")
         if unwrapped != value and "<" not in unwrapped and ">" not in unwrapped:
             return html.unescape(unwrapped)
+        # Bare @mention links (no paragraph wrapper) keep only their visible
+        # text, and only when no other markup is present.
+        mentions = _MENTION.sub(r"\1", value)
+        if mentions != value and "<" not in mentions and ">" not in mentions:
+            return html.unescape(mentions)
         if not value.startswith("<p>") or not value.endswith("</p>"):
             raise NativeProtocolError("unsupported native history formatting") from None
     parser = _HistoryText()

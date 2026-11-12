@@ -88,7 +88,7 @@ class PreservationTests(unittest.TestCase):
         calls=[]; state={'unread':1}
         class Parent:
             def messages(self,**kw): calls.append(('parent',kw)); state['unread']=0; return 'parsed'
-        ns={'Parent':Parent,'API_PATH':'/api2/v2','MAX_HISTORY_BYTES':999999,'load':lambda raw,**kw:json.loads(raw),'Refused':ValueError,'_id':lambda n: n if type(n) is int and n>0 else (_ for _ in ()).throw(ValueError())}
+        ns={'Parent':Parent,'API_PATH':'/api2/v2','MAX_HISTORY_BYTES':999999,'load':lambda raw,**kw:json.loads(raw),'Refused':ValueError,'_page_limit':lambda account,fan,limit:limit,'_page_outcome':lambda *a:None,'_id':lambda n: n if type(n) is int and n>0 else (_ for _ in ()).throw(ValueError())}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<native>','exec'),ns)
         obj=ns['NativeProviderConnector']();obj.account_id='native';obj._handle=SimpleNamespace(owner_id=99);obj._ready=lambda:None;obj._limit=lambda n:None;obj.verify_identity=lambda:calls.append('identity')
         def signed(method,path):

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import json
+import logging
 import os
 import re
 from urllib.parse import urlencode
@@ -19,7 +21,7 @@ from .loopback_transport import (
 )
 from .native_protocol import API_PATH, MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, load, message, request
 from .store import PAGE_LIMIT, Refused, _id
-from .text_delivery import Dispatch, TextAuthority
+from .text_delivery import Dispatch, TextAuthority, _stamp
 from .worker import ChatPage, MessagePage
 
 
@@ -47,6 +49,32 @@ def _synthetic_headers(port, path, owner_id):
              "checksum_indexes": list(range(32)), "checksum_constant": 17}
     headers = sign(f"http://127.0.0.1:{port}{path}", owner_id, rules)
     return {**headers, "user-id": str(owner_id)}
+
+
+def _skip_reason(row, *, owner_id, fan_id):
+    """Label a well-formed, in-scope history row the strict parser does not support.
+
+    Tips have no native history representation (Event carries no tip; the
+    ledger owns payments), so they are skipped like unsent/deleted rows. Any
+    row without a valid identity, sender and timestamp still fails the page.
+    """
+    try:
+        _id(row["id"])
+        sender = _id(row["fromUser"]["id"])
+        if sender not in {owner_id, fan_id} or owner_id == fan_id:
+            raise ValueError()
+        if "toUser" in row and _id(row["toUser"]["id"]) != (fan_id if sender == owner_id else owner_id):
+            raise ValueError()
+        _stamp(row["createdAt"])
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise NativeProtocolError("native message scope or evidence is unsupported") from exc
+    if row.get("isTip") or row.get("responseType") == "tip":
+        return "tip"
+    if row.get("isUnsent"):
+        return "unsent"
+    if row.get("isDeleted"):
+        return "deleted"
+    return "unsupported"
 
 
 class NativeLoopbackConnector:
@@ -145,14 +173,29 @@ class NativeLoopbackConnector:
             params["id"] = before_id
         path = API_PATH + f"/chats/{fan_id}/messages?" + urlencode(params)
         rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
-        events = [message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True) for row in rows]
-        ids = [event.message_id for event in events]
+        kept, events, ids, skipped = [], [], [], {}
+        for row in rows:
+            try:
+                event = message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True)
+            except NativeProtocolError:
+                # One unsupported but in-scope row never fails the page; it is
+                # counted below. Out-of-scope or malformed rows still refuse.
+                reason = _skip_reason(row, owner_id=self._handle.owner_id, fan_id=fan_id)
+                skipped[reason] = skipped.get(reason, 0) + 1
+                ids.append(_id(row["id"]))
+                continue
+            kept.append(row); events.append(event); ids.append(event.message_id)
         if ids != sorted(set(ids), reverse=True) or (before_id is not None and any(value >= before_id for value in ids)):
             raise NativeProtocolError("native message cursor did not advance")
+        if skipped:
+            if more and not events:
+                raise NativeProtocolError("native page has no supported history rows")
+            logging.getLogger(__name__).warning("onlyfans_history_rows_skipped %s", json.dumps(
+                {"account": self.account_id, "rows": len(rows), "skipped": skipped}, sort_keys=True))
         # Paid-offer terms come from the same validated rows before previews and
         # lockedText are discarded. Event identity and payloads are unchanged.
         from .offer_terms import from_history
-        observations = [value for value in (from_history(row, event) for row, event in zip(rows, events)) if value is not None]
+        observations = [value for value in (from_history(row, event) for row, event in zip(kept, events)) if value is not None]
         return MessagePage(events, more, observations)
 
     def send(self, dispatch, *, authority, tenant_id):

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from collections import OrderedDict
 import math
 import os
 import re
+import threading
 import time
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlsplit
@@ -22,7 +24,7 @@ from transaction_contract import transaction_marker
 from onlyfans_read.contract import ID_PATTERN
 from .native_connector import NativeLoopbackConnector
 from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, request, load
-from .store import Refused, _id
+from .store import PAGE_LIMIT, Refused, _id
 from .text_delivery import Dispatch, TextAuthority
 
 ORIGIN = "https://onlyfans.com"
@@ -30,6 +32,37 @@ APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
 # Default GET timeout. A 77-row (536 KB) history page takes ~6 s server-side
 # (with or without proxy), so the 5 s write timeout starved every deep read.
 READ_TIMEOUT_SECONDS = 10
+# Message page size per (account, fan) after a slow read, mirroring the archive
+# path's oversize halving: 100 -> 20 -> 10 -> 5 on timeout/oversize, doubling
+# back after each success. In-process only; a restart costs one more timeout.
+SMALL_PAGE_LIMIT = 20
+_PAGE_LIMITS = OrderedDict()
+_PAGE_LOCK = threading.Lock()
+
+
+def _page_limit(account_id, fan_id, requested):
+    with _PAGE_LOCK:
+        return min(requested, _PAGE_LIMITS.get((account_id, fan_id), requested))
+
+
+def _page_outcome(account_id, fan_id, limit, error):
+    key = (account_id, fan_id)
+    with _PAGE_LOCK:
+        if error is None:
+            if key in _PAGE_LIMITS:
+                if limit * 2 >= PAGE_LIMIT:
+                    del _PAGE_LIMITS[key]
+                else:
+                    _PAGE_LIMITS[key] = limit * 2
+            return
+        failure = getattr(error, "read_failure", None)
+        slow = (type(failure) is dict and failure.get("failure") == "provider_timeout") or (
+            str(error) == "native HTTPS response exceeded its byte budget")
+        if slow:
+            _PAGE_LIMITS[key] = SMALL_PAGE_LIMIT if limit > SMALL_PAGE_LIMIT else max(5, limit // 2)
+            _PAGE_LIMITS.move_to_end(key)
+            while len(_PAGE_LIMITS) > 4096:
+                _PAGE_LIMITS.popitem(last=False)
 
 
 class NativeAuthenticationError(NativeProtocolError):
@@ -277,10 +310,19 @@ class NativeProviderConnector(NativeLoopbackConnector):
             parent_messages = super().messages
             def unread_state():
                 return load(self._signed_request("GET", API_PATH + f"/chats/{fan_id}"), max_bytes=MAX_HISTORY_BYTES)
+            size = _page_limit(self.account_id, fan_id, limit)
+            def read():
+                try:
+                    page = parent_messages(fan_id=fan_id, before_id=before_id, limit=size)
+                except Exception as error:
+                    _page_outcome(self.account_id, fan_id, size, error)
+                    raise
+                _page_outcome(self.account_id, fan_id, size, None)
+                return page
             return preserve_unread(
                 account_id=self.account_id, fan_id=fan_id,
                 snapshot=unread_state,
-                read=lambda: parent_messages(fan_id=fan_id, before_id=before_id, limit=limit),
+                read=read,
                 restore=self.restore_unread,
                 confirm=unread_state,
             )

@@ -72,7 +72,7 @@ class World:
         return item
 
     # ---------------------------------------------------------------- scope
-    def launch(self, *, valid_for=timedelta(days=1), authorization_mode='supervised', after_snapshot=None, facts=()):
+    def launch(self, *, valid_for=timedelta(days=1), authorization_mode='supervised', after_snapshot=None, facts=(), limits=None):
         env = self.env
         profile = CreatorProfile(name='Fixture creator', limits=('no meetups',), role_statement='the creator herself',
                                  offers_permitted=True, approved_item_ids=(), facts=tuple(facts))
@@ -88,6 +88,8 @@ class World:
                 'model': pilot_scope.model_spec(ModelConfig.from_env(env)),
                 'limits': {'send_units': 200, 'daily_send_units': 100, 'throttle_seconds': 1, 'provider_requests': 4000,
                            'provider_credit_budget': 8000, 'provider_credits_per_request': 2}}
+        if limits:
+            body['limits'].update(limits)
         self.snapshot = snapshot
         promoted = cs.promote(self.store, TENANT, self.account, body, expected_revision=1, command_key=key(0x7001),
                               actor=AGENCY_ACTOR, reason='Promote prepared account to a commercial scope')
@@ -201,7 +203,7 @@ def writer(world, *, choose=None):
     return httpx.MockTransport(respond)
 
 
-def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B, FAN_C, FAN_D), choose=None, read=None):
+def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B, FAN_C, FAN_D), choose=None, read=None, folder=None, history=None):
     """A prepared account with complete per-fan history for `fans`, and the fake model/provider transports. Not yet launched."""
     monkeypatch.setenv('TWIN_PLAN_C_FIXTURE_ONLY', '1')
     monkeypatch.setenv('ONLYFANS_PROCESS_ROLE', 'worker')
@@ -210,13 +212,15 @@ def build_world(database, tmp_path, monkeypatch, *, i=1, fans=(FAN_A, FAN_B, FAN
     for fan in fans:
         add_fan(database[1], account, fan)
     wire = Provider(cfg)
+    scripted = history(cfg) if history is not None else {}           # optional imported history per fan (older cards, rows)
     for fan in fans:
-        wire.chats[fan] = [chat_page([])]
+        wire.chats[fan] = [chat_page(list(scripted.get(fan, [])))]
     read_everything(store, database, account, wire, tuple(fans if read is None else read))   # `read`: only these fans' history is imported
     unblock(database[1], account, cfg['creator_id'])
     w = World()
     w.database, w.store, w.account, w.cfg, w.fans = database, store, account, cfg, tuple(fans)
     w.provider, w.creator = cfg['provider_account'], cfg['creator_id']
+    tmp_path = tmp_path if folder is None else folder            # one folder per account when several accounts share a test
     secret = tmp_path / 'secret'
     secret.write_bytes(SECRET)
     secret.chmod(0o600)

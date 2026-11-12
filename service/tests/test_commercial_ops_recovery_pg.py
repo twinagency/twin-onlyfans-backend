@@ -229,6 +229,35 @@ def test_positive_compatible_code_rollback_accepts_the_committed_schema_and_chan
         cstore.close(); broker.close(); store.close(); other.close()
 
 
+def test_emergency_stop_closes_the_wire_for_a_pilot_that_was_built_while_active(stopped_text):
+    """Emergency stop AT THE WIRE: the supervised pilot is built and proven live (control: it sends one accepted text), then the
+    account is emergency-stopped. The same, already-built pilot is handed a new fan message: no model call and no provider POST
+    result, and the runtime stays disabled. The stop is not a restart-time property; it holds for the process that is running."""
+    from model_transport.pilot_supervised import build_supervised_pilot
+    from test_plan_c_text_activation_pg import start, FAN
+    from test_plan_c_supervised_pg import stage
+    w, env, model, seen, first = stopped_text
+    assert start(w, first["revision"])["status"] == "active"
+    pilot = build_supervised_pilot(w.store, env, model_transport=model, fans_transport=w.fans.transport)
+    stage(pilot, 33001, "hello")
+    assert pilot.tick()["dispatched"] == ["accepted"] and len(w.fans.posts) == 1          # control: the live pilot does send
+    with Session(w.database[1]) as s:
+        fingerprint = account_state(s, w.store._runtime(s, TENANT, ACCOUNT, lock=False))["fingerprint"]
+    done = control_account(w.store, TENANT, ACCOUNT, action="emergency_stop", command_key=key(33002), actor=ACTOR,
+                           reason="Q15 emergency stop of a running pilot", expected_fingerprint=fingerprint)
+    assert done["recorded"]
+    stage(pilot, 33003, "are you there?")
+    model_calls, posts = len(seen), len(w.fans.posts)
+    try:
+        pilot.tick()
+    except Exception:  # noqa: BLE001 - a refusal is as good as a quiet tick; only a model call or a wire POST is a failure
+        pass
+    assert len(seen) == model_calls, "an emergency-stopped account must not reach the model"
+    assert len(w.fans.posts) == posts == 1, "an emergency-stopped account must not reach the provider wire"
+    with Session(w.database[1]) as s:
+        assert not s.get(OfRuntime, ACCOUNT).enabled              # the runtime switch is the stopping authority at the wire
+
+
 # ---------------------------------------------------------------------------------------------- receive-only composition
 spec = importlib.util.spec_from_file_location("plan_c_explicit_receiver_q15", Path(__file__).resolve().parents[2] / "ops/plan-c-supervision/receive_only.py")
 receiver = importlib.util.module_from_spec(spec)

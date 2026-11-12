@@ -1,7 +1,9 @@
 """Convert an explicitly submitted browser capture inside the existing worker.
 
 Reuses the legacy signer's pure derivation. No legacy session files, registry,
-activation, executable browser code, arbitrary URLs or API-side provider I/O.
+activation, executable browser code or arbitrary URLs. The one provider I/O is
+`fetch_asset` (also used API-side by the curl/Browserbase capture build): two fixed
+hosts, through the account's proxy, no redirects/env proxies, byte-capped.
 """
 from __future__ import annotations
 
@@ -86,9 +88,8 @@ def validate_browser_payload(payload, *, fresh=True):
         raise Refused("invalid browser connection capture") from None
 
 
-def _asset(kind, *, owner, rev, user_agent, proxy):
-    """Fixed provider GETs only; no session cookies, redirects, retries or logs."""
-    NativeProviderConnector._ready()
+def fetch_asset(kind, *, owner, rev, user_agent, proxy):
+    """Fixed provider GETs only, through `proxy`; no session cookies, env proxies, redirects, retries or logs."""
     from curl_cffi import requests
     if kind == "rules":
         url, maximum = f"https://static2.onlyfans.com/static/prod/f/{rev}/2313.js", 2 * 1024 * 1024
@@ -115,11 +116,11 @@ def _asset(kind, *, owner, rev, user_agent, proxy):
         raise Refused("connection asset unavailable") from None
 
 
-def normalize_browser_payload(payload, *, proxy=None):
+def normalize_browser_payload(payload, *, proxy):
     NativeProviderConnector._ready()
     b = validate_browser_payload(payload, fresh=False)
     h, owner = b["headers"], payload["ownerId"]
-    code = _asset("rules", owner=owner, rev=h["x_of_rev"], user_agent=h["user_agent"], proxy=proxy)
+    code = fetch_asset("rules", owner=owner, rev=h["x_of_rev"], user_agent=h["user_agent"], proxy=proxy)
     samples = [{"sha1Hex": s["sign"].split(":")[1], "checksumValue": int(s["sign"].split(":")[2], 16)} for s in b["samples"]]
     derived = derive_rules_from_chunk(code, samples)
     if not derived:
@@ -130,7 +131,7 @@ def normalize_browser_payload(payload, *, proxy=None):
     # Check the complete digest too: the legacy verifier checks the checksum only.
     if any(sign(s["url"], owner, rules, int(s["time"]))["sign"] != s["sign"] for s in b["samples"]):
         raise Refused("browser signing proof does not match")
-    x_hash = h["x_hash"] or _asset("hash", owner=owner, rev=h["x_of_rev"], user_agent=h["user_agent"], proxy=proxy).strip()
+    x_hash = h["x_hash"] or fetch_asset("hash", owner=owner, rev=h["x_of_rev"], user_agent=h["user_agent"], proxy=proxy).strip()
     capture = {"headers": {k: h[k] for k in ("user_id", "user_agent", "x_bc", "x_of_rev")},
         "cookies": b["cookies"], "signing": {"rules": rules}}
     normalized = {"ownerId": owner, "capture": capture, "xHash": x_hash, "expiresAt": payload["expiresAt"]}

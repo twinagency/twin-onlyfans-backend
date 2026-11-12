@@ -84,11 +84,15 @@ def world(monkeypatch):
     monkeypatch.setattr(bb,'_sync_playwright',playwright)
     monkeypatch.setattr(bb,'POLL_S',0.001)
     # OnlyFans fetches inside build_connection_capture: chunk + pure derivation stubbed.
-    class Resp:
-        def __enter__(self):return self
-        def __exit__(self,*a):return False
-        def read(self,*a):return b'chunk'
-    monkeypatch.setattr(session_bootstrap.urllib.request,'urlopen',lambda *a,**k:Resp())
+    from onlyfans_runtime import browser_capture
+    from onlyfans_commands import connection_api
+    def fetch(kind,**k):w.setdefault('fetches',[]).append((kind,k['proxy']));return 'chunk'
+    def capture_proxy(store,tenant,account):
+        w.setdefault('scope',[]).append((tenant,account))
+        if isinstance(w.get('proxy'),Exception):raise w['proxy']
+        return w.get('proxy')
+    monkeypatch.setattr(browser_capture,'fetch_asset',fetch)
+    monkeypatch.setattr(connection_api,'get_capture_proxy',capture_proxy)
     monkeypatch.setattr(session_bootstrap,'derive_rules_from_chunk',lambda code,samples:{'checksum_indexes':[1,2],'checksum_constant':7})
     monkeypatch.setattr(session_bootstrap,'verify_rules',lambda rules,samples:(True,None))
     with bb._jobs_lock:bb._jobs.clear()
@@ -119,12 +123,13 @@ def wait_state(client,job,states,account=ACCOUNT,timeout=5):
     raise AssertionError(r)
 
 
-def test_unconfigured_is_503(client,monkeypatch):
+def test_unconfigured_is_503(client,world,monkeypatch):
     monkeypatch.delenv('BROWSERBASE_API_KEY',raising=False);monkeypatch.delenv('BROWSERBASE_PROJECT_ID',raising=False)
     r=client.post(base(),headers=H,json={})
     assert r.status_code==503 and r.json()['code']=='browserbase_unconfigured'
     assert r.json()['error']=='BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'
     assert r.headers[HEADER]==SCHEMA and bb._jobs=={}
+    assert 'scope' not in world  # N1: no proxy lookup before the config gate
 
 
 def test_auth_and_body_gates(client,world):
@@ -147,7 +152,7 @@ def test_start_status_capture_matches_paste_curl(client,world):
           " -H 'sign: "+SIGN+"' -H 'time: 1762900000000' -H 'user-agent: "+UA+"' -H 'x-hash: synthetic-xhash'"
           " -H 'x-relay-static-param: synthetic-static' -H 'x-relay-sign-start: 51234' -H 'x-relay-sign-end: 6789abcd'"
           " -b 'auth_id="+UID+"; sess=synthetic-sess-value'")
-    expected=session_bootstrap.build_connection_capture(curl,account=ACCOUNT)
+    expected=session_bootstrap.build_connection_capture(curl,account=ACCOUNT,proxy=None)
     assert {k:done[k] for k in ('capture','xHash','ownerId')}==expected
     assert expected['ownerId']==int(UID) and expected['capture']['signing']['rules']['static_param']=='synthetic-static'
     assert [c['name'] for c in done['capture']['cookies']]==['auth_id','sess']  # only onlyfans.com, path /
@@ -160,6 +165,18 @@ def test_start_status_capture_matches_paste_curl(client,world):
     assert any('__chatterly_capture' in s for s in scripts) and any('webpackChunkof_vue' in s for s in scripts)
     # a finished job does not block a new one
     assert client.post(base(),headers=H,json={}).json()['jobId']!=job
+
+
+def test_login_fetches_assets_through_saved_proxy(client,world):
+    # F2-01 (W3DC-01): the job's capture build fetches through the account's saved proxy, never direct.
+    from onlyfans_runtime.store import Refused
+    world['proxy']='http://synthetic:proxy-secret@proxy.example:8080'
+    job=client.post(base(),headers=H,json={}).json()['jobId']
+    assert wait_state(client,job,{'done','failed'})['state']=='done'
+    assert world['scope']==[(TENANT,ACCOUNT)] and world['fetches']==[('rules',world['proxy'])]
+    world['proxy']=Refused('stored connection credentials are unavailable')  # unreadable: refuse, no job
+    r=client.post(base(OTHER),headers=H,json={})
+    assert r.status_code==409 and list(bb._jobs)==[job]
 
 
 def test_waiting_login_shows_live_view(client,world):

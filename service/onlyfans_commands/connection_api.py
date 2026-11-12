@@ -3,7 +3,7 @@ import asyncio,hmac,json,os,re
 from fastapi import APIRouter,Request
 from fastapi.responses import JSONResponse
 from onlyfans_read.contract import ID_PATTERN
-from onlyfans_runtime.connections import encryption_key,get_connection,save_connection,change_connection,provision_account,get_capture_context
+from onlyfans_runtime.connections import encryption_key,get_connection,save_connection,change_connection,provision_account,get_capture_context,get_capture_proxy
 from onlyfans_runtime.enrollments import submit_enrollment,get_enrollments
 from onlyfans_runtime.store import Refused
 from .api import unique_keys
@@ -116,14 +116,18 @@ async def capture_from_curl(request:Request,account_id:str):
     with the returned material, so this reuses every existing credential path."""
     context=authenticate(request,account_id)
     if isinstance(context,JSONResponse):return context
+    store,tenant=context
     try:
         body=await read_json(request)
         if not {'curl'}<=set(body) or not set(body)<={'curl','staticParamOverride'} or type(body['curl'])is not str:raise ValueError()
         if 'staticParamOverride' in body and body['staticParamOverride'] is not None and type(body['staticParamOverride'])is not str:raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid curl capture request.'},400)
+    # Provider assets go out through the saved connection's proxy (None if none saved), never urllib (W3DC-01).
+    try:proxy=await asyncio.to_thread(get_capture_proxy,store,tenant,account_id)
+    except Exception as exc:return failure(exc)
     try:
         import session_bootstrap
-        result=await asyncio.to_thread(session_bootstrap.build_connection_capture,body['curl'],static_param_override=body.get('staticParamOverride'),account=account_id)
+        result=await asyncio.to_thread(session_bootstrap.build_connection_capture,body['curl'],static_param_override=body.get('staticParamOverride'),account=account_id,proxy=proxy)
         return response({'ok':True,'capture':result['capture'],'xHash':result['xHash'],'ownerId':result['ownerId']})
     except session_bootstrap.OwnerMismatch:
         return response({'ok':False,'code':'owner_mismatch','error':'That curl is signed in as a different OnlyFans account.'},409)
@@ -149,7 +153,10 @@ async def browserbase_login_start(request:Request,account_id:str):
         if await read_json(request)!={}:raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid Browserbase login request.'},400)
     import browserbase_login
-    try:job=browserbase_login.start(context[1],account_id)
+    if not browserbase_login.configured():return response({'ok':False,'code':'browserbase_unconfigured','error':'BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'},503)
+    try:proxy=await asyncio.to_thread(get_capture_proxy,*context,account_id)  # W3DC-01, as capture-from-curl
+    except Exception as exc:return failure(exc)
+    try:job=browserbase_login.start(context[1],account_id,proxy=proxy)
     except browserbase_login.Unconfigured:return response({'ok':False,'code':'browserbase_unconfigured','error':'BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID are not set.'},503)
     except browserbase_login.Busy:return response({'ok':False,'code':'browserbase_busy','error':'Too many Browserbase logins are running. Try again in a few minutes.'},429)
     return response({'ok':True,**job.public()})

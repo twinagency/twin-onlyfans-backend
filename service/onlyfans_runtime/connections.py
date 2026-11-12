@@ -1,7 +1,8 @@
 """Explicit scoped credential storage and worker-side provider verification.
 
-Credentials are encrypted with an operator-owned key. API commands never make
-provider requests, and uploading a capture never enables outgoing messages.
+Credentials are encrypted with an operator-owned key. API commands make no provider
+requests except the capture build's two fixed asset GETs (browser_capture.fetch_asset,
+through the account's saved proxy); uploading a capture never enables outgoing messages.
 """
 from __future__ import annotations
 import base64,hashlib,json,os,re,uuid
@@ -123,11 +124,24 @@ def get_capture_context(store,tenant,creator,account=None):
             match=re.fullmatch(r'of-([1-9][0-9]{0,15})',account)
             if match is None:raise Refused('scope unavailable')
             owner=int(match[1])
-            row=s.get(OfProviderConnection,account)
-            if row is not None:
-                if row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
-                clear=_open(row,tenant);proxy=clear['proxyUrl'];owner=row.owner_id
+            row,proxy=_saved_proxy(s,runtime,tenant,account)
+            if row is not None:owner=row.owner_id
     return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
+
+
+def _saved_proxy(s,runtime,tenant,account):
+    """(row, proxyUrl) of the account's saved connection in this binding; (None, None) when none is saved."""
+    row=s.get(OfProviderConnection,account)
+    if row is None:return None,None
+    if row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
+    return row,_open(row,tenant)['proxyUrl']
+
+
+def get_capture_proxy(store,tenant,account):
+    """Proxy for an API-side capture build (curl paste, Browserbase login): the saved
+    connection's proxy, or None when none is saved."""
+    with Session(store.engine) as s:
+        return _saved_proxy(s,store._runtime(s,tenant,account,lock=False),tenant,account)[1]
 
 
 def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,include_policy=False,include_recent=False,runner_status_path=None):

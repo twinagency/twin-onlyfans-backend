@@ -178,9 +178,12 @@ L3-P1 (fans_api_adapter) · F4 + F5-control (model_transport) · F02 control · 
 | F1 | fix/W5BB-1-capture-owner-binding | W5BB-1 + W3DC-03 (same root: capture not bound to account owner) | blocker, LIVE, cross-tenant, our #80/#82; + adds scripts/premerge.sh |
 | F2 | fix/W3DC-01-no-direct-egress | W3DC-01 | blocker, LIVE since #80/#82, direct OF egress from host IP |
 | F3 | fix/W3DC-06-secret-echo | W3DC-06 + W5BB-7 (Sign echoed in error/log) + W3DC-04 if small | our jaka findings (cookie echo) |
+| F0 | fix/F0-check-harness | scripts/check.sh fast/live/full (owner 22:4xZ) | owner: next priority; becomes merge gate |
 | OWN-b | fix/OWN-b-signin-loopback | W6SI-18 (:8479 on all interfaces) | owner 22:1xZ (b): small, do next |
 | F4 | fix/W6HR-1-skipped-inbound-input | W6HR-1 (new red test) | blk-cond, LIVE on worker (#83, ours) |
 | F5 | fix/W2OR-04-activate-stop-check | W2OR-04 = W2SC-22 | blocker, LIVE path (Activate re-enables stopped account) |
+| F5b | fix/W2OR-04b-status-stopped | F5-02: status shows activate for operator-stopped account | follow-up of F5 |
+| F0b | fix/F0b-check-hardening | premerge ONLYFANS_TEST_PG_URL loopback guard; full skip-only detection; read_only PG test; test gaps (FINDINGS r3 D rows) | follow-up of F0 |
 | F6 | fix/W3RO-01-recent-inbox-retry | W3RO-01 + W3RCB-01 rest | blocker, LIVE reads (infinite per-fan retry / page refusal) |
 | F7 | fix/W6AA-1-content-safety | W6AA-1, W6AA-2 (+ W5NR-5) | G14 blocker, gate = sending off |
 | F8 | fix/W5NL-8-offer-blocker-fail-closed | W5NL-8 (+ W5TA-5, W5TB-1) | G16 ARMED |

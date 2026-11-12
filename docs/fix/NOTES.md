@@ -84,3 +84,8 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 ## F0 r1 review (23:5x)
 - Opus + Flash both FIX-THEN-MERGE on b537371d. Union triaged (/tmp/rwl-f0/FINDINGS.md): safety A = skip→INFRA, partial DOWN→RED, drop CHECK_PREMERGE_CMD seam, strict loopback DB guard (host/hostaddr/service/comma/PG* env), token CR/LF leak; also no-timeout→INFRA, live 180 s cap + statement_timeout, promote test, redirect/proxy tests. Extra tests → F0b if over 300 LOC.
 - Worker resumed with the fixes; dashboard /api/health forbidden in brief.
+
+## F0 r2/r3 + F5 r2 (00:xx 11-13)
+- F0 r2 (Opus): budget=0 → GREEN w/o running; ?dsn= DB bypass. Fixed 15b78beb (299 LOC, fast GREEN 42 s measured by worker).
+- F0 r3: Opus all r2 closed + 1 test string; Flash extra hardening. A: comma-host case, budget cap, evidence-write INFRA, guard inside db_checks (+ M4/umask if LOC fits). R: fast all-DOWN = note (owner spec). D → F0b: premerge ONLYFANS_TEST_PG_URL loopback check, full skip-only detection, test gaps.
+- F5 r2 cf145ec4: Activate after stop writes policy, runtime stays off; uses TextAuthority._configure_in_session. Behaviour change accepted: Activate refuses fansapi→native (existing safety invariant text_delivery.py:312); pin test requested.

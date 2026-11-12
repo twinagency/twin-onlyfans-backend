@@ -32,6 +32,8 @@ Result codes: RA = RED-ASSERT, RD = RED-DRIFT, G = GREEN, GG = GUARD-GREEN. Grou
 | L3-08 | W1 fans-api-adapter | minor | test_w1_fans_api_adapter_pg (3600 < 7200) | RA (m) | queue | protocol.py:66,77 † | G5 |
 | F1 | W1 model-transport | major | test_w1_model_transport_pg (non-ASCII Retry-After → unknown) | RA (m) | queue | model_transport/openrouter.py:36-48, :74-99 | G5 |
 | F1b | — | W3DC-03 rest: `_adopt_into_account` (Incogniton/Playwright) no auth_id check; enrollment curl branch (sink covers) |
+| F2b | — | W3DC-01 rest (F2-05): legacy relay `from_curl` (server.py paste-curl, session_bootstrap.py ~:428) still plain urllib for 2313.js; W3DC-07/08 not applied there; proxies.json binding |
+| F2c | — | N3 (pre-existing #82): browserbase_login.py `"proxies": True` → remote login egresses via Browserbase proxies, not account proxy; pass job.proxy as external proxy or refuse Browserbase for proxied accounts |
 | F2 | W1 model-transport | major | test_w1_model_transport_pg (open, not handover_pending) | RA (m) | queue | model_runtime.py:221-230, :267-271 | G5 |
 | F3 | W1 model-transport | blocker | test_w1_model_transport_pg ×4 (sk-or-v1 / prompt text persisted) | RA (m) | queue | openrouter.py:57-58; model_runtime.py:288 | G11 |
 | F5 | W1 model-transport | major | test_w1_model_transport_pg (due retry starved) | RA (m) | queue | pilot_supervised.py:375-382 † | G5 |

@@ -18,3 +18,9 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - premerge: 42 PASS, OK (0 skipped, 2 known-red), exit 0 (m). CI billing-locked (annotation verified, m).
 - Lesson: touching server.py made bare-word selection pull 11 unrelated base-red files (all measured identical on a253c84c). Selection now by dotted import path.
 - Premerge needs `PY=<main checkout>/.venv/bin/python` — worktrees have no venv.
+
+## F2 merged
+- PR #85 squash → 6ca2172a on claude/commercial-r0-r3-20261111 (m). Head fee1346c: 10 files, +210/−59 (m).
+- rwl: r1 (Opus + Flash) gave 9 accepted, 2 deferred, 1 rejected (/tmp/rwl-f2/FINDINGS.md); r1 fixer 64ec8598. r2 delta: N1 (config gate before proxy lookup), N2 (proxy required in normalize_browser_payload) fixed by me at fee1346c, with the N1 test measured red→green and promoted. N3 → F2c. N4 (TEST-CHANGE line) went into the squash msg. The Flash 502 point was re-raised and re-rejected (upstream failure = 502).
+- premerge at fee1346c: OK (0 skipped, 2 known-red), exit 0 (m). CI billing-locked (annotation verified, m). base = team branch (m).
+- Lesson: premerge.sh takes no base arg (an arg is read as a test path → MISSING → FAILED).

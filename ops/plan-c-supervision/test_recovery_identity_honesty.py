@@ -143,6 +143,23 @@ class ContainerIdentity(unittest.TestCase):
                 self.assertIn('TWIN_SUPERVISION_ACCOUNT=creator-w3', args)
 
 
+class ValidatorEntryPoint(unittest.TestCase):
+    """The validator runs in a container that receives only the identity context, never TWIN_SUPERVISOR_CONFIG."""
+
+    def test_the_script_takes_its_identity_from_the_context_only(self):
+        import os
+        import subprocess
+        import sys
+        config = scoped_config()
+        env = {k: val for k, val in os.environ.items() if k != 'TWIN_SUPERVISOR_CONFIG'}
+        env['TWIN_SUPERVISION_CONTEXT'] = json.dumps({k: config[k] for k in
+            ('account', 'binding', 'epoch', 'providerAccount', 'fans', 'publicUrl')}, sort_keys=True)
+        done = subprocess.run([sys.executable, str(Path(v.__file__))], env=env, capture_output=True, text=True, timeout=120)
+        self.assertNotEqual(done.returncode, 0)                       # there is no /proof here
+        self.assertNotIn('TWIN_SUPERVISOR_CONFIG', done.stderr)
+        self.assertIn('manifest.json', done.stderr)                   # it got as far as reading the retained proof
+
+
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 

@@ -14,6 +14,7 @@ never an HTTP status alone - https://docs.onlyfansapi.com/introduction/essential
   409 IDEMPOTENCY_CONFLICT           unknown; do not POST again without independent evidence
   400/422 + request_outcome not_sent rejected -> not accepted (blockBannedWords=strict_ban is always sent)
   400/422 without that field         unknown (a 4xx alone is not proof of non-delivery)
+  every unknown outcome above        held with sanitized evidence (UnknownSend: reason, status, code, trace, body excerpt)
   422 IDEMPOTENCY_KEY_MISMATCH       unknown (a human must fix the key mapping; never mint a new key)
 A restart reconciles an attempt left 'dispatching' as UNKNOWN (recover_interrupted); it is never re-queued.
 
@@ -40,8 +41,9 @@ from sqlalchemy.orm import Session
 from db.onlyfans_engine_models import OfEngineDecision, OfFansConnection
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from onlyfans_runtime.store import Refused
-from onlyfans_runtime.text_delivery import Accepted, Dispatch, NotAccepted, TextAuthority
+from onlyfans_runtime.text_delivery import Accepted, Dispatch, NotAccepted, TextAuthority, UnknownSend
 from .protocol import ALLOWED_BASES, FansApiClient
+from .send_outcome import build_evidence
 from .https_transport import FansHttpsTransport
 
 FLAG = 'TWIN_ENGINE_FANSAPI_REAL'
@@ -204,7 +206,13 @@ class FansApiRealTransport:
                             evidence_ref='fansapi:' + (result.trace_id or key))
         if result.state in ('not_sent', 'rejected'):
             return NotAccepted(**proof, occurred_at=stamp, evidence_ref=f'fansapi-{result.state.replace("_", "-")}:' + grant.attempt_id)
-        return None  # unknown, conflict, key mismatch: stays unresolved and holds only this fan
+        # Unknown, conflict, key mismatch: stays unresolved and holds only this fan. The sanitized provider
+        # evidence (status, error code, trace, exception class, redacted body excerpt) travels with the hold
+        # instead of being dropped; it changes nothing about the outcome.
+        ev = result.evidence or build_evidence(result.state, result.http_status, None, None, result.trace_id, None)
+        return UnknownSend(**proof, reason=ev.reason, http_status=ev.http_status, provider_code=ev.provider_code,
+                           request_outcome=ev.request_outcome, trace_id=ev.trace_id,
+                           exception_class=ev.exception_class, body_excerpt=ev.body_excerpt)
 
     def _retry_allowed(self, authority, tenant_id, grant, dispatch, posts):
         """Re-authorize ONE more wire attempt of an already consumed grant (never consumes it twice).

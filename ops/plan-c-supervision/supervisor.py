@@ -1,5 +1,5 @@
 """Pilot-only supervisor. Staged; no activation or hold release is performed."""
-import datetime,json,os,socket,subprocess,sys,time,urllib.error,urllib.request
+import datetime,json,os,re,socket,subprocess,sys,time,urllib.error,urllib.request
 from pathlib import Path
 from incident_state import unresolved,resolved_intervals
 import delivery_history
@@ -52,14 +52,28 @@ def status_request(url,method='GET',headers=None,*,timeout=6):
   with OPENER.open(req,timeout=timeout) as r:return r.status,r.read(2_000_001)
  except urllib.error.HTTPError as e:return e.code,e.read(2_000_001)
  except Exception:raise GuardFailure('network_check_failed') from None
+def excerpt(body,limit=200):
+ # One printable-ASCII line, tokens redacted, size-capped: safe for the journal and for a failure record.
+ text=body[:4096].decode('utf-8','replace') if isinstance(body,(bytes,bytearray)) else ''
+ text=re.sub(r'(?i)\bbearer\s+\S+','Bearer [redacted]',text)
+ text=re.sub(r'(?i)((?:authorization|api[_-]?key|token|secret|password|signature)[\"\']?\s*[:=]\s*)(\"[^\"]*\"|[^\s,;}&]+)',lambda m:m.group(1)+'[redacted]',text)
+ text=re.sub(r'[A-Za-z0-9+/_=-]{32,}','[redacted]',text)
+ return re.sub(r'\s+',' ',''.join(c if 32<=ord(c)<127 else ' ' for c in text)).strip()[:limit]
+def readiness_failure(code,status,body):
+ # The code stays first and stable; the status and body excerpt make the stop explainable from the journal line.
+ oversize=len(body)>2_000_000
+ detail=excerpt(body)
+ error=GuardFailure('%s status=%s%s body=%s'%(code,status,' oversize' if oversize else '',detail))
+ error.status,error.body_excerpt=status,detail
+ return error
 def status_json(url):
  status,body=status_request(url)
- if status!=200 or len(body)>2_000_000:raise GuardFailure('readiness_unavailable')
+ if status!=200 or len(body)>2_000_000:raise readiness_failure('readiness_unavailable',status,body)
  try:
   result=json.loads(body)
   if type(result) is not dict:raise ValueError()
   return result
- except Exception:raise GuardFailure('readiness_malformed') from None
+ except Exception:raise readiness_failure('readiness_malformed',status,body) from None
 def lookup(url,headers=None,**kw):
  # Network errors, 429 and 5xx are transient: nothing was learned, and nothing is published.
  try:status,body=status_request(url,headers=headers,**kw)

@@ -71,6 +71,28 @@ class NotAccepted:
     evidence_ref: str
 
 
+@dataclass(frozen=True)
+class UnknownSend:
+    """A transport's statement that a send is NEITHER proven accepted NOR proven not sent, with why.
+
+    The attempt is held exactly as for any other unknown outcome (fence kept, no retry, no release); this only
+    carries the sanitized provider evidence that used to be dropped. ``reason`` must be one of
+    send_outcome.UNKNOWN_REASONS, and the scope fields must match the attempt, or it is recorded as invalid_receipt.
+    """
+    account_id: str
+    fan_id: int
+    intent_id: str
+    attempt_id: str
+    payload_hash: str
+    reason: str
+    http_status: int | None = None
+    provider_code: str | None = None
+    request_outcome: str | None = None
+    trace_id: str | None = None
+    exception_class: str | None = None
+    body_excerpt: str | None = None
+
+
 class ProviderThrottled(Exception):
     """A definite 429 response; retry_after is the provider's value when supplied."""
 
@@ -1174,13 +1196,50 @@ class TextAuthority:
         self._release_hold(s, row, tenant_id)
         return True
 
-    def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
+    def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport", evidence=None):
         if reason not in {"ambiguous_transport", "invalid_receipt", "dispatch_expired", "provider_identity_conflict"}:
             raise Refused("invalid uncertainty reason")
         with Session(self.engine) as s, s.begin():
             row = self._attempt(s, tenant_id, account_id, intent_id, dispatch_token)
             if row.status == "dispatching":
                 self._hold_unknown(s, row, reason, tenant_id)
+                if evidence is not None:
+                    row.evidence_ref = self._encode_evidence(reason_hint=reason, **evidence)
+            return row.status
+
+    @staticmethod
+    def _encode_evidence(*, reason_hint, **fields):
+        """Re-sanitized, size-capped evidence string for an unknown attempt (descriptive only; never a receipt)."""
+        from fans_api_adapter.send_outcome import SendEvidence, encode_evidence
+        return encode_evidence(SendEvidence(reason=reason_hint, **fields))
+
+    def record_unknown(self, tenant_id, account_id, intent_id, dispatch_token, proof):
+        """Hold an attempt whose outcome the transport could not prove, keeping the sanitized evidence.
+
+        Same hold as mark_unknown (fence set, nothing released, nothing retried). A proof that does not match the
+        attempt, or names an unlisted reason, is held as invalid_receipt without its evidence.
+        """
+        from fans_api_adapter.send_outcome import UNKNOWN_REASONS
+        with Session(self.engine) as s, s.begin():
+            row = self._attempt(s, tenant_id, account_id, intent_id, dispatch_token)
+            if row.status != "dispatching":
+                return row.status
+            reason, evidence = "invalid_receipt", None
+            try:
+                if (type(proof) is UnknownSend and proof.reason in UNKNOWN_REASONS
+                        and (proof.account_id, proof.fan_id, proof.intent_id, proof.attempt_id, proof.payload_hash) == (
+                            row.account_id, row.fan_id, row.intent_id, row.attempt_id, row.payload_hash)):
+                    reason = proof.reason
+                    evidence = self._encode_evidence(
+                        reason_hint=proof.reason, http_status=proof.http_status, provider_code=proof.provider_code,
+                        request_outcome=proof.request_outcome, trace_id=proof.trace_id,
+                        exception_class=proof.exception_class, body_excerpt=proof.body_excerpt)
+            except (TypeError, AttributeError, ValueError):
+                reason, evidence = "invalid_receipt", None
+            if evidence is None:
+                evidence = self._encode_evidence(reason_hint="invalid_receipt", body_excerpt="proof_type=" + type(proof).__name__)
+            self._hold_unknown(s, row, reason, tenant_id)
+            row.evidence_ref = evidence
             return row.status
 
     def record_accepted(self, tenant_id, account_id, intent_id, dispatch_token, receipt):
@@ -1201,7 +1260,11 @@ class TextAuthority:
             except (Refused, TypeError, AttributeError):
                 if row.status == "accepted" or retired:
                     raise Refused("accepted receipt conflict")
+                first = row.status == "dispatching"
                 self._hold_unknown(s, row, "invalid_receipt", tenant_id)
+                if first:
+                    row.evidence_ref = self._encode_evidence(reason_hint="invalid_receipt",
+                                                             body_excerpt="proof_type=" + type(receipt).__name__)
                 return "unknown"
             if row.status == "accepted":
                 if row.receipt_json != encoded:
@@ -1483,7 +1546,9 @@ class TextAuthority:
             http = f" http_status={status}" if type(status) is int and 100 <= status <= 599 else ""
             print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__}{http} at={frames}", file=sys.stderr, flush=True)
             try:
-                return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
+                return self.mark_unknown(tenant_id, account_id, intent_id, grant.token,
+                                         evidence={"http_status": status if type(status) is int and 100 <= status <= 599 else None,
+                                                   "exception_class": type(exc).__name__})
             except Refused as refusal:
                 if str(refusal) != "stale dispatch token":
                     raise
@@ -1492,6 +1557,8 @@ class TextAuthority:
                     return self._intent(s, account_id, intent_id).status
         if type(proof) is NotAccepted:
             return self.record_not_accepted(tenant_id, account_id, intent_id, grant.token, proof)
+        if type(proof) is UnknownSend:
+            return self.record_unknown(tenant_id, account_id, intent_id, grant.token, proof)
         result = self.record_accepted(tenant_id, account_id, intent_id, grant.token, proof)
         if result == "accepted":
             self.materialize(tenant_id, account_id, intent_id)

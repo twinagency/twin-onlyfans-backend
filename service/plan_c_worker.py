@@ -54,13 +54,15 @@ def _work_counts(pilot):
         counts['modelRetryDelayed'] = progress.count('scheduled_retry')
         counts['staleUnplannedRequests'] = progress.count('overdue_eligible')
         # Scope of the holds, kept apart from loop health: an account-wide hold (unknown/malformed/conflicting
-        # evidence) denies sending; a hold on one fan only removes that fan from the eligible set.
+        # evidence) denies sending; a hold on one fan (including its unresolved send attempt) only removes that fan from
+        # the eligible set.
         account_wide, digest_fans = digest_hold_scope(s, runtime)
         eligible = 0
         for fan in config['fans']:
             state = s.get(OfConversationState, (pilot.account, fan))
             if (not account_wide and fan not in digest_fans and state is not None and state.mode == 'automated'
-                    and state.takeover_state == 'none' and delivery_block(s, runtime, fan) is None):
+                    and state.takeover_state == 'none' and state.unresolved_attempt_id is None
+                    and delivery_block(s, runtime, fan) is None):
                 eligible += 1
         return {**counts,'countsCapped':any(v==101 for v in counts.values()),
                 'accountHold':account_wide,'eligibleFans':eligible,'heldFans':len(config['fans'])-eligible}

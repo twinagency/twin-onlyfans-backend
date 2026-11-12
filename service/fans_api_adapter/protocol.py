@@ -18,7 +18,7 @@ import re
 from urllib.parse import urlencode, urlsplit, parse_qsl
 from .history import ALLOWED_BASES, parse_history_page, validate_history_next_page
 from .intake import _nonfinite, _unique_object
-from .send_outcome import classify_send_error
+from .send_outcome import SendEvidence, build_evidence, classify_send_error
 from .webhooks import verify_signature
 from conversation_engine.recovery import Outcome
 
@@ -45,6 +45,8 @@ class Result:
     http_status: int | None = None
     original_trace_id: str | None = None
     replayed: bool = False
+    # Sanitized evidence for a send that is neither accepted nor proven not sent (descriptive only).
+    evidence: SendEvidence | None = None
 
 
 def _id(value):
@@ -105,6 +107,8 @@ class FansApiClient:
         self.base = base
         self.last_replayed = False
         self.credits_balance = None
+        self._last_raw = None            # raw body and exception class of the latest request, kept for send evidence only
+        self._last_exception = None
 
     def _request(self, method, url, body=None, key=None):
         # The durable reservation happens before any provider I/O. A refusal
@@ -115,13 +119,17 @@ class FansApiClient:
         headers = {'Authorization': 'Bearer ' + self._token, 'Accept': 'application/json'}
         if body is not None: headers['Content-Type'] = 'application/json'
         if key is not None: headers['Idempotency-Key'] = key
+        self._last_raw = self._last_exception = None
         try:
             response = self._http(method=method, url=url, headers=headers, body=body,
                                   timeout=self._timeout, follow_redirects=False)
-        except Exception:
+        except Exception as exc:
+            self._last_exception = type(exc).__name__
             return None, None, None, None
         if type(response) is not Response or type(response.status) is not int:
+            self._last_exception = 'invalid_transport_response'
             return None, None, None, None
+        self._last_raw = response.body
         headers = response.headers if type(response.headers) is dict else {}
         lowered = {k.lower(): v for k, v in headers.items() if type(k) is str}
         self.last_replayed = str(lowered.get('idempotent-replayed', '')).strip().lower() == 'true'
@@ -229,7 +237,12 @@ class FansApiClient:
             return Result('rejected', trace_id=trace, http_status=status, original_trace_id=original_trace)
         state = ('not_sent' if outcome is Outcome.NOT_SENT else 'key_mismatch' if outcome is Outcome.KEY_MISMATCH
                  else 'conflict' if outcome is Outcome.CONFLICT else 'unknown')
-        return Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace)
+        evidence = None
+        if state != 'not_sent':
+            # Keep what the provider told us about an unproven send. Names the failure only: the state above is unchanged.
+            evidence = build_evidence(state, status, body, self._last_raw, trace, self._last_exception,
+                                      secrets=(self._token, text if len(text.strip()) >= 4 else ''))
+        return Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace, evidence=evidence)
 
     def vault(self, *, limit=100, offset=0):
         """One page of GET media/vault. Reading the vault sends nothing."""

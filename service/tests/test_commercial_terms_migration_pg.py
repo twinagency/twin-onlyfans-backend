@@ -48,7 +48,7 @@ def world(database):
 
 def test_head_is_the_new_revision_and_the_schema_check_pins_its_guards(world):
     store, engine, item, binding = world
-    assert HEAD == '0137_model_retry_due_repair'  # integration head (0136 then the 0129b repair); NEW is its ancestor and its objects are still checked
+    assert HEAD == '0138_tip_evidence_kind'  # integration head (0136, the 0129b repair, then the tip evidence kind); NEW is its ancestor and its objects are still checked
     with engine.begin() as c:
         check_schema(c)
         assert c.scalar(text('SELECT version_num FROM alembic_version')) == HEAD

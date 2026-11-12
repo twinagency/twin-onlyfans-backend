@@ -36,9 +36,9 @@ def refuses(engine, sql, params=None, match=None):
         assert match in str(caught.value)
 
 
-def test_head_is_0137_and_every_0136_table_exists_with_row_security(database):
+def test_head_is_0138_and_every_0136_table_exists_with_row_security(database):
     url, engine = database
-    assert HEAD == "0137_model_retry_due_repair"
+    assert HEAD == "0138_tip_evidence_kind"
     with engine.connect() as c:
         check_schema(c)
         assert c.scalar(text("SELECT version_num FROM alembic_version")) == HEAD

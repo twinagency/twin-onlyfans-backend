@@ -18,7 +18,8 @@ WEBHOOK_INCIDENT='c240c781574ad075939782179ab926c9f0a69cc3fc40a292f81f7d3f57e3ad
 REPEATED_WEBHOOK_INCIDENT='df20805ad9525b3ccc54b5dba161940cbdca78bda053d916d0578bbb42a27f33'
 
 # Must agree with ops/plan-c-supervision/incident_state.py (a test compares both owners).
-CLASSES=('credit_monitor_unavailable','provider_webhook_health_unavailable','sender_not_ready')
+# Network-check incidents use the same manual, interval/evidence-bound no-permit recovery.
+CLASSES=('credit_monitor_unavailable','provider_webhook_health_unavailable','sender_not_ready','network_check_failed')
 V1='plan-c-monitor-resolution.v1'
 V2='plan-c-monitor-resolution.v2'
 V1_FIELDS=frozenset(('version','incident_sha256','account_id','binding_id','connection_epoch','scope_revision',

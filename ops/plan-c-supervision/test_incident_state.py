@@ -65,7 +65,7 @@ class IncidentTests(unittest.TestCase):
  def test_additional_or_different_failure_cannot_use_original_resolution(self):
   valid=b'pilot_supervisor_stopped:credit_monitor_unavailable'
   self.assertEqual(m.classify_journal(valid),'credit_monitor_unavailable')
-  for raw in (b'',valid+b'\n'+valid,b'pilot_supervisor_stopped:network_check_failed'):
+  for raw in (b'',valid+b'\n'+valid,b'pilot_supervisor_stopped:unsupported_monitor_failure'):
    with self.assertRaises(RuntimeError):m.classify_journal(raw)
  def test_failure_before_collection_retains_each_original_and_stays_held(self):
   first=m.record_failure(self.root,{'failure':'before_collection'})

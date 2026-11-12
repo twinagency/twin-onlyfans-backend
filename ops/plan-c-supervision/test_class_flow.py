@@ -80,7 +80,7 @@ class ClassResolver(unittest.TestCase):
         self.assertEqual(len([c for c in self.calls if c[0] == r.sys.executable]), count)
 
     def test_evidence_for_a_different_incident_class_or_identity_is_refused(self):
-        for change in ({'incident_sha256': 'f' * 64}, {'incident_id': 'b' * 32}, {'classification': 'network_check_failed'},
+        for change in ({'incident_sha256': 'f' * 64}, {'incident_id': 'b' * 32}, {'classification': 'unsupported_monitor_failure'},
                        {'resolution_kind': 'pinned'}, {'scope_revision': 'x'}):
             self.manifest = {**self.good_manifest(), **change}
             with self.subTest(change=change):
@@ -119,7 +119,7 @@ class IntervalValidation(unittest.TestCase):
 
     def test_changed_url_subscription_pages_or_class_reject_stale_evidence(self):
         for change in ({'delivery_url': 'https://old.example/x'}, {'delivery_url_sha256': 'a' * 64}, {'config_version': 'zz'},
-                       {'delivery_page_count': 2}, {'classification': 'network_check_failed'}, {'incident_id': 'bad'},
+                       {'delivery_page_count': 2}, {'classification': 'unsupported_monitor_failure'}, {'incident_id': 'bad'},
                        {'incident_sha256': next(iter(st.pinned_incidents()))}):
             with self.subTest(change=change):
                 saved = dict(self.manifest); self.manifest.update(change)

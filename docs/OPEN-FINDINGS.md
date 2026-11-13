@@ -66,9 +66,9 @@ Review-only windows; nothing fixed by us. Team owns fixes; this file ranks them.
 - what: `catalog_terms` checks only `removed_at` + kind; sync un-removes retained not-ready rows; DRM skip deleted; vanished never retired; uncertain items keep earlier category membership; new W2 shortlist/price path adds no DRM/vanished gate; tests pin the open gap as correct (T01).
 - severity: blocker (CVA-01, DOC-02 conditional on OQ-4; default per-asset → blocker). Reach: latent — guard live = sending disabled + 0 vault/catalogue rows (m); in code: preparation-scope hold @e8e (m), lifted for an active commercial scope @a2f (i).
 - running 8d0001f9 (m): **y** (cited blobs identical to e8e90954, same lines): F01 native + FansAPI case (vault_management.py:855-856), N1, L3-01, L3-02, L3-03, CVA-01, T01, T12, DOC-01, DOC-02, DOC-13. **n** (W2 paths absent: catalogue_select.py, `prepare_commercial_offer`, commercial_terms_fixture.py): W2S-05 (underlying removed_at-only gate = F01 y), TC-07.
-- fix: one per-asset readiness gate (ready, canView, !hasError, !DRM, in window, classification certain) inside `catalog_terms` / offer prepare for every paid path.
+- fix: one per-asset readiness gate (ready, canView, !hasError, in window, classification certain; DRM sellable per OQ-3) inside `catalog_terms` / offer prepare for every paid path.
 - red: `rwl/W1-fans-api-adapter:service/tests/test_w1_fans_api_adapter_pg.py` (l3_01_02 ×4, l3_01b, l3_03); `rwl/W2-conversation-engine-sale:service/tests/test_w2_conversation_engine_sale_drm_pg.py`; `rwl/W1-commands-vault-ai:service/tests/test_w1_commands_vault_ai_classification.py` (CVA-01); `jaka/rules-tests-20261111:service/tests/test_rule_retained_vault_unsellable_pg.py` (X01).
-- OQ: OQ-1, OQ-2, OQ-3 (ask owner first), OQ-4, OQ-6.
+- OQ: OQ-1, OQ-2, OQ-3 = "DRM sellable (owner, 2026-11-13)" — DRM is not an unusable gate; sent by vault media id (#116 → 85e0f487), OQ-4, OQ-6.
 
 ### G5 · Paid-call ledger: unknown model call re-called; paid FansAPI reads re-bought
 - ids: W1-04, F6 (both pre-existing), W1-01, W1-02, W1-05 = F2, W1-06, W1-32, F1, F5, L3-05, L3-08 ≈ W2FA-06, L3-09, W2SC-05, W2SC-07, W2SC-08, W2FA-05, W2FA-13, W2FA-14, W2FA-19, DOC-07, DOC-17.

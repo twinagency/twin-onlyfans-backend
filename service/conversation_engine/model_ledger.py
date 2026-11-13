@@ -12,7 +12,8 @@ Cost accounting, per call row (micro-USD):
 `reserved_microusd` is ModelConfig.call_bound_microusd(): every allowed input token and output token at the configured
 price, i.e. an upper bound, not an estimate. Before a call is reserved the caps must also have headroom for every
 attempt this request generation is still allowed to make (the retry allowance), so a chain of retries cannot
-overshoot a cap. An `unknown` call keeps its full reservation until `reconcile_unknown` records its real cost.
+overshoot a cap. An `unknown` call keeps its full reservation until provider evidence for that exact call records its
+real cost (`model_transport.reconciliation`, via `apply_verified_usage`); an unknown output stays held either way.
 
 Leases: a reservation carries a lease. One live row per (account, request, generation, seq), and a new
 reservation is refused while another worker holds an unexpired lease on the same request generation, so two
@@ -379,16 +380,6 @@ class ModelLedger:
             if day is not None:
                 query = query.where(OfEngineModelCall.cost_day == day)
             return [_row(r) for r in s.scalars(query.order_by(OfEngineModelCall.created_at))]
-
-    def reconcile_unknown(self, account, call_id, *, actual_microusd):
-        """Replace an `unknown` call's reservation with its verified real cost (0 when the provider proves no charge)."""
-        if type(actual_microusd) is not int or isinstance(actual_microusd, bool) or actual_microusd < 0:
-            raise Refused('reconciled cost must be a non-negative integer')
-        with Session(self.engine) as s, s.begin():
-            row = s.get(OfEngineModelCall, (account, call_id), with_for_update=True)
-            if row is None or row.status != 'unknown':
-                raise Refused('only an unknown model call can be reconciled')
-            self.apply_verified_usage(row, actual_microusd, now=self.clock(), retain_unknown_outcome=False)
 
     @staticmethod
     def apply_verified_usage(row, actual_microusd, *, now, retain_unknown_outcome):

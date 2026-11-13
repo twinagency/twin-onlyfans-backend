@@ -69,9 +69,12 @@ service/tests/test_f1b_adopt_auth_id.py
 service/tests/test_g08b_unknown_reconcile_pg.py
 service/tests/test_g05pr2_minor_parity.py
 service/tests/test_g06d_automation_sale_gate.py
+service/tests/test_w3_cea_pending_evidence_pg.py
+service/tests/test_w7_ci4_send_d429_native_pg.py
 service/tests/test_w3_rcb_history_page.py::test_newer_valid_inbound_survives_one_bad_older_row[old-unsupported-formatting]
 service/tests/test_g06h_sellable_before_limit.py
 service/tests/test_g06g_arc_post_sale_gate.py
 service/tests/test_g06f_ppv_library_sale_gate.py
 service/tests/test_gds_disable_sends_pg.py
 service/tests/test_w3_rcb_history_page.py::test_newest_creator_markup_only_row_refuses_the_page
+service/tests/test_w3_rcb_history_page.py::test_archive_page_top_creator_markup_only_row_is_skipped

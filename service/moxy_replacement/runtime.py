@@ -1296,6 +1296,14 @@ class MoxyService:
         except Refused as exc:_evidence_hold(s,account,e,exc)
         return True
 
+    def _hold_unconfirmed(self,s,account,e):
+        # Possible delivery: hold for an operator (campaigns surface via surface_campaign_recovery).
+        if json.loads(e.payload_json).get('campaign_id'):
+            e.status='held';e.reason='campaign_provider_recovery_required';return
+        e.status='held';e.reason='provider_delivery_unconfirmed';e.updated_at=utcnow()
+        self._technical_attention(s,s.get(MoxyAccount,account),e)
+        diagnose(s,account,'provider_delivery_unconfirmed',event=e)
+
     @staticmethod
     def _technical_attention(s,owner,event):
         from onlyfans_runtime.operator_cases import open_case
@@ -1406,17 +1414,15 @@ class MoxyService:
             self.store._runtime(s,tenant,account);event=s.get(MoxyEvent,(account,event_id))
             if event.status=='queued':return event.intent_id
             if event.status!='ready':raise Refused('moxy_decision_not_ready')
+            # D429: a pre-D429 rate-limit retry may already be delivered; only an operator may release it.
+            if event.reason=='provider_rate_limit_retry':raise Refused('moxy_provider_delivery_unconfirmed')
             from .parts import active, index
             d=active(event);snap=json.loads(event.snapshot_json)
             terms=validate_decision(json.loads(s.get(MoxyAccount,account).settings_json),snap,
                 json.loads(event.decision_json),part_index=index(event))
             control=s.get(OfConversationState,(account,event.fan_id));fan=event.fan_id
             body=d['text'];revision=control.revision
-            # A proved rejection is retained as its own immutable attempt. A
-            # bounded rate-limit retry receives a new idempotency key.
             command_key='moxy:'+event_id+':part:'+str(index(event))
-            if event.reason=='provider_rate_limit_retry' and event.intent_id:
-                command_key=digest({'moxy_retry_event':event_id,'rejected_intent':event.intent_id,'part':index(event)})
         return self.authority.prepare(tenant,account,fan,command_key=command_key,
             expected_revision=revision,body=body,origin='automated',actor='moxy-owner',moxy_event_id=event_id,
             catalog_item_id=terms['item']['id'] if terms else None,
@@ -1440,25 +1446,17 @@ class MoxyService:
                     if evidence.startswith('fastt-auth-failed:'):
                         e.status='held';e.reason='provider_authentication_required'
                     elif evidence.startswith('fastt-rate-limited:'):
-                        attempts=s.scalar(select(func.count()).select_from(OfTextIntent).where(
-                            OfTextIntent.account_id==account,OfTextIntent.moxy_event_id==e.event_id,
-                            OfTextIntent.status=='not_accepted'))
-                        policy=s.get(OfDeliveryPolicy,account)
-                        if attempts>=3:
-                            e.status='held';e.reason='provider_retry_limit_reached'
-                        elif json.loads(e.payload_json).get('campaign_id'):
-                            e.status='held';e.reason='campaign_provider_recovery_required'
-                        elif s.get(MoxyAccount,account).mode!='on':
-                            e.status='held';e.reason='moxy_off'
-                        elif max((t for t in (policy.provider_cooldown_until,policy.next_dispatch_at)
-                                  if t is not None),default=utcnow())>utcnow():
-                            e.reason='provider_rate_limited'
-                        elif not self._invalidated(s,account,e):
-                            e.status='ready';e.reason='provider_rate_limit_retry'
+                        # Legacy rows only (D429: a 429 now stays unknown). A 429 after the POST never proved
+                        # non-delivery, so hold for an operator; never re-dispatch (possible double send).
+                        self._hold_unconfirmed(s,account,e)
                     else:
                         e.status='stale';e.reason=intent.reason
                 elif intent and intent.status in {'cancelled','refused'}:
                     e.status='stale';e.reason=intent.reason
+            # Pre-D429 rate-limit re-sends left 'ready' are held too: their 429 proved nothing either.
+            for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready',
+                    MoxyEvent.reason=='provider_rate_limit_retry')):
+                self._hold_unconfirmed(s,account,e)
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready')):
                 self._invalidated(s,account,e)
             s.flush()

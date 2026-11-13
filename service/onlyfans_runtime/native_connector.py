@@ -20,7 +20,7 @@ from of_signer import sign
 from .loopback_transport import (
     LoopbackPeerHandle, LoopbackTextTransport, _request_once, from_server,
 )
-from .native_protocol import API_PATH, MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, load, message, request
+from .native_protocol import API_PATH, MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, history_text, load, message, request
 from .store import PAGE_LIMIT, Refused, _id
 from .text_delivery import Dispatch, TextAuthority, _stamp
 from .worker import ChatPage, MessagePage
@@ -55,9 +55,12 @@ def _synthetic_headers(port, path, owner_id):
 def _skip_reason(row, *, owner_id, fan_id):
     """Name a well-formed, in-scope row on the skip whitelist, else None.
 
-    Only explicit tip/unsent/deleted flags are skipped: the history Event has
-    no tip and these rows carry no conversation text. Every other row the
-    strict parser rejects still refuses the whole page.
+    Explicit tip/unsent/deleted flags are skipped: the history Event has no
+    tip and these rows carry no conversation text. A text-only row (no media,
+    no price) whose sole defect is unsupported history markup is skipped too,
+    so one odd older body never blocks newer inbound; nothing ledger- or
+    offer-relevant is lost. Every other row the strict parser rejects still
+    refuses the whole page.
     """
     try:
         _id(row["id"])
@@ -75,7 +78,19 @@ def _skip_reason(row, *, owner_id, fan_id):
         return "unsent"
     if row.get("isDeleted") is True:
         return "deleted"
-    return None
+    text = row.get("text")
+    if type(text) is not str or len(text.encode()) > 20000:
+        return None
+    try:
+        history_text(text)
+        return None
+    except NativeProtocolError:
+        pass
+    try:
+        event = message({**row, "text": "x"}, owner_id=owner_id, fan_id=fan_id, history=True)
+    except NativeProtocolError:
+        return None
+    return "formatting" if not event.media_ids and event.price_cents == 0 else None
 
 
 _SKIP_LOG_SECONDS = 60.0

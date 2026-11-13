@@ -1,8 +1,8 @@
-"""ONE minor / underage signal for every send-path safety check (G05-PR2).
+"""ONE minor / underage signal for every safety detector on the send paths (G05-PR2).
 
 The engine (journey fan signals, model_output draft judge) and the native detector (safety_detect.assess and
-output_violation) all call ``minor_match``, so a phrase gets the same minor verdict on every path
-(pinned by tests/test_g05pr2_minor_parity.py). The engine's own banned-theme regexes stay as they are on top.
+output_violation, not wired to a sender until G14) all call ``minor_match``, so a phrase gets the same minor verdict on
+every detector (pinned by tests/test_g05pr2_minor_parity.py). The engine's own banned-theme regexes stay as they are on top.
 """
 import re
 
@@ -18,8 +18,11 @@ _QUANTITY_UNIT = (r"(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|wk
                   r"points?|levels?|pages?|chapters?|steps?)")
 _MINOR = (
     re.compile(r"\b(?:under[\s-]?aged?|under\s*(?:18|eighteen)|jailbait|loli|lolita|shota|pedo\w*|school\s?(?:girl|boy)s?|"
-               r"(?:i'?m|i\s+am|im)\s+(?:(?:still|only|just)\s+)?a\s+minor)\b", re.I),
-    re.compile(rf"\b(?:(?:i'?m|i\s+am|im)\s+(?:turning|about\s+to\s+turn)|i\s+just\s+turned|i'?m|i\s+am|im|my\s+age\s+is|age\s*:)"
+               r"(?:i'?m|i\s+am|im)\s+(?:(?:still|only|just)\s+)?a\s+minor|"
+               # qualified first/second-person assertions ("i'm just a kid", "ur only a child"; Flash G05-PR2)
+               r"(?:i'?m|i\s+am|im|you'?re|you\s+are|ur|are\s+you)\s+(?:still|only|just|barely)\s+(?:an?\s+)?(?:kid|child))\b", re.I),
+    re.compile(rf"\b(?:(?:i'?m|i\s+am|im)\s+(?:turning|about\s+to\s+turn|gonna\s+be|going\s+to\s+be)|i\s+just\s+turned|i\s+turn|"
+               rf"i'?ll\s+be|i\s+will\s+be|i'?m|i\s+am|im|my\s+age\s+is|age\s*:)"
                rf"\s+(?:a\s+)?(?:(?:only|just|barely|still|almost)\s+)?{UNDER_18}"
                r"(?:\s*(?:-\s*)?(?:(?:years?|yrs?)[\s-]*(?:old|of\s+age)|years?(?!\s*\w)|yrs?|yo|y/o|y\.o|f|m(?!\s+(?:away|out|from|ahead|behind|late))|"
                r"(?:fe)?male)\b|"
@@ -29,9 +32,9 @@ _MINOR = (
     re.compile(rf"\b{UNDER_18}\s*(?:-\s*)?(?:yo|y/o|y\.o)\b|"
                rf"\bage\s*:?\s*{UNDER_18}(?![\w'\"%$]|[.,]\d|\s*(?:-\s*)?{_QUANTITY_UNIT}\b)", re.I),
 )
-# Sibling/child step terms + teen words (step-PARENT roleplay is adult; the engine's banned set is broader by design).
+# Sibling/child step terms (incl. stepsibling/stepchild/stepkid) + teen words (step-PARENT roleplay is adult; the engine's banned set is broader by design).
 # Never exempt: "my stepsister got a job" is held for a human (G05).
-_STEP = re.compile(r"\b(?:step[ -]?(?:sis|sister|bro|brother|daughter|son)s?|teen(?:s|age|aged|ager|agers)?)\b", re.I)
+_STEP = re.compile(r"\b(?:step[ -]?(?:sis|sister|bro|brother|daughter|son|sibling|kid)s?|step[ -]?child(?:ren)?|teen(?:s|age|aged|ager|agers)?)\b", re.I)
 # Ordinary child/family words: a signal only with sensitive context ("be my little girl, so horny"), per sensitive_match.
 _CONTEXTUAL = re.compile(
     r"\b(?:minors?|(?:little|young) (?:girl|boy)|kiddo|child(?:ren)?|kids?|(?:my|your) (?:daughter|son|niece|nephew))\b", re.I)

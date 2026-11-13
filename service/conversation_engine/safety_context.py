@@ -5,10 +5,11 @@ not a policy classifier and does not make a model response authoritative.
 """
 import re
 
+# School, teen and step-family terms are never exempt (W4CEC-4, G05): a cue-list exemption for "my stepsister got a job"
+# leaked casting forms in review, so such mentions are held for a human. Revisit only on held-case volume (G05 PR2).
 _CONTEXTUAL_MENTION = re.compile(
-    r"(?:minors?|school ?girl|school ?boy|teen(?:age|ager|s)?|(?:little|young) (?:girl|boy)|"
-    r"kiddo|child(?:ren)?|kids?|step ?(?:sis|sister|bro|brother|daughter|son|mom|mum|mother|dad|father)|"
-    r"(?:my|your) (?:daughter|son|niece|nephew))\Z", re.I)
+    r"(?:minors?|(?:little|young) (?:girl|boy)|kiddo|child(?:ren)?|kids?|(?:my|your) (?:daughter|son|niece|nephew))\Z", re.I)
+UNDER_18 = r"(?:1[0-7]|[1-9]|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen)"
 _SENSITIVE_CONTEXT = re.compile(
     r"\b(?:pretend|role[ -]?play|fantas(?:y|ies|ise|ize|ising|izing)|incest|sexual(?:ly)?|sex|sexy|"
     r"horny|nudes?|naked|fuck\w*|cocks?|dicks?|pussy|cum\w*|blowjob|orgasm\w*|masturbat\w*|"
@@ -17,7 +18,7 @@ _SENSITIVE_CONTEXT = re.compile(
 
 _MINOR_ADJECTIVE = re.compile(r'\s+(?:issue|issues|problem|problems|delay|delays|change|changes|mistake|mistakes|detail|details)\b', re.I)
 _AGE_ASSERTION = re.compile(
-    r"\b(?:i(?:'m| am)|you(?:'re| are)|are you|she(?:'s| is)|he(?:'s| is)|is (?:she|he))\s+"
+    r"\b(?:i(?:'m| am|m)|you(?:'re| are)|are you|she(?:'s| is)|he(?:'s| is)|is (?:she|he))\s+"
     r"(?:an? |the )?(?:minor|teen(?:ager)?|school ?girl|school ?boy|child|kid)\b", re.I)
 
 

@@ -83,20 +83,28 @@ def categories(item):
     return sorted(result) or ["uncategorised"]
 
 
+def _auto_memberships(session, account_id, media_id, keys=None):
+    """(key, folder id) of the item's live auto-category memberships, optionally limited to keys.
+    Miscellaneous/Unsorted and archived folders are never included."""
+    owner = VaultFolder.created_by
+    scope = (owner.in_([OWNER_PREFIX + k for k in keys]) if keys is not None
+             else owner.startswith(OWNER_PREFIX, autoescape=True))
+    rows = session.execute(select(VaultFolder.id, owner).join(VaultFolderItem,
+        (VaultFolderItem.account_id == VaultFolder.account_id) & (VaultFolderItem.folder_id == VaultFolder.id))
+        .where(VaultFolder.account_id == account_id, VaultFolderItem.media_id == media_id,
+               VaultFolder.deleted_at.is_(None), scope,
+               owner.notin_([OWNER_PREFIX + "miscellaneous", OWNER_PREFIX + "pending"]))).all()
+    return [(c[len(OWNER_PREFIX):], fid) for fid, c in rows]
+
+
 def _withdraw_filings(session, account_id, media_id, filed):
     """Remove live memberships in auto folders the classifier filed; return their keys. Operator additions,
     Miscellaneous/Unsorted and archived folders are untouched. Idempotent: a second call finds nothing."""
-    owners = [OWNER_PREFIX + k for k in sorted(filed - {"miscellaneous", "pending"})]
-    if not owners:
-        return set()
-    rows = session.execute(select(VaultFolder.id, VaultFolder.created_by).join(VaultFolderItem,
-        (VaultFolderItem.account_id == VaultFolder.account_id) & (VaultFolderItem.folder_id == VaultFolder.id))
-        .where(VaultFolder.account_id == account_id, VaultFolderItem.media_id == media_id,
-               VaultFolder.deleted_at.is_(None), VaultFolder.created_by.in_(owners))).all()
+    rows = _auto_memberships(session, account_id, media_id, sorted(filed)) if filed else []
     if rows:
         session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
-            VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_([r[0] for r in rows])))
-    return {r[1][len(OWNER_PREFIX):] for r in rows}
+            VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_([fid for _, fid in rows])))
+    return {key for key, _ in rows}
 
 
 def assign_sync(session, account_id, media_id, *, commercial=False):
@@ -160,7 +168,9 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
         elif isinstance(previous, dict):
             filed = set()           # filed as uncertain only; nothing automatic to preserve
         else:
-            filed = set(evidenced)  # categorised before commercial mode: respect the current memberships
+            # categorised before commercial mode (no FILED): its live auto filings count as filed, so evidence
+            # that changed or vanished cannot strand them; evidenced-but-removed stays not re-added.
+            filed = set(evidenced) | {key for key, _ in _auto_memberships(session, account_id, media_id)}
         if legacy:
             filed |= LEGACY_KEYS
         withdrawn = set()

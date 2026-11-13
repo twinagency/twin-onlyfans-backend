@@ -148,6 +148,41 @@ class UncertainStaysInCategory(unittest.TestCase):
         self.assertEqual(self.cls()["status"], "proposed")            # control
         self.assertIn(SELFIES, self.owners(), "V1 filing lost after an uncertain pending pass")
 
+    def precommercial_selfie(self):
+        """Legacy v2 row: filed by a non-commercial pass, so it has no FILED and no classification."""
+        item = self.item()
+        item.ai_fields_json = json.dumps({"description": "A selfie.", "confidence": 99, "_content_stamp": stamp_of(item)})
+        self.s.flush()
+        assign_sync(self.s, ACCOUNT, MID)
+        fields = self.fields()
+        self.assertTrue(fields[CURRENT_MARKER])                              # control
+        self.assertNotIn(FILED, fields); self.assertNotIn("_commercial_classification_v1", fields)
+        self.assertIn(SELFIES, self.owners())                                # control
+
+    def assert_withdrawn_and_stable(self):
+        leftover = [o for o in self.owners() if o.startswith(OWNER_PREFIX) and o != MISC]
+        self.assertEqual(leftover, [], "pre-commercial filing survived the uncertain pass")
+        state = self.snapshot()
+        self.assertEqual(assign_sync(self.s, ACCOUNT, MID, commercial=True), {"status": "already_categorised"})
+        self.assertEqual(self.snapshot(), state)
+
+    def test_precommercial_item_with_changed_evidence_drops_old_filing(self):
+        """F1: evidence now only Casual; the live Selfies filing must still be withdrawn when uncertain."""
+        self.precommercial_selfie()
+        self.analyse("A casual photo.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assert_withdrawn_and_stable()
+
+    def test_precommercial_item_with_vanished_metadata_drops_old_filing(self):
+        """F1: metadata gone (pending) on the first commercial pass; old filings are withdrawn."""
+        self.precommercial_selfie()
+        item = self.item()
+        fields = self.fields(); fields.pop("description")
+        item.ai_fields_json = json.dumps(fields); self.s.flush()
+        assign_sync(self.s, ACCOUNT, MID, commercial=True)
+        self.assertEqual(self.cls()["reason"], "analysis_pending")          # control
+        self.assert_withdrawn_and_stable()
+
 
 if __name__ == "__main__":
     unittest.main()

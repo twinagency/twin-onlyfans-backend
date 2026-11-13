@@ -268,7 +268,7 @@ def test_not_sent_connect_failure_recovers(make_world):
     assert world.provider.calls == ['connect', 'ok'] and world.request(91009)[0] == 'completed'
 
 
-def test_unknown_outcome_stays_held_and_is_never_retried(make_world):
+def test_unknown_outcome_hands_over_and_is_never_retried(make_world):
     world = make_world(['timeout'])
     post(world, 91010)
     world.ticks(1)
@@ -277,7 +277,7 @@ def test_unknown_outcome_stays_held_and_is_never_retried(make_world):
     for seconds in (31, 600, 3600):
         world.advance(seconds)
         world.ticks(2)
-    assert world.provider.calls == ['timeout'] and world.request(91010)[0] == 'open' and not world.w.fans.posts
+    assert world.provider.calls == ['timeout'] and world.request(91010)[0] == 'handover_pending' and not world.w.fans.posts
 
 
 def test_scope_stop_during_wait_prevents_the_retry(make_world):

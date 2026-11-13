@@ -17,13 +17,16 @@ Order for every attempt (any failure before step 4 means no network traffic at a
 
 Chain (ModelConfig.chain): the primary, then one regeneration on the primary that carries the rejection reasons, then
 (only when configured, OFF by default) ONE fallback model. The fallback runs ONLY after the primary failed for
-AVAILABILITY reasons (connect error, rate limit 429, 5xx, timeout); never after a refusal, an empty completion or a
-validator rejection, because that would be evading a refusal. The fallback has its own prices and reservation inside the
+AVAILABILITY reasons (connect error, HTTP 408/429/5xx; `retryable_release`); never after a refusal, an empty completion
+or a validator rejection (that would be evading a refusal). The fallback has its own prices and reservation inside the
 same caps and the same total-attempt bound.
 A refusal by the provider/model, or an empty completion (how DeepSeek via OpenRouter refuses), is never re-asked: it goes straight to a human, as does every other rejected or unusable
 answer (a handover plus an operator case that lists the outcomes and reasons). No canned line is ever produced. A stored
 response is reused after a crash only when it was produced from exactly the same snapshot, so a restart never pays twice
-or sends a stale answer.
+or sends a stale answer. A call whose outcome is unresolved (timeout, lost lease, partial or unclassified failure) may have
+been charged: the request goes to a human at once, in the live pass and on any replay, and the call keeps its full
+reservation. No retry, resume or fallback makes a second possibly-charged call for it (a stored same-snapshot answer
+is still reused: that makes no call).
 """
 from dataclasses import dataclass
 from datetime import timedelta
@@ -33,7 +36,7 @@ import uuid
 from onlyfans_runtime.store import Refused
 
 from .model_client import (ChatRequest, ModelBusy, ModelCallError, ModelHTTPStatus, ModelIncompleteResponse, http_refusal,
-                           ModelNotSent, ModelOutcomeUnknown, ModelUnavailable)
+                           ModelNotSent, ModelOutcomeUnknown, ModelUnavailable, retryable_release)
 from .model_config import input_token_upper_bound
 from .model_ledger import CONTENT_FAILURES, IDENTITY_UNSETTLED, LENGTH_LIMITED, ModelLedger
 from .model_output import JudgeContext, Verdict, judge
@@ -51,16 +54,6 @@ def length_verdict(verdict):
     text). That is not a refusal and not a silent completion; it gets the normal single corrected, costed regeneration,
     never more. A genuine refusal in the text stays a refusal. Shared by the live path and by replay after a restart."""
     return verdict if verdict.outcome == 'refusal' else Verdict('invalid', reasons=(LENGTH_REASON,))
-
-
-def is_availability_failure(outcome):
-    """True when a failed call says the PROVIDER was unavailable (not that it declined or that we sent something bad)."""
-    if outcome in ('not_sent', 'timeout', 'lease_expired'):
-        return True
-    if type(outcome) is str and outcome.startswith('http_') and outcome[5:].isdigit():
-        status = int(outcome[5:])
-        return status in (408, 429) or 500 <= status <= 599
-    return False  # 400/401/403/404/422 (config, auth, moderation) and unclassified client errors never fall back
 
 
 @dataclass(frozen=True)
@@ -154,6 +147,13 @@ class ModelRuntime:
         turn.handover(reason, {'outcomes': list(outcomes), 'reasons': [str(r)[:160] for r in reasons][:8]})
         raise Refused('model could not write an acceptable reply; request handed to a human')
 
+    @staticmethod
+    def _hand_over_unknown(turn, outcomes):
+        """The ONE decision for an unresolved outcome (live pass and replay): it may have been charged, so a human takes
+        the request now. The handover is keyed on the request (a no-op once it left `open`); the reservation is kept."""
+        turn.handover('model_outcome_unknown', {'outcomes': [str(o)[:64] for o in outcomes][-4:]})
+        raise Refused('model call outcome is unknown; request handed to a human')
+
     def render(self, turn, profile, fix=()):
         """The prompt for one turn. MODEL-AGNOSTIC: it depends only on the snapshot, the creator profile, the examples and the
         rejection notes, never on which model will answer, so a simulation (or the fallback attempt) can send the SAME
@@ -168,8 +168,8 @@ class ModelRuntime:
     def propose(self, turn):
         cfg, ledger = self.config, self.ledger
         profile = self._preflight(turn)
-        ledger.sweep(turn.account, turn.request_id, turn.generation)
-        rows = ledger.rows(turn.account, turn.request_id, turn.generation)
+        ledger.sweep(turn.account, turn.request_id)  # request-wide: see ModelLedger.sweep
+        rows, unresolved = ledger.rows(turn.account, turn.request_id, turn.generation)  # unresolved: any generation
         observed_seq = rows[-1].seq if rows else -1
         jctx = self._judge_context(turn, profile)
         chain = [(i, step, model, prefixed) for i, (step, model, prefixed) in enumerate(cfg.chain())]
@@ -208,18 +208,21 @@ class ModelRuntime:
             elif row.status == 'released' and row.outcome == 'lease_expired':
                 continue  # never reached the wire: simply try that step again
             else:  # a transport-type failure: about the provider, not about the content
-                if is_availability_failure(row.outcome):
+                if retryable_release(row.outcome):
                     unavailable = True
                 else:
-                    blocked = True  # 400/401/403 and unclassified failures never fall back
+                    blocked = True  # 400/401/403/404/422 and every other failure never fall back
                     if row.status == 'released' and http_refusal(row.outcome):
                         http_refused.append(row.outcome)
-                # The durable due time (provider Retry-After or the transport cooldown) when recorded; rows from before
-                # it existed fall back to the fixed cooldown from their last update.
+                # A released availability refusal waits for its durable due time (provider Retry-After or the transport
+                # cooldown); rows from before that column existed use the fixed cooldown from their last update.
                 due = getattr(row, 'retry_not_before', None) or row.updated_at + timedelta(seconds=cfg.transport_retry_seconds)
                 if now < due:
                     dead.add(row.model)  # not yet due: don't hammer that model
                     pos = max(pos, row.chain_pos + 1)
+        # After the replay loop on purpose: a stored answer of this generation (returned above) is reused, paid for once.
+        if unresolved:
+            self._hand_over_unknown(turn, [r.outcome for r in unresolved])
         if len(rows) >= cfg.max_calls_per_generation:
             turn.handover('model_call_limit', {'outcomes': [r.outcome or r.status for r in rows]})
             raise Refused('model call limit reached; request handed to a human')
@@ -263,7 +266,7 @@ class ModelRuntime:
             try:
                 result = self.client.chat(request)  # the only network step; no database transaction is open
             except (ModelNotSent, ModelHTTPStatus) as exc:
-                retryable = is_availability_failure(exc.error_class)  # not_sent / HTTP 408, 429, 5xx
+                retryable = retryable_release(exc.error_class)  # not_sent / HTTP 408, 429, 5xx
                 delay = max(cfg.transport_retry_seconds, getattr(exc, 'retry_after', None) or 0) if retryable else None
                 ledger.release(turn.account, reservation.call_id, self.worker_id,
                                outcome=exc.error_class, error_class=exc.error_class,
@@ -275,22 +278,15 @@ class ModelRuntime:
                     http_refused.append(exc.error_class)
                 continue
             except ModelOutcomeUnknown as exc:
-                incomplete = isinstance(exc, ModelIncompleteResponse)
+                unknown = 'provider_incomplete' if isinstance(exc, ModelIncompleteResponse) else 'timeout'
                 ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id,
-                                    outcome='provider_incomplete' if incomplete else 'timeout', error_class=exc.error_class,
+                                    outcome=unknown, error_class=exc.error_class,
                                     generation_id=getattr(exc,'generation_id',''), endpoint_sha256=getattr(exc,'endpoint_sha256',''))
-                dead.add(model); pos = chain_pos + 1
-                if incomplete:
-                    blocked = True  # an error-bearing partial response is not a fallback permission
-                else:
-                    unavailable = True  # unknown usage keeps its reservation
-                continue
+                self._hand_over_unknown(turn, [unknown])
             except Exception as exc:  # unclassified client failure: assume it may have been charged
                 ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id, outcome='client_error',
                                     error_class=type(exc).__name__[:60])
-                dead.add(model); pos = chain_pos + 1
-                blocked = True  # not a proven availability failure: never falls back
-                continue
+                self._hand_over_unknown(turn, ['client_error'])
             raw = result.text if type(getattr(result, 'text', None)) is str else ''
             oversize = len(raw.encode('utf-8')) > cfg.max_output_bytes
             text = raw.encode('utf-8')[:cfg.max_output_bytes].decode('utf-8', 'ignore') if oversize else raw

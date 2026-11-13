@@ -303,17 +303,24 @@ def test_timeout_is_unknown_usage_and_keeps_its_full_reservation_until_reconcile
     store, authority, engine, runtime, client, _ = with_model(database, [ModelOutcomeUnknown('timeout'), ok('second try')])
     incoming(store, 1, 'hello')
     with pytest.raises(Refused, match='outcome is unknown; request handed to a human'):
-        engine.plan(TENANT, ACCOUNT, FAN, 1)  # handover proof: test_w3_trace_ledger_pg; here: the ledger bound + reconcile
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # handover proof: test_w3_trace_ledger_pg; here: the ledger bound + provider-evidence settle
     [first] = rows(database)
     assert (first.status, first.outcome, first.actual_microusd) == ('unknown', 'timeout', None)
     assert runtime.ledger.committed(day=first.cost_day) == BOUND  # the whole upper bound stays counted
     assert [r.call_id for r in runtime.ledger.unreconciled()] == [first.call_id]
-    with pytest.raises(Refused, match='non-negative'):
-        runtime.ledger.reconcile_unknown(ACCOUNT, first.call_id, actual_microusd=-1)
-    runtime.ledger.reconcile_unknown(ACCOUNT, first.call_id, actual_microusd=2500)  # the verified invoice replaces the bound
-    assert runtime.ledger.committed(day=first.cost_day) == 2500 and runtime.ledger.unreconciled() == []
-    with pytest.raises(Refused, match='only an unknown'):
-        runtime.ledger.reconcile_unknown(ACCOUNT, first.call_id, actual_microusd=1)  # a settled call cannot be rewritten
+    from conversation_engine.model_ledger import ModelLedger
+    with Session(database[1]) as s, s.begin():  # the provider-evidence path (model_transport.reconciliation)
+        row = s.get(OfEngineModelCall, (ACCOUNT, first.call_id))
+        with pytest.raises(Refused, match='only unknown usage'):
+            ModelLedger.apply_verified_usage(row, -1, now=utcnow(), retain_unknown_outcome=True)
+        ModelLedger.apply_verified_usage(row, 2500, now=utcnow(), retain_unknown_outcome=True)
+    # the verified cost replaces the bound; the unanswered outcome stays held (never 'settled', never re-asked)
+    assert runtime.ledger.committed(day=first.cost_day) == 2500
+    assert [r.call_id for r in runtime.ledger.unreconciled()] == [first.call_id]
+    with Session(database[1]) as s, s.begin():
+        row = s.get(OfEngineModelCall, (ACCOUNT, first.call_id))
+        with pytest.raises(Refused, match='only unknown usage'):
+            ModelLedger.apply_verified_usage(row, 1, now=utcnow(), retain_unknown_outcome=True)  # never rewritten
     store.close()
 
 

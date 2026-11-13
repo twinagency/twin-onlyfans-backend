@@ -756,8 +756,8 @@ async def loop_level(backend, root):
 
         # ── NP429: a 429 on the POST is pacing evidence only: the message may exist, so it is answered ONCE,
         #    held unknown for an operator (unit kept), and the 429 still sets the account cooldown ──
-        f, http, client = make("loop-429", limit=100, used=4, throttle=1)
-        http.codes, http.refuse_headers = [429], {"retry-after": "7"}
+        f, http, client = make("loop-429-bound", limit=100, used=4, throttle=1)
+        http.codes, http.refuse_headers = [429] * 12, {"retry-after": "7"}   # converted: 12 scripted 429s, one POST
         events.clear()
         task, patcher = start(client)
         await until(lambda: kinds("ready"), "ready", events)
@@ -809,6 +809,38 @@ async def loop_level(backend, root):
         check(len(http.posts) == 2, "a partly answered input is never regenerated")
         FakeEngine.texts = ["neutral reply"]
         await stop(task, patcher)
+
+        # Provider deferrals and the one model retry have independent budgets (converted: a PRE-wire not-sent).
+        import native_pilot.recovery as recovery
+        for failures in (1, 2):
+            f, http, client = make("loop-mixed-retry-" + str(failures), limit=100, used=4, throttle=1)
+            calls, real_run, real_freeze = {"n": 0, "freeze": 0}, FakeEngine.run, recovery.freeze
+            async def mixed_run(self, run_id, failures=failures):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    FakeEngine.fail_models = failures
+                return await real_run(self, run_id)
+            def flaky_freeze(*a, **k):
+                calls["freeze"] += 1
+                if calls["freeze"] == 1:
+                    raise RuntimeError("synthetic proof write failure")
+                return real_freeze(*a, **k)
+            events.clear()
+            with patch.object(FakeEngine, "run", mixed_run), patch.object(recovery, "freeze", flaky_freeze):
+                task, patcher = start(client)
+                await until(lambda: kinds("ready"), "ready", events)
+                fan_says(f)
+                if failures == 1:
+                    await replied(f, http, 1, "pre-wire not-sent then model timeout recovers", outs=1)
+                    check(not kinds("turn-abandoned"))
+                    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
+                else:
+                    await until(lambda: kinds("turn-abandoned"), "second model failure remains bounded", events)
+                    check(kinds("turn-abandoned")[0]["reason"] == "model-timeout")
+                    check(len(http.posts) == 0 and f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4)
+                check([e["reason"] for e in kinds("turn-requeued")] == ["dispatch-proof-not-saved", "model-timeout"])
+                check(FakeEngine.fail_models == 0)
+                await stop(task, patcher)
 
         # ── an external (untagged) message inside the cautious-resume window ends the turn with a NAMED reason ──
         f, http, client = make("loop-external-hold", limit=100, used=4, throttle=1)

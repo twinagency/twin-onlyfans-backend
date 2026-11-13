@@ -319,6 +319,24 @@ async def suite(root):
     check(f.sql("SELECT state,reserved,send_budget_used,send_budget_limit FROM twin_bridge_conversations")[0][:3] == ("attention", 1, 4))
     await async_refuses("delivery-unknown", lambda: g._send("must not retry"))
     check(len(h.posts) == 1, "a 429 after the POST started is never resent")
+    # A PRE-wire refusal is certainly not sent: no budget, nothing stopped, latched; a fresh gateway answers the input.
+    f, p, g, c, h = make("pre-wire-refused")
+    g._dispatch_hold = lambda terms, attempt: True
+    await async_refuses("fan-held-before-post", lambda: g._send("neutral reply"))
+    check(h.posts == [] and g.not_sent.retry is True and f.ledger.status(p.pilot_id)["attempts"] == {"not_sent": 1})
+    check(f.sql("SELECT state,reserved,send_budget_used FROM twin_bridge_conversations")[0][:3] == ("active", 1, 3))
+    check(f.sql("SELECT state,reason FROM twin_bridge_send_attempts WHERE turn_id<>'previous-twin-turn'")[0] == ("refused", "native-pilot-not-sent"))
+    check(f.sql("SELECT count(*) FROM twin_bridge_writes")[0][0] == 0, "no writer marker is left behind")
+    check(runner.check_local(f.path, fixtures.ACCT, fixtures.FAN)["account_id"] == fixtures.ACCT, "a refused attempt does not block the fan")
+    await async_refuses("fan-held-before-post", lambda: g._send("latched"))
+    g2 = runner.Gateway(f.ledger, p, c, asyncio.get_running_loop())
+    g2.input_key, g2.sources, g2.bubble = g.input_key, g.sources, 1
+    reply = await g2._send("neutral reply")
+    check(len(h.posts) == 1 and f.ledger.status(p.pilot_id)["attempts"] == {"not_sent": 1, "sent": 1})
+    f.source(reply["id"], direction="out", body=reply["text"], created_at=current.isoformat(sep=" "))
+    f.sql("UPDATE messages SET automation_kind='ai_chatter' WHERE message_id=?", (reply["id"],))
+    runner.verify_attribution(f.path, fixtures.ACCT, fixtures.FAN, f.ledger.receipts(pilot_id=p.pilot_id, input_key=g.input_key))
+    check(f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == 4, "only the sent bubble is spent")
 
     for status in (400, 403, 404, 422):
         f, p, g, c, h = make("refused-%d" % status)

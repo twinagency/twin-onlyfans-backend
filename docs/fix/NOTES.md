@@ -112,3 +112,15 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - LIVE-CHECK W6SI-18 (#88): :8479 LISTEN 127.0.0.1 (was *:8479) (measured).
 - OF 429s since restart: api 0 / worker 0 (measured; logs truncate on restart).
 - Merges: 8 → Fable consult.
+
+## Fable consult @8 merges (2026-11-13T00:1xZ) — continue
+- Gate time: before splitting/capping, time a gate solo-ish → contention ⇒ serialise gate behind a lock; suite size ⇒ split (changed-area as PR gate, full promoted + touched-area before EVERY stack move; not nightly).
+- Throughput lever = gate. Flash-only ≤50 LOC only outside risk classes (secrets/egress/tenancy/send/money). No 3rd worker. Batch only same root cause, same file, ≤300.
+- 22 untested + 25 drift-unknown: read-only repro pass (no test-only PRs); red test written when fix is picked.
+- Order: blk reachable with sending off before send-gated; live sec-money maj (egress/tenancy) > latent blk. G01 first, G03 after F4.
+- Mapping check: old F6 (W3RO-01+W3RCB-01) = G03+G04; F2d corrupt proxies.json = untested follow-up (no red test) → live egress, rank with sec-money maj when picked.
+
+## F4 (W6HR-1) gate
+- Worker: 8ab70d0e, 9 files +159/-10, red→green 5 cases (measured). check.sh fast RED: 900s budget hit under 3-stream contention (38 PASS, promoted tests never reached).
+- Pre-existing base reds found (measured at 96609e23 by worker): test_contextual_release_pg::test_mode_save_preserves_scope_and_populated_rollback_retains_unknown, test_engine_defects_pg::test_r1_paused_plain_replies_cannot_pitch_price_or_claim_purchase, test_history_capacity_turns.py (3 errors); test_onlyfans_native_connector_pg 31/31 Errno 42 loopback (macOS env).
+- Timing run with CHECK_BUDGET_S=3600 started (measurement, not gate). rwl r1: Opus reviewer + Flash.

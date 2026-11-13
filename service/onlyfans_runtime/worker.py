@@ -28,6 +28,8 @@ class MessagePage:
     # Oldest provider row id read, including rows the reader skipped; the
     # next cursor. None keeps the legacy min(event ids) cursor.
     next_before: int | None = None
+    # Fan-authored rows the reader skipped (tip/unsent/deleted): Store._skipped_input.
+    skipped_inbound: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -118,10 +120,10 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
                 if recent_cutover:
                     from .launch_history_memory.recent import commit_recent_page
                     commit_recent_page(store, tenant_id, recovery, page.events, has_more=page.has_more,
-                                       observations=page.observations, next_before=page.next_before, **scope,**fenced)
+                                       observations=page.observations, next_before=page.next_before, skipped_inbound=page.skipped_inbound, **scope,**fenced)
                 else:
                     store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more,
-                                        observations=page.observations, next_before=page.next_before, **scope,**fenced)
+                                        observations=page.observations, next_before=page.next_before, skipped_inbound=page.skipped_inbound, **scope,**fenced)
                 recovered = 1
             except Exception as failure:
                 error=failure

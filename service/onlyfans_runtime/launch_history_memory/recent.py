@@ -53,7 +53,7 @@ def request_before(store, tenant_id, claim, *, connection_revision=None):
 
 
 def commit_recent_page(store, tenant_id, claim, events, *, has_more,
-                       observations=(), connection_revision=None, provider_read_claim=None, next_before=None):
+                       observations=(), connection_revision=None, provider_read_claim=None, next_before=None, skipped_inbound=()):
     """Replace worker.py's recovery_page call together with request_before.
 
     The initial head, offers, archive handoff and recent completion are one
@@ -77,7 +77,7 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
     if not initial:
         return store.recovery_page(tenant_id, claim, events, has_more=has_more,
             observations=observations, connection_revision=connection_revision,
-            provider_read_claim=provider_read_claim, next_before=next_before)
+            provider_read_claim=provider_read_claim, next_before=next_before, skipped_inbound=skipped_inbound)
     if (type(events) not in {list, tuple} or type(has_more) is not bool
             or len(events) > PAGE_LIMIT or (has_more and not events and next_before is None)
             or any(type(e) is not Event for e in events)):
@@ -156,6 +156,7 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
                 if ingress.status != "applied":
                     raise Refused("recent import application failed")
         store._observe_offers(s, runtime, offers)
+        store._skipped_input(s, runtime, claim.fan_id, skipped_inbound, ids, boot and boot.upper_id)
         if boot is None:
             boot = RecentBootstrap(account_id=claim.account_id, fan_id=claim.fan_id,
                 binding_id=runtime.binding_id, upper_id=max(ids, default=0), observed_count=0)

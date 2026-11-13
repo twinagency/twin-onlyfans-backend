@@ -396,24 +396,13 @@ class Store:
             if fan.last_message_received_at is None or stamp > fan.last_message_received_at:
                 fan.last_message_received_at = stamp
             chat.unread_count += 1
-            eligible = runtime.enabled and state.mode == "automated" and state.takeover_state == "none" and not state.unresolved_attempt_id and not fan.is_muted
             work = s.get(OfWork, (account, event.fan_id))
             if work is None:
                 work = OfWork(account_id=account, fan_id=event.fan_id, generation=0, first_input_at=now,
                               last_input_at=now, target_message_id=event.message_id, control_revision=state.revision,
                               due_at=now, status="blocked")
                 s.add(work)
-            if work.status in {"done", "blocked"}:
-                work.first_input_at = now
-            # New input invalidates any former planning lease, even if it arrived
-            # out of order. The hard burst deadline does not move indefinitely.
-            work.generation += 1
-            work.last_input_at = now
-            work.due_at = min(now + timedelta(seconds=QUIET_SECONDS), work.first_input_at + timedelta(seconds=MAX_BURST_SECONDS))
-            work.target_message_id = max(work.target_message_id, event.message_id)
-            work.control_revision = state.revision
-            work.status = "waiting" if eligible else "blocked"
-            work.lease_token = work.lease_until = None
+            self._rearm(runtime, state, fan, work, event.message_id, now)
         if event.direction == "in" and advances:
             # Event notification shares the runtime lock; final dispatch still
             # revalidates if best-effort cancellation could not be recorded.
@@ -423,6 +412,21 @@ class Store:
         row.status, row.applied_at = "applied", now
         runtime.pending_events -= 1
         s.flush()
+
+    @staticmethod
+    def _rearm(runtime, state, fan, work, target, now):
+        eligible = runtime.enabled and state.mode == "automated" and state.takeover_state == "none" and not state.unresolved_attempt_id and not fan.is_muted
+        if work.status in {"done", "blocked"}:
+            work.first_input_at = now
+        # New input invalidates any former planning lease, even if it arrived
+        # out of order. The hard burst deadline does not move indefinitely.
+        work.generation += 1
+        work.last_input_at = now
+        work.due_at = min(now + timedelta(seconds=QUIET_SECONDS), work.first_input_at + timedelta(seconds=MAX_BURST_SECONDS))
+        work.target_message_id = max(work.target_message_id, target)
+        work.control_revision = state.revision
+        work.status = "waiting" if eligible else "blocked"
+        work.lease_token = work.lease_until = None
 
     def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None, bulk=False, synthetic_engine_only=False, expected_binding_id=None):
         from onlyfans_read.agency_scope import current_scope, actor_allowed
@@ -842,7 +846,7 @@ class Store:
             return RecoveryClaim(account_id, row.fan_id, row.generation, row.lease_token, row.high_water, row.upper_bound, row.before_id)
 
     def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool, connection_revision=None,
-                      observations=(), provider_read_claim=None, next_before=None):
+                      observations=(), provider_read_claim=None, next_before=None, skipped_inbound=()):
         if type(has_more) is not bool or len(events) > PAGE_LIMIT or (has_more and not events and next_before is None):
             raise Refused("invalid recovery page")
         normalized = [event.normalized() for event in events]
@@ -881,6 +885,7 @@ class Store:
                     # their next drain. Reading never consents to an AI reply.
                     source = "import" if connection_revision is not None else "catchup"
                     self._record(s, runtime, event, event.payload(), source, utcnow())
+            self._skipped_input(s, runtime, claim.fan_id, skipped_inbound, ids, row.upper_bound, [e for e in normalized if e.message_id > row.high_water])
             finished = not has_more or cursor <= row.high_water
             if finished:
                 row.high_water = max(row.high_water, row.upper_bound)
@@ -894,6 +899,32 @@ class Store:
             # a separate completeness obligation, not inferred from one page.
             self._mark_current(s, runtime)
             return "complete" if finished else "continue"
+
+    def _skipped_input(self, s, runtime, fan_id, skipped, ids, floor, pending=()):
+        """A skipped fan row (tip/unsent/deleted) above page ids, floor, high_water, stored rows and skipped_input_id
+        (advanced: counted once) bumps input and cancels replies; work on a still-unanswered text re-arms to the newest
+        fan text, stored or pending. Runs after the page's rows are recorded; never on archive pages."""
+        if type(skipped) is not tuple or any(type(i) is not int for i in skipped):
+            raise Refused("invalid skipped rows")
+        if not skipped:
+            return
+        account, key = runtime.account_id, (runtime.account_id, fan_id)
+        state, recovery = s.get(OfConversationState, key), s.get(OfRecovery, key)
+        latest = s.scalar(select(func.max(Message.message_id)).where(Message.account_id == account, Message.fan_id == fan_id))
+        if state is None or max(skipped) <= max([*ids, floor or 0, recovery.high_water if recovery else 0, latest or 0,
+                                                 state.skipped_input_id or 0]):
+            return
+        state.skipped_input_id, now = max(skipped), utcnow()
+        state.input_revision += 1
+        work = s.get(OfWork, key)
+        rows = [] if work is None else [*s.execute(select(Message.message_id, Message.direction).where(Message.account_id == account,
+            Message.fan_id == fan_id, Message.message_id >= work.target_message_id, Message.is_unsent.is_(False))),
+            *(e for e in pending if e.message_id >= work.target_message_id)]
+        if work is not None and work.target_message_id in {r.message_id for r in rows} and all(r.direction == "in" for r in rows):
+            self._rearm(runtime, state, s.get(Fan, key), work, max(r.message_id for r in rows), now)
+        s.flush()
+        from .launch_engagement.events import cancel_for_fan
+        cancel_for_fan(s, account, fan_id, "reply", now=now)
 
     @staticmethod
     def _observe_offers(s, runtime, offers):

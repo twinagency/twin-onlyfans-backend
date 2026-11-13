@@ -255,3 +255,5 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - Live now: #124 F1b, #125 G-DS. No migration files in 345e7657..e2783bc3.
 - pg_dump 16MB in .local-dev/backups. of-up rc=0. check.sh live GREEN 1s (measured). worker/of-api: 429 = 0, Traceback = 0 (tail 3000 lines).
 - Evidence: .local-dev/evidence/fix/live-e2783bc3.
+
+RESUME (paused by owner 2026-11-13; target a3902bf5 = merge 50; live stack e2783bc3, #126–#134 not live; no STACK.lock held): in flight, no PRs open yet: NP429 (wt t3-907639b0 @59360d77; gate RED 327s with non-diff failures only: campaign_controls/dispatch_pg fail identically at a3902bf5 + fc7f6425; native_pilot_service_pg fails identically at a3902bf5 → write the PR body, then merge), G05-G r2 (wt t3-c44e0cee @3e8c8bb5, target merged, DA + Flash r1 fixed → gate, then PR), LW-A1 @4ee9a192, OQ-3R @2ea156f8 (fix the fansapi-preview test), G10a + G06i + batch6 rwl delegates (cancelled/finished; read their task results/worktrees). Batch7 counter 1 (#134). Barriers open: G05-G, G06i, batch6 findings. Fable due at merge 51. Next: NP429 PR+merge → G05-G gate.

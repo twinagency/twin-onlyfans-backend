@@ -49,6 +49,6 @@ service/tests/test_moxy_multicreator_load_pg.py::test_three_creators_concurrent_
 # 91547788 (measured, G04): page-level skip of an unsupported-formatting row lives in native_connector._skip_reason
 # (not G04's file); history_text correctly keeps refusing <img>. Owner: native_connector worker.
 service/tests/test_w3_rcb_history_page.py::test_newer_valid_inbound_survives_one_bad_older_row[old-unsupported-formatting]
-# 1d2c5f36 (measured, G05): sqlite3.OperationalError unrecognized token ":" creating of_engine_offer_grant
+# 1d2c5f36 (measured, G05): script, sqlite3.OperationalError unrecognized token ":" creating of_engine_offer_grant
 # (PG-only `::jsonb` CHECK on SQLite); touched-area via conversation_policy, unrelated to G05. Team base red, queued
-service/tests/test_commercial_full_path.py::test_full_path
+service/tests/test_commercial_full_path.py (Background on this error at: https://sqlalche.me/e/#/e#q#)

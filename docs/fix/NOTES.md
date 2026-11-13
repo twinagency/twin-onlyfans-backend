@@ -104,3 +104,11 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - Flash solo: MERGE; lows: unconditional deselect (→F0b), "full runs them" overstated → reworded. check.sh fast GREEN 32s (measured).
 - F5 rebased on 29f28729; first fast run RED rc=143 = external SIGTERM at 60s (F4 premerge died same moment; inferred external kill, no test failure). Rerunning. F4 worker resumed with check.sh fast gate.
 - Merges: 7. Fable consult due at 8.
+
+## F5 merged (#91 → a1151b1f) + live batch 2, 2026-11-13T00:0xZ
+- check.sh fast GREEN 882s at e4d64f5b (measured; 3 parallel test streams; budget 900) → near budget: split changed-area vs full promoted queued (F0b), no tests dropped.
+- Stack restart under STACK.lock: /tmp/stack-live bdc6ad2b → a1151b1f (api, worker, sign-in; dashboard/broker untouched; no migrations in range). Sign-in needed node_modules symlink in /tmp/stack-live.
+- check.sh live GREEN 1s (measured; evidence in .local-dev/evidence/fix/live-a1151b1f/).
+- LIVE-CHECK W6SI-18 (#88): :8479 LISTEN 127.0.0.1 (was *:8479) (measured).
+- OF 429s since restart: api 0 / worker 0 (measured; logs truncate on restart).
+- Merges: 8 → Fable consult.

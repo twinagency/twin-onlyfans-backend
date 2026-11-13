@@ -194,6 +194,7 @@ L3-P1 (fans_api_adapter) · F4 + F5-control (model_transport) · F02 control · 
 | F3 | fix/W3DC-06-secret-echo | W3DC-06 + W5BB-7 (Sign echoed in error/log) + W3DC-04 if small | our jaka findings (cookie echo) |
 | F0 | fix/F0-check-harness | scripts/check.sh fast/live/full (owner 22:4xZ) | MERGED #89 → 91e32acc; merge gate from now |
 | F0c | fix/F0c-known-red-release-env | known-red 3 env-gated release rehearsal tests (premerge) | MERGED #90 → 29f28729; Flash MERGE, 2 lows → F0b |
+| F5 | fix/W2OR-04-activate-stop-check | W2OR-04/W3RCA-02 Activate vs operator stop + scope | MERGED #91 → a1151b1f; rwl r1-r3; fast GREEN 882s (loaded) |
 | OWN-b | fix/OWN-b-signin-loopback | W6SI-18 (:8479 on all interfaces) | owner 22:1xZ (b): small, do next |
 | F4 | fix/W6HR-1-skipped-inbound-input | W6HR-1 (new red test) | blk-cond, LIVE on worker (#83, ours) |
 | F5 | fix/W2OR-04-activate-stop-check | W2OR-04 = W2SC-22 | blocker, LIVE path (Activate re-enables stopped account) |

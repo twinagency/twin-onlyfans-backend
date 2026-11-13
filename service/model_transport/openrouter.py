@@ -33,20 +33,26 @@ class KeyUnavailable(Exception):
 
 
 # ---- non-200 evidence ----------------------------------------------------------------
-# Bounded and sanitized: never the key, the prompt or a raw body. Only short redacted scalar fields survive;
-# free-text messages are kept as a presence marker only.
+# Bounded and sanitized: never the key, the prompt or a raw body. Each field is kept only when it has its expected
+# shape (id, enum token, provider name, number, retry-after) and carries no secret marker; anything else is dropped
+# or kept as a presence marker. Free-text messages are a presence marker only.
 _MAX_ERROR_BODY = 65_536
-_SAFE = re.compile(r'[^A-Za-z0-9 ._:/@()\[\],;=+\-\'"?!%#]')
-_SECRET = re.compile(r'(sk-[A-Za-z0-9_-]{6,}|Bearer\s+\S+|[A-Za-z0-9_-]{32,})')
+_ID = re.compile(r'[A-Za-z0-9._:-]{1,64}')                  # request ids, UUIDs included (G09 DA 1)
+_TOKEN = re.compile(r'[A-Za-z][A-Za-z0-9_.-]{0,31}')         # error code/type enums: one word, no spaces
+_NAME = re.compile(r'(?=.{1,40}$)[A-Za-z0-9][A-Za-z0-9._-]*(?: [A-Za-z0-9._-]+){0,2}')  # ≤3 words ("Google AI Studio")
+_NUMBER = re.compile(r'[0-9]{1,20}(\.[0-9]{1,6})?')
+_DATE = re.compile(r'[A-Za-z0-9 ,:+-]{1,40}')
+_SECRET = re.compile(r'sk-|bearer|eyj|api[_-]?key|token|secret|passw|[A-Za-z0-9]{40,}', re.I)
 
 
-def _clean(value, limit):
-    # Strip first, then redact: stripping after redaction could rejoin a split token. Every field is redacted.
+def _clean(value, shape):
+    """`value` if it is a bounded int or a string of exactly `shape` with no secret marker; a non-empty string that
+    fails becomes a presence marker (never its text)."""
     if type(value) is int and not isinstance(value, bool):
         return value if -10**9 < value < 10**9 else None
-    if type(value) is not str or not value:
+    if type(value) is not str or not value.strip():
         return None
-    return _SECRET.sub('[redacted]', _SAFE.sub('', value))[:limit] or None
+    return value if shape.fullmatch(value) and not _SECRET.search(value) else '[redacted]'
 
 
 def _message_marker(value):
@@ -78,9 +84,13 @@ def _retry_after(value, *, now=None):
 def _failure_detail(response):
     headers = response.headers
     detail = {'status': response.status_code}
-    for name, key in (('x-request-id', 'requestId'), ('retry-after', 'retryAfter'), ('x-ratelimit-limit', 'rateLimitLimit'),
-                      ('x-ratelimit-remaining', 'rateLimitRemaining'), ('x-ratelimit-reset', 'rateLimitReset')):
-        value = _clean(headers.get(name), 64)
+    retry = headers.get('retry-after')
+    for key, value, shape in (('requestId', headers.get('x-request-id'), _ID),
+                              ('retryAfter', retry if _retry_after(retry) is not None else None, _DATE),
+                              ('rateLimitLimit', headers.get('x-ratelimit-limit'), _NUMBER),
+                              ('rateLimitRemaining', headers.get('x-ratelimit-remaining'), _NUMBER),
+                              ('rateLimitReset', headers.get('x-ratelimit-reset'), _NUMBER)):
+        value = _clean(value, shape)
         if value is not None:
             detail[key] = value
     content = response.content if len(response.content) <= _MAX_ERROR_BODY else b''
@@ -90,12 +100,12 @@ def _failure_detail(response):
         body = None
     error = body.get('error') if type(body) is dict else None
     if type(error) is dict:
-        for key, value in (('Code', _clean(error.get('code'), 32)), ('Type', _clean(error.get('type'), 64)),
+        for key, value in (('Code', _clean(error.get('code'), _TOKEN)), ('Type', _clean(error.get('type'), _TOKEN)),
                            ('Message', _message_marker(error.get('message')))):
             if value is not None:
                 detail['error' + key] = value
         meta = error.get('metadata') if type(error.get('metadata')) is dict else {}
-        provider = _clean(meta.get('provider_name'), 64)
+        provider = _clean(meta.get('provider_name'), _NAME)
         if provider is not None:
             detail['providerName'] = provider
     elif type(error) is str:

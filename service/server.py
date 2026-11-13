@@ -8247,9 +8247,10 @@ class _BootstrapBody(BaseModel):
     curl: str | None = Field(None, description="Required for mode=paste-curl — `curl …` from DevTools")
     static_param_override: str | None = Field(None, description="Optional override for an unfamiliar OF revision")
     # Multi-account additions: optional hint/nickname and whether to flip the
-    # newly-captured account to active. account_id is a hint only — the real
-    # account is always determined by the captured user_id (OF's identity).
-    account_id: str | None = Field(None, description="Hint: re-capture for this account (uses its stored Incogniton profile / proxy)")
+    # newly-captured account to active. account_id picks the stored profile /
+    # proxy, and the captured login must be that account's owner (else 409, F1b);
+    # the account is always filed by the captured user_id (OF's identity).
+    account_id: str | None = Field(None, description="Re-capture for this account (uses its stored Incogniton profile / proxy; the captured login must match it)")
     nickname: str | None = Field(None, description="Friendly label persisted to the account meta")
     make_active: bool = Field(True, description="Flip the relay's active account to the newly-captured one")
     # playwright-proxy mode: which proxy (from the registry) to route the

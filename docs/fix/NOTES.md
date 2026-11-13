@@ -176,3 +176,4 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - MERGED FLG2-05 #96 → 75546f24 (fast GREEN 135s, re-run after Flash minors 140s; Flash MERGE + 2 minors fixed, mutation-checked; m). Merge #13. Fresh worktrees need creator-sign-in/node_modules symlink or test_signin_bind_loopback skips → INFRA (env).
 - G04 rebased 05062f35/a9ae5396 on 75546f24; gate running (PG 55651).
 - Promoted-list append conflicts on every rebase (union each time) → F0e candidate: keep list sorted or one file per PR.
+- MERGED G04 #97 → 1d2c5f36 (fast premerge OK 427s; live leg DOWN = dashboard :3001 stopped by another lane, not mine; `check.sh live` re-run GREEN after it returned; Flash MERGE + 1 minor fixed; m). Merge #14. Pushed as fix/G04-history-text-r2 (old branch non-ff, no force). Known-red pin `test_newer_valid_inbound_survives_one_bad_older_row[old-unsupported-formatting]` → unpin with F4 `_skip_reason` follow-up. Stack 7e5ac8e4: 2 merges since.

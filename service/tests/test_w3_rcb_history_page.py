@@ -70,7 +70,8 @@ def test_history_text_accepts_benign_paragraph_variants_inferred(text):
 
 # G04 guard: the relaxed paragraph wrapper still refuses non-paragraph or unsupported markup.
 @pytest.mark.parametrize("text", ["<pre>hi</pre>", "<p>hi</p>x", '<p><img src="x"></p>',
-                                  "<p>hi</p><script>x</script>", " hi <p>x</p>"])
+                                  "<p>hi</p><script>x</script>", " hi <p>x</p>",
+                                  "<p>a</p>junk<p>b</p>", " <p>hi</p><img src=x>", " <p class=x>hi"])
 def test_history_text_still_refuses_unsupported_wrappers(text):
     with pytest.raises(NativeProtocolError):
         history_text(text)

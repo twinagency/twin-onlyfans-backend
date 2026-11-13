@@ -2,7 +2,7 @@
 
 Adapted from sweep 22fbbe79 to the head API (no prepare_commercial_offer/catalogue_select at head): every offer
 and send path goes through `media_delivery.catalog_terms`, so the item must be refused there, whatever removed_at
-says. OQ-3 (owner 2026-11-13): DRM media is sellable on both transports (sent by vault media id, no file URL).
+says. OQ-3 (owner 2026-11-13 13:3xZ): FansAPI DRM is refused until FansAPI is used; native DRM stays sellable.
 Declared bypass: the readiness flag is seeded straight into vault_items.raw_json (SQL), as an import would.
 """
 import pytest
@@ -51,17 +51,18 @@ def _seed(database, raw):
 
 
 @pytest.mark.parametrize('raw', DRM, ids=['no_full_url', 'no_files', 'drm_marker'])
-def test_w2s05_ready_drm_video_sells_on_native_and_fansapi(database, raw):
-    """OQ-3: a catalogue row over a ready DRM video sells on a native account and on a FansAPI account."""
+def test_w2s05_fansapi_drm_video_is_never_sold_native_drm_still_sells(database, raw):
+    """OQ-3: a catalogue row over a ready DRM video sells on a native account; a FansAPI account refuses it."""
     from test_real_transport_pg import real_policy
     store, authority, engine, model, red, blue = engine_setup(database)
     _seed(database, raw)
     with Session(database[1]) as s:
-        assert catalog_terms(s, ACCOUNT, blue, lock=False)['media_ids'] == [21, 22]   # native
+        assert catalog_terms(s, ACCOUNT, blue, lock=False)['media_ids'] == [21, 22]   # native: DRM offerable
     real_policy(database, authority)
     for lock in (False, True):
         with Session(database[1]) as s, s.begin():
-            assert catalog_terms(s, ACCOUNT, blue, lock=lock)['media_ids'] == [21, 22]   # FansAPI
+            with pytest.raises(Refused, match='catalogue media unavailable'):
+                catalog_terms(s, ACCOUNT, blue, lock=lock)   # FansAPI: DRM refused
     store.close()
 
 

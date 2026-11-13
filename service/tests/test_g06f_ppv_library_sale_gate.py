@@ -31,7 +31,7 @@ META = {1: {"id": 1, "type": "photo", "isReady": True},
         7: {"id": 7, "type": "photo", "isReady": True},              # removed_at set below
         8: {"id": 8, "type": "audio", "isReady": True}}              # unsupported kind
 REMOVED = {7}
-SOLD = {"native": {1, 5, 6}, "fansapi": {1, 5}, "fastt_sqlite": {1, 5, 6}}  # FansAPI requires isReady true
+SOLD = {"native": {1, 5, 6}, "fansapi": {1}, "fastt_sqlite": {1, 5, 6}}  # FansAPI: isReady true, no DRM (OQ-3)
 
 
 def _entry(media, previews, **kw):
@@ -132,7 +132,8 @@ def _fire(lane, entry):
     return asyncio.run(ppv_send.run(ACC, {"ppv_id": entry["id"]}, run_id=1))
 
 
-SELLABLE = [1, 5]   # sellable on every lane
+def _sellable(lane):
+    return sorted(lane.want & {1, 5})   # 5 (DRM) sells on native lanes only (OQ-3)
 
 
 def test_any_refused_media_refuses_the_whole_send(lane):
@@ -159,13 +160,13 @@ def test_partly_refused_sets_never_sell_reduced(lane, media, previews):
 
 
 def test_fully_sellable_set_sends_unchanged_in_cells_broadcast_and_feed(lane):
-    asyncio.run(lane.library(_entry(SELLABLE, [5]), reach_all=True))
+    asyncio.run(lane.library(_entry(_sellable(lane), [5]), reach_all=True))
     res = asyncio.run(ppv_send.run(ACC, {"ppv_id": _entry([], [])["id"]}, run_id=1))
     assert res["status"] == "ok" and lane.sent
     assert any(p.get("user_lists") is not None for p in lane.sent)   # the house broadcast fired
     for p in lane.sent:
-        assert p["media_files"] == SELLABLE and set(p["previews"]) <= {5}
-    assert len(lane.posts) == 1 and lane.posts[0]["media_files"] == SELLABLE
+        assert p["media_files"] == _sellable(lane) and set(p["previews"]) <= {5}
+    assert len(lane.posts) == 1 and lane.posts[0]["media_files"] == _sellable(lane)
 
 
 def test_feed_post_refuses_unsellable_media(lane):
@@ -189,7 +190,7 @@ def test_owner_leg_refuses_unsellable_substitute(lane, monkeypatch):
         return sub
     monkeypatch.setattr(ppv_send, "_split_owners", first_owns)
     monkeypatch.setattr(ppv_send, "_pick_second_ppv", substitute)
-    main = _entry(SELLABLE, [], also_post_to_feed=False)
+    main = _entry(_sellable(lane), [], also_post_to_feed=False)
     asyncio.run(lane.library(main, sub, owner_second_leg=True))
     res = asyncio.run(ppv_send.run(ACC, {"ppv_id": main["id"]}, run_id=1))
     assert res["second_leg"]["reason"] == "media_not_sellable"

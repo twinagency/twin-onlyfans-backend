@@ -104,7 +104,7 @@ _VERIFY_MAX = 24          # never verify more than this many in one call
 async def sellable(account_id: str, media, session=None) -> dict[int, str]:
     """{media_id: kind} of these ids the sale would sell. ONE predicate: `media_delivery.refusals`
     (removed, kind, provider metadata such as not ready / hidden / error, FansAPI selection;
-    DRM sells, OQ-3), applied per row so an unusable id costs one pick, never the whole send.
+    FansAPI DRM, OQ-3; native DRM sells), applied per row so an unusable id costs one pick, never the whole send.
     An id with no mirror row is absent. ``session`` overrides the session factory."""
     ids = sorted({int(m) for m in media})
     if not ids:

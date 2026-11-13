@@ -7,6 +7,8 @@ L3 tests were red at e8e90954 and are green once G06 lands; L3-P1 is a green pro
 G24 L3-05..08 tests live off-PR (premerge counts expected failures as skips); bodies kept by the fix orchestrator.
 """
 from datetime import timedelta
+import json
+from types import SimpleNamespace
 import httpx
 import pytest
 from sqlalchemy import select
@@ -21,6 +23,7 @@ from fans_api_adapter.intake import FansWebhookAdapter
 from fans_api_adapter.real_transport import build_client, RealFansConfig
 from fans_api_adapter.vault_sync import sync_vault, create_catalogue_item
 from onlyfans_runtime.store import Refused, utcnow
+from onlyfans_runtime.vault_management import _ready, digest
 
 DRM_VIDEO = dict(type='video', files={'thumb': {'url': 'https://cdn.example/t.jpg'}, 'full': {'url': None}})
 DRM_MARKED = dict(type='video', drm={'manifest': 'synthetic'},
@@ -49,11 +52,11 @@ def listing(items):
                                                        "hasMore": offset + limit < len(items)}})
 
 
-# L3-01/L3-02: not-ready / error / cannot_view items retained with removed_at NULL are accepted
-# by vault_sync's own catalogue creator. Invariant: never offered (OQ-1 all items).
-@pytest.mark.parametrize("flags", [dict(isReady=False), dict(hasError=True), dict(canView=False)],
-                         ids=["not_ready", "error", "cannot_view"])
-def test_w1_l3_01_02_unready_item_cannot_become_catalogue_item(database, flags):
+# L3-01/L3-02: not-ready / error / cannot_view / DRM items retained with removed_at NULL are accepted
+# by vault_sync's own catalogue creator. Invariant: never offered (OQ-1 all items, OQ-3 FansAPI DRM not offered).
+@pytest.mark.parametrize("flags", [dict(isReady=False), dict(hasError=True), dict(canView=False), DRM_VIDEO],
+                         ids=["not_ready", "error", "cannot_view", "drm"])
+def test_w1_l3_01_02_unready_or_drm_item_cannot_become_catalogue_item(database, flags):
     store, wire = setup(database, listing([_item(11), _item(12, **flags)]))
     assert sync_vault(store, TENANT, ACCOUNT, wire)["complete"]
     with pytest.raises(Refused):
@@ -61,12 +64,22 @@ def test_w1_l3_01_02_unready_item_cannot_become_catalogue_item(database, flags):
     store.close()
 
 
-# OQ-3 (owner 2026-11-13): a ready DRM video is sold by vault media id (no file URL), so it curates.
+# OQ-3 (owner 2026-11-13 13:3xZ): a ready DRM video curates on native; FansAPI refuses it until FansAPI is used.
 @pytest.mark.parametrize("flags", [DRM_VIDEO, DRM_MARKED], ids=["no_full_url", "drm_marker"])
-def test_oq3_ready_drm_video_becomes_catalogue_item(database, flags):
+@pytest.mark.parametrize("transport", ["native", "fansapi"])
+def test_oq3_ready_drm_video_becomes_catalogue_item(database, transport, flags):
+    if transport == "native":   # curation predicate over a verified native identity (sync is FansAPI-only here)
+        raw = json.dumps(_item(12, **flags))
+        row = SimpleNamespace(media_id=12, kind="video", removed_at=None, raw_json=raw)
+        job = SimpleNamespace(binding_id="b", owner_id=1, connection_revision=1)
+        conn = SimpleNamespace(binding_id="b", owner_id=1, revision=1, status="verified",
+                               expires_at=utcnow() + timedelta(hours=1))
+        assert _ready(row, SimpleNamespace(raw_hash=digest(raw)), job, conn, "b") == (True, None)
+        return
     store, wire = setup(database, listing([_item(11), _item(12, **flags)]))
     assert sync_vault(store, TENANT, ACCOUNT, wire)["complete"]
-    assert create_catalogue_item(store, TENANT, ACCOUNT, [12], price_cents=500, label="x", description_for_ai="x")
+    with pytest.raises(Refused):
+        create_catalogue_item(store, TENANT, ACCOUNT, [12], price_cents=500, label="x", description_for_ai="x")
     store.close()
 
 

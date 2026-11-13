@@ -1,7 +1,8 @@
 """G06d: automation priced-send picks drop media the sale boundary refuses (media_delivery.refusal).
 
 Synthetic SQLite vault, no provider calls, no sends. Base filtered on removed_at only, so a provider
-not-ready / errored / hidden item was picked. A ready DRM video (no file URL) stays sellable (OQ-3).
+not-ready / errored / hidden item was picked. A ready DRM video (no file URL) sells on native; FansAPI
+refuses it (OQ-3, owner 2026-11-13 13:3xZ: until FansAPI is used).
 """
 import asyncio
 import json
@@ -24,7 +25,7 @@ META = {1: {"id": 1, "type": "photo", "isReady": True},
         6: {"id": 6, "type": "photo"},                               # isReady absent
         7: {"id": 7, "type": "photo", "isReady": True}}              # removed_at set below
 REMOVED = {7}
-SOLD = {"native": {1, 5, 6}, "fansapi": {1, 5}, "fastt_sqlite": {1, 5, 6}}  # FansAPI requires isReady true
+SOLD = {"native": {1, 5, 6}, "fansapi": {1}, "fastt_sqlite": {1, 5, 6}}  # FansAPI: isReady true, no DRM
 
 
 @pytest.fixture(params=["native", "fansapi", "fastt_sqlite"])  # fastt_sqlite: init_db schema, no policy table
@@ -74,7 +75,7 @@ def vault(request, tmp_path, monkeypatch):
 
 def test_pack_pick_drops_unusable_media(vault):
     assert set(asyncio.run(pack_sender._live_of_kind(ACC, list(META), None))) == vault.want
-    assert asyncio.run(pack_sender._live_of_kind(ACC, list(META), "video")) == [5]   # DRM video control
+    assert asyncio.run(pack_sender._live_of_kind(ACC, list(META), "video")) == sorted(vault.want & {5})   # DRM video: native only
 
 
 def test_audit_veto_refuses_unusable_media(vault):
@@ -101,4 +102,4 @@ def test_pack_previews_drop_unusable_media(vault):
 def test_audit_veto_covers_previews(vault):
     """Rule 5 vetoes a refused id attached as a free preview, not only paid ids (base: paid only)."""
     bad = asyncio.run(pack_audit.audit_pack(ACC, "feet", "nude", [1, 5, 2, 7], [2, 7]))
-    assert [b for b in bad if b.startswith("rule5")] == ["rule5 media the sale would not sell: [2, 7]"]
+    assert [b for b in bad if b.startswith("rule5")] == [f"rule5 media the sale would not sell: {sorted({2, 5, 7} - vault.want)}"]

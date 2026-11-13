@@ -273,3 +273,5 @@ Live confirm after F3 (or F4) and after F6.
 - W3CEA-07: pending unlinked transaction freeze vs test_fans_intake_pg design (unlinked money does not freeze) → OWNER Q; worker xfail(strict) for that case.
 - **Merge 38: G05-PR2 #122 1924c0dc** (fast GREEN 620s at CHECK_JOBS=4 after 2× 900s budget kills at jobs=2 under load ~9.5/16 cores, 0 fails). Batch rwl 4 counter: 1/4. Gates now CHECK_JOBS=4.
 - G-DS 107fa5cd: Opus final APPROVE, minors fixed (SQL text redaction, sweep re-raise, test bumps==[]). GDS-4 (minor, auth): crash between projection commit and _disable_sends not re-driven (pre-existing). Note: session_expired is informational in _account (no stop) — confirm intended (owner Q).
+- **Owner 11:4xZ applied (2026-11-13):** fix only blk+maj (incl. sec-money); gate = open blk+maj groups. Queued minor rows (L3-08 W2S-07 W2S-12 W2DB-01/03/04/07 W3DC-06 CVA-10 W4OFR-08/09/12 W5BB-7/8) + GDS-4 + G-DS Flash m2 → POST-FIXMODE. GDS-3 closed by G-DS 206e34a4 (send_stop_failed reprojectable = Flash major).
+- **Merge 39: G08b #123 345e7657** (fast GREEN 617s @deecd710; target-merge 13ebd554 premerge list only, targeted 159 pass). Batch rwl 4: 2/4 (G05-PR2, G08b).

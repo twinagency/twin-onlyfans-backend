@@ -241,10 +241,10 @@ class NotSent(Exception):
     """An admitted send attempt that CERTAINLY did not reach OnlyFans (see ``Ledger.record_not_sent``).
 
     Raised only from the physical-POST step: either before anything touched the wire (a last-instant hold,
-    stop or source check), or after the provider answered the POST with a definite refusal (HTTP 429, or any
-    other 4xx but 408: the provider read the request and created nothing, the same rule as
-    ``twin_bridge.platform``). A timeout, connection loss, 5xx or an unreadable reply is NOT this: those stay
-    ``delivery_unknown``. ``retry`` says whether the same input may be answered again later."""
+    stop or source check), or after the provider answered with a definite refusal (a 4xx but 408: the provider
+    read the request and created nothing, the same rule as ``twin_bridge.platform``). A 429 on the message POST is
+    NOT this (OnlyFans can create the message and still answer 429), nor is a timeout, connection loss, 5xx or an
+    unreadable reply: those stay ``delivery_unknown``. ``retry`` says whether the same input may be answered again later."""
 
     def __init__(self, reason, *, retry=False, retry_after=None):
         super().__init__(reason)
@@ -310,6 +310,7 @@ class Gateway:
         self.hold_check = None
         self.contextual = None
         self.not_sent = None   # the NotSent that ended a send (a retryable one lets the caller answer the input again)
+        self.throttled = None  # the 429 a message POST got: pacing evidence for the account cooldown, outcome unknown
         # Discounted resend (service.py arms these for exactly one job): the one unpaid card of this fan the job may
         # remove, and the ids whose removal the provider confirmed. The DELETE happens at the wire, inside the SAME
         # single attempt as the replacement card, so an uncertain outcome is the ledger's ordinary delivery-unknown.
@@ -581,10 +582,10 @@ class Gateway:
                                 "mediaFiles": list(terms["media_ids"]), "price": terms["price_cents"] / 100,
                                 "previews": list(terms["preview_ids"]), "rfTag": [], "rfGuest": [], "rfPartner": [],
                                 "isForward": False}
-                        wire[0] = True   # from the next call on, the POST may have reached OnlyFans
+                        wire[0] = "post"   # from the next call on, the POST may have reached OnlyFans
                         return self.client.post_json(f"{API_BASE}/chats/{self.pilot.fan_id}/messages", json_body=body, proxy_tries=1,
                                                     allow_redirects=False)
-                    wire[0] = True
+                    wire[0] = "post"
                     return self.client.send_text_once_body(self.pilot.fan_id, escape_plain_text(text))
             try:
                 raw = await asyncio.to_thread(physical_post)
@@ -593,6 +594,9 @@ class Gateway:
                 if not wire[0]:
                     raise NotSent(exc.reason if isinstance(exc, Refused) else "send-check-failed", retry=True) from None
                 refused = _refusal(exc)
+                if refused is not None and refused.reason == "provider-rate-limited" and wire[0] == "post":
+                    self.throttled = refused   # D429: pacing only; the message may exist, so it stays unknown
+                    raise
                 if refused is not None:
                     raise refused from None
                 raise

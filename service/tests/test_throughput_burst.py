@@ -88,7 +88,9 @@ async def scenario(sim):
 
 
 async def faults(sim):
-    """A provider 429 on one reply and model timeouts on others, mid-burst: nobody else stalls, nothing is lost."""
+    """A provider 429 on one reply and model timeouts on others, mid-burst: nobody else stalls, nothing is lost.
+
+    The 429'd reply is delivery-unknown (held for an operator, never resent); the 429 still sets the cooldown."""
     fs = sim.accounts[A]
     p = sim.providers[A]
     await asyncio.sleep(3)
@@ -113,7 +115,9 @@ async def faults(sim):
     check(gaps and max(gaps) <= 30, f"after the cooldown the queue kept moving, largest gap {max(gaps):.0f}s (one 429 / 3 model timeouts stalled nobody)")
     check((accepted[0] - refused_at).total_seconds() <= 30 + 25, "the first accepted send came within the Retry-After plus a gap")
     reasons = [e["reason"] for e in sim.kinds("turn-requeued", A)]
-    check("provider-rate-limited" in reasons and "model-timeout" in reasons, "both failures were requeued, not dropped")
+    check("model-timeout" in reasons and "provider-rate-limited" not in reasons, "the model timeout was requeued; the 429 was not")
+    held = p.post_log[0][1]
+    check(sum(f == held for _t, f, _b in p.post_log) == 1, "NP429: the 429'd POST may have landed, so it is never resent")
     check(not sim.kinds("turn-abandoned", A), "nothing abandoned")
 
 

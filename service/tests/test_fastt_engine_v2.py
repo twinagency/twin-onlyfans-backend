@@ -163,7 +163,7 @@ async def s_takeover(sim):
     check(sim.takeover_violations == 0)
 
 
-# ── 4. provider 429 + retry-after, never counted, never duplicated ─────────────────────────────────────────────
+# ── 4. provider 429 + retry-after: pacing evidence only, the 429'd reply is unknown and never resent (NP429) ─────
 async def s_429(sim):
     await asyncio.sleep(3)
     fs = sim.accounts[A]
@@ -171,14 +171,15 @@ async def s_429(sim):
     p.faults.append(("429", 90))
     sim.fan_says(A, fs[0], "hi")
     sim.fan_says(A, fs[1], "hi")
-    await asyncio.sleep(25)
-    check(not p.post_log or True)
-    await asyncio.sleep(400)
-    check(sim.sends[A] == 2 and sim.duplicates == 0, "both answered once after the cooldown")
-    accepted = [t for t, f, b in p.post_log]
-    # the rejected POST was at most the first one; the next POST waits at least the retry-after after it
-    check(len(accepted) == 3, "one rejected POST then two accepted")
-    check((accepted[1] - accepted[0]).total_seconds() >= 90 - 1, "retry-after honoured")
+    await asyncio.sleep(425)
+    posts = [(t, f) for t, f, b in p.post_log]
+    # the first POST got the 429 (the message may exist on OnlyFans): that fan is held, never posted again
+    check(len(posts) == 2 and posts[0][1] != posts[1][1], "one 429'd POST, then the other fan once")
+    check(sim.sends[A] == 1 and sim.duplicates == 0, "the other fan answered once after the cooldown")
+    throttled = sim.kinds("provider-throttled", A)
+    check(throttled and throttled[0]["retry_after"] == 90.0, "the 429 still reaches the account throttle")
+    # legacy delivery mode: the account throttle is the 20 s default gap (concurrent mode uses Retry-After)
+    check((posts[1][0] - posts[0][0]).total_seconds() >= 20 - 1, "the next POST waits out the account throttle")
     check(sim.sql("SELECT used_units FROM of_delivery_policy WHERE account_id=?", (A,))[0][0] >= 0)
 
 

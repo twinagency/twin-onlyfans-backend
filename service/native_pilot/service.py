@@ -13,11 +13,12 @@ made long-lived, with every safety rule kept:
 * durable admission before each single-attempt POST; an unknown outcome stops
   sending for the fan and is NEVER resent - an operator resolves it and resumes
   the conversation, only then may the service re-acquire;
-* a send that CERTAINLY did not reach OnlyFans (a provider HTTP 429 or other 4xx refusal, or a hold/stop seen
+* a send that CERTAINLY did not reach OnlyFans (a provider 4xx refusal but 408 / a POST 429, or a hold/stop seen
   between admission and the wire) is recorded ``not_sent``, gives its allowance unit back and stops nothing; a
-  429 keeps the unsent input pending through a durable account cooldown; a last-instant hold has bounded retries. An input lost
-  to a model timeout/error is requeued once. Never once any send attempt for that input stands (sent,
-  dispatching, unknown), and a timeout, 408, 5xx or unreadable reply stays an unknown outcome as above;
+  last-instant hold has bounded retries. An input lost to a model timeout/error is requeued once. Never once any
+  send attempt for that input stands (sent, dispatching, unknown), and a timeout, 408, 5xx or unreadable reply
+  stays an unknown outcome as above. A 429 on the message POST is pacing evidence only (OnlyFans can create the
+  message and still answer 429): it sets the durable account cooldown AND stays an unknown outcome;
 * no deadline: the lease is renewed every few seconds; a lapsed/lost lease
   stops sending and the process re-acquires only through ``activate_service``;
 * a restart adopts its own pilot once the old lease has lapsed, refuses while
@@ -1445,8 +1446,8 @@ class Service:
             if self.stop.is_set() and not receipts:
                 return error  # clean stop: the unsent claim is dropped on release and answered after restart
             # Answer the input again later only when no send attempt stands for it (the ledger re-checks):
-            # a model timeout/error, or a POST that certainly did not reach OnlyFans (a provider 429, or a
-            # last-instant hold). A definite non-429 refusal and every follow-up job are not retried.
+            # a model timeout/error, or a POST that certainly did not reach OnlyFans (a last-instant hold).
+            # A definite refusal and every follow-up job are not retried.
             if job is None and gateway.not_sent is None and (error.startswith(RELEASE_PREFIXES) or error in RELEASE_BACKOFF_S):
                 # Not the message's fault and nothing stands on the wire for it: give the claim back, keep no draft.
                 released = await asyncio.to_thread(ledger.release_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
@@ -1459,6 +1460,8 @@ class Service:
                     runner.emit({"event": "turn-released", "reason": error, "backoff_s": self.backoff_s,
                                  **({"fan_id": self.args.fan} if self.strict else {})})
                     return error
+            if gateway.throttled is not None:
+                await self.provider_throttled(gateway.throttled.retry_after)   # D429: cooldown; the send stays unknown
             retry = None
             if job is None:
                 if gateway.not_sent is not None:
@@ -1848,8 +1851,9 @@ class Service:
     async def after_failure(self, reason, key, retry=None):
         """A failed turn: stop for the fan if the ledger says so, else abandon only this input.
 
-        Model failures retain their one-retry bound. A definite provider 429 keeps an unsent message pending
-        with a persistent account cooldown. Unknown, dispatching and partly sent inputs are never replayed."""
+        Model failures retain their one-retry bound. A 429 on the armed unsend DELETE (no message POSTed) keeps the
+        unsent message pending with a persistent account cooldown; a 429 on the POST arrives here as delivery-unknown.
+        Unknown, dispatching and partly sent inputs are never replayed."""
         pilot, ledger = self.pilot, self.ledger
         if reason.startswith("account-"):
             self.account_block_reason = reason

@@ -32,12 +32,12 @@ def _page(rows):
     return read
 
 
-def _read_page(rows, tmp_path):
+def _read_page(rows, tmp_path, before_id=None):
     wire = NativeProviderConnector(session())
     with patch.dict(os.environ, {"ONLYFANS_PROCESS_ROLE": "worker",
                                  "ONLYFANS_UNREAD_JOURNAL_DIR": str(tmp_path)}), \
             patch.object(wire, "_signed_request", side_effect=_page(rows)):
-        return wire.messages(fan_id=FAN, before_id=None, limit=10)
+        return wire.messages(fan_id=FAN, before_id=before_id, limit=10)
 
 
 def test_control_valid_page_reads(tmp_path):
@@ -97,9 +97,53 @@ def test_newest_fan_markup_only_row_refuses_the_page(tmp_path):
         _read_page([newest, older], tmp_path)
 
 
-def test_creator_markup_only_row_is_skipped_even_when_newest(tmp_path):
+# Batch5 DA D2 (major): a creator's newest markup-only row skipped would make the older fan message
+# (already answered by a human) the latest event and re-arm a reply: refuse (fail closed, as before #129).
+def test_newest_creator_markup_only_row_refuses_the_page(tmp_path):
     newest = native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')
     older = native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")
-    page = _read_page([newest, older], tmp_path)
-    assert [event.message_id for event in page.events] == [10] and page.skipped_inbound == ()
+    with pytest.raises(NativeProtocolError):
+        _read_page([newest, older], tmp_path)
+
+
+def test_creator_markup_only_row_below_a_newer_kept_row_is_skipped(tmp_path):
+    newer = native_message(30, owner=OWNER, text="<p>Synthetic newer inbound</p>")
+    creator = native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')
+    older = native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")
+    page = _read_page([newer, creator, older], tmp_path)
+    assert [event.message_id for event in page.events] == [30, 10] and page.skipped_inbound == ()
     assert page.next_before == 10
+
+
+# Opus DA W3RCB-01b I2 (minor): on an archive page (before_id) the newest event came from a newer
+# page, so a creator markup-only row at the page top is skipped rather than refusing the backfill.
+def test_archive_page_top_creator_markup_only_row_is_skipped(tmp_path):
+    creator = native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')
+    older = native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")
+    page = _read_page([creator, older], tmp_path, before_id=50)
+    assert [event.message_id for event in page.events] == [10] and page.skipped_inbound == ()
+
+
+def test_archive_page_top_fan_markup_only_row_is_skipped(tmp_path):
+    # Flash W3RCB-01b (major): archive/offer-import recovery re-queues a refused cursor forever.
+    fan = native_message(20, owner=OWNER, text='<p><img src="x"></p>')
+    older = native_message(10, owner=OWNER, outgoing=True, text="<p>Synthetic older reply</p>")
+    page = _read_page([fan, older], tmp_path, before_id=50)
+    assert [event.message_id for event in page.events] == [10] and page.skipped_inbound == (20,)
+
+
+def test_head_fan_markup_row_below_only_creator_rows_refuses(tmp_path):
+    # Flash minor: pins the fan rule (newer FAN text), not just any newer kept row.
+    rows = [native_message(30, owner=OWNER, outgoing=True, text="<p>Synthetic reply</p>"),
+            native_message(20, owner=OWNER, text='<p><img src="x"></p>'),
+            native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")]
+    with pytest.raises(NativeProtocolError):
+        _read_page(rows, tmp_path)
+
+
+def test_skipped_bottom_row_still_advances_the_cursor(tmp_path):
+    # Flash minor: next_before must come from the skipped row when it is the oldest.
+    rows = [native_message(30, owner=OWNER, text="<p>Synthetic newer inbound</p>"),
+            native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')]
+    page = _read_page(rows, tmp_path)
+    assert [event.message_id for event in page.events] == [30] and page.next_before == 20

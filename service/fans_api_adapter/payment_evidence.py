@@ -328,12 +328,3 @@ def flag_unlinked_reversal(store, account, chargeback_id, now):
             cb.reason, cb.updated_at = 'unlinked_reversal', now
             attention(s, account, cb.fan_id)
     return 'pending'
-
-
-def fan_is_held(s, account, fan_id=None):
-    """True while this fan (or, with no fan, any fan) has evidence held for human review."""
-    query = select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
-        OfFansEvidence.status == 'held', OfFansEvidence.kind != 'human_sent')
-    if fan_id is not None:
-        query = query.where(OfFansEvidence.fan_id == fan_id)
-    return s.scalar(query.limit(1)) is not None

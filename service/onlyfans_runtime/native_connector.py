@@ -63,8 +63,8 @@ def _skip_reason(row, *, owner_id, fan_id):
     tip and these rows carry no conversation text. A row with no media, no
     price and no visible text whose sole defect is unsupported history markup
     (e.g. a bare inline image tag) is skipped too, so one odd older body never
-    blocks newer inbound; messages() still refuses when such a fan row has no
-    newer fan text on the page. A row whose markup wraps visible text still
+    blocks newer inbound; messages() still refuses when such a row has no newer
+    kept row on the page (for a fan row: no newer fan text). A row whose markup wraps visible text still
     refuses: the protocol never silently loses fan words. A skipped creator row
     is not stored (accepted: no text, no media, no price). Every other row the
     strict parser rejects still refuses the whole page.
@@ -227,10 +227,17 @@ class NativeLoopbackConnector:
                 # unsupported or malformed row still refuses the page.
                 reason = _skip_reason(row, owner_id=self._handle.owner_id, fan_id=fan_id)
                 fan_row = _id(row["fromUser"]["id"]) == fan_id if reason is not None else False
-                # A fan's markup-only row with no newer fan text kept on this page
-                # would leave the engine replying to an older message: refuse.
-                if reason is None or reason == "formatting" and fan_row and not any(
-                        event.direction == "in" for event in events):
+                # A markup-only row is skipped only below a newer kept row: a fan's needs
+                # newer fan text (else the engine replies to an older message), a creator's
+                # needs any newer kept row (else an older fan message a human already
+                # answered becomes the latest event and re-arms a reply). Else refuse.
+                # An archive page (before_id) is below the head page that arms replies
+                # (recent_inbox reads before_id=None), so its markup rows always skip:
+                # refusing would re-queue the same cursor and stall recovery forever.
+                if reason == "formatting":
+                    newer = before_id is not None or (
+                        any(event.direction == "in" for event in events) if fan_row else bool(events))
+                if reason is None or reason == "formatting" and not newer:
                     raise
                 skipped[reason] = skipped.get(reason, 0) + 1
                 indexes.append(index)

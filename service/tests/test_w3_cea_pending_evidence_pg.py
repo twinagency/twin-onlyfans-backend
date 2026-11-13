@@ -148,3 +148,35 @@ def test_linked_unlock_holds_past_the_window_until_settled(database, gate):
             gate(s, terms)
     finally:
         store.close()
+
+
+INTENT = '00000000-0000-4000-8000-00000000c0a8'
+
+
+@GATES
+def test_history_first_linked_unlock_holds_until_settled(database, gate):
+    # r2 DA F1: history import and the webhook share dedupe key unlock:{message_id}; history first keeps
+    # source='history' while match() still links it to our send. Ownership is unknown until settled: hold.
+    store, terms = world(database)
+    try:
+        evidence(database, 'unlock', 'pending', source='history', reason='awaiting_commerce', intent_id=INTENT, age=STALE)
+        with Session(database[1]) as s:
+            with pytest.raises(Refused):
+                gate(s, terms)
+    finally:
+        store.close()
+
+
+@GATES
+@pytest.mark.parametrize('status,reason', [('paired', 'awaiting_commerce'), ('pending', 'send_unresolved'),
+                                           ('pending', 'creator_scope_unverified')])
+def test_linked_unlock_settlement_never_admits_does_not_hold_forever(database, gate, status, reason):
+    # r2 Flash M2: settle_unlock/linked_unlocks admit only pending + awaiting_commerce. A stale intent-linked row
+    # outside that (legacy 'paired', re-linked reason) has no release path, so it must not hold the fan forever.
+    store, terms = world(database)
+    try:
+        evidence(database, 'unlock', status, reason=reason, intent_id=INTENT, age=STALE)
+        with Session(database[1]) as s:
+            gate(s, terms)
+    finally:
+        store.close()

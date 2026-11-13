@@ -66,14 +66,18 @@ def _provider_evidence_held(s, account_id, fan_id):
     """Fans API payment evidence a person must review (amount mismatch, ambiguity, no grant) holds only that fan.
 
     An unresolved unlock also holds it while ownership is unknown (W3CEA-07): one linked to our send until
-    commerce settles it, or a fresh webhook one inside its link window. An unlinked unlock past the window and a
-    history-import unlock (a past purchase) do not, or every past buyer would stay unsellable; nothing ages them
-    out. An unlinked transaction carries no message, so by design it does not freeze the fan; only a held one does."""
+    commerce settles it (exactly what payment_evidence.linked_unlocks/settle_unlock admit, any source: a
+    history-first row keeps source='history' after linking), or a fresh unlinked webhook one inside its link
+    window. Anything else (stale unlinked, unlinked history import, or an intent-linked row settlement never
+    admits) has no release path, so it does not hold, or every past buyer would stay unsellable. An unlinked
+    transaction carries no message, so by design it does not freeze the fan; only a held one does."""
     from db.onlyfans_fans_intake_models import OfFansEvidence as E
     from conversation_engine.operator_v2 import STALE_PENDING
     from .store import utcnow
-    unresolved_unlock = (E.kind == "unlock") & E.status.in_(("pending", "paired")) & (E.source != "history") & (
-        E.intent_id.is_not(None) | (E.created_at >= utcnow() - STALE_PENDING))
+    settling = E.intent_id.is_not(None) & (E.status == "pending") & (E.reason == "awaiting_commerce")
+    fresh_unlinked = E.intent_id.is_(None) & E.status.in_(("pending", "paired")) & (E.source != "history") & (
+        E.created_at >= utcnow() - STALE_PENDING)
+    unresolved_unlock = (E.kind == "unlock") & (settling | fresh_unlinked)
     return s.scalar(select(E.evidence_id).where(E.account_id == account_id, E.fan_id == fan_id,
         E.kind != "human_sent", (E.status == "held") | unresolved_unlock).limit(1)) is not None
 

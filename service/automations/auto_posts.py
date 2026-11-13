@@ -223,15 +223,17 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     media_files.append(pid)
             previews = [p for p in preview_files if p in media_files]
 
-        # Folder-pulled ids too. Price kept (as G06f): never re-priced; nothing
-        # locked left (refused, or only free teasers) = nothing to sell, no post.
+        # The final picks too (folder pulls are not pre-filtered). A refused pick is
+        # never dropped from a priced post (that sells fewer items at the same price,
+        # as G06f): the post is skipped. Nothing locked (only free teasers) = no sale.
         ok = await content_resolver.sellable(account_id, media_files)
-        media_files = [m for m in media_files if m in ok]
-        previews = [p for p in previews if p in ok]
-        if not set(media_files) - set(previews):
-            log.warning("auto_posts account=%s refused: no sellable media on a priced post", account_id)
+        refused = [m for m in media_files if m not in ok]
+        if refused or not set(media_files) - set(previews):
+            log.warning("auto_posts account=%s refused priced post: %d of %d picks not sellable",
+                        account_id, len(refused), len(media_files))
             remaining = await _drip_rest(account_id, rest, employee_id, cycle)
-            return {"status": "skipped", "reason": "no_sellable_media", "remaining": remaining}
+            return {"status": "skipped", "reason": "media_not_sellable" if refused else "no_sellable_media",
+                    "remaining": remaining}
 
     # Shuffle the attachment order (item 35): the pool is sampled but preview ids
     # are appended last, so without this OF's gallery would post free-then-paid in

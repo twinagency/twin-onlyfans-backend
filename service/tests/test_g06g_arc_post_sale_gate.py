@@ -129,3 +129,10 @@ def test_priced_opener_samples_only_sellable_media(lane):
         asyncio.run(auto_posts.run(ACC, payload, run_id=1))
         assert [p["media_files"] for p in lane.posts] == [[1]]
 
+
+
+def test_priced_post_with_a_refused_folder_pick_skips(lane, monkeypatch):
+    """Folder pulls are not pre-filtered: a refused final pick skips the post, never a reduced set at full price."""
+    monkeypatch.setattr(auto_posts, "pick_media", lambda spec, client: [1, 2] if spec.get("media_files") else [])
+    out = asyncio.run(auto_posts.run(ACC, _opener([1], []), run_id=1))
+    assert (out["status"], out["reason"]) == ("skipped", "media_not_sellable") and lane.posts == []

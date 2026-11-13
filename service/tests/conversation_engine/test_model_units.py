@@ -819,7 +819,7 @@ def test_ordinary_family_and_age_mentions_are_not_platform_banned(fan, reply):
 
 
 def test_step_family_mentions_are_never_exempt_g05():
-    # G05 (fail-closed): school/teen/step-family terms are never exempt; a real-relative mention is held for a human.
+    # G05 (fail-closed): step-family terms are never exempt (platform_banned -> human); real relatives stay exempt.
     assert 'platform_banned' in journey_signals('my stepsister got a new job')
 
 

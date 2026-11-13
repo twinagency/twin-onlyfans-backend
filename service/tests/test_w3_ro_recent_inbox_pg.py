@@ -14,6 +14,9 @@ from test_onlyfans_launch_provider_budget_pg import native  # noqa: F401 (fixtur
 from test_onlyfans_connections_pg import TENANT
 from db.models import Message, OfConversationState
 from db.onlyfans_connection_models import OfProviderConnection
+from db.onlyfans_content_sync_progress_models import OfContentSyncSource
+from db.onlyfans_models import OfRuntime
+from onlyfans_runtime.offer_terms import OfferObservation
 from onlyfans_runtime.store import Event, Refused
 from onlyfans_runtime.worker import ChatPage, MessagePage
 import onlyfans_runtime.recent_inbox as recent_inbox
@@ -66,10 +69,21 @@ def _recovers(store, account, reader, now, fan, mid):
         return s.get(Message, (account, fan, mid)) is not None
 
 
+def _foreign_source_offer(store, account):
+    """content_sync already holds message 300 under another fan: Refused("source fan changed") in the txn."""
+    with Session(store.engine) as s, s.begin():
+        s.merge(OfContentSyncSource(account_id=account, binding_id=s.get(OfRuntime, account).binding_id,
+                                    source_kind="message", source_id=300, fan_id=GOOD + 1, occurrence=0))
+    event = _event(BAD, 300)
+    offer = OfferObservation("message", 300, BAD, "direct", event.created_at, (8, 9), (8,), False, 2000)
+    return MessagePage([event], False, observations=[offer])
+
+
 @pytest.mark.parametrize("bad_page", [
-    lambda: MessagePage([_event(GOOD, 300)], False),           # rows of another fan (_commit check)
-    lambda: MessagePage([_event(BAD, 300, "x" * 20001)], False),  # Event.normalized refusal
-], ids=["other-fan-rows", "oversized-body"])
+    lambda store, account: MessagePage([_event(GOOD, 300)], False),           # rows of another fan (_commit check)
+    lambda store, account: MessagePage([_event(BAD, 300, "x" * 20001)], False),  # Event.normalized refusal
+    _foreign_source_offer,
+], ids=["other-fan-rows", "oversized-body", "source-fan-changed"])
 def test_fan_specific_refusal_does_not_pin_the_inbox(native, monkeypatch, bad_page):
     store, account, reader = native
     now = _fake_clock(monkeypatch)
@@ -78,7 +92,7 @@ def test_fan_specific_refusal_does_not_pin_the_inbox(native, monkeypatch, bad_pa
 
     def messages(fan_id, **kw):
         calls[fan_id] += 1
-        return bad_page() if fan_id == BAD else MessagePage([_event(GOOD, 400)], False)
+        return bad_page(store, account) if fan_id == BAD else MessagePage([_event(GOOD, 400)], False)
 
     monkeypatch.setattr(reader, "messages", messages)
     _run(store, account, reader, now, 120, step=1)  # inbox_worker re-polls the account every second

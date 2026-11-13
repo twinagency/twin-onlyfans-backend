@@ -157,19 +157,22 @@ def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure
         "test_z4.py": "import sys, time\nprint('boom at', time.time())\nsys.exit(1)\n",  # script, volatile digits
         "test_z6.py": "import pytest\n@pytest.fixture\ndef boom(): raise RuntimeError('setup')\n"  # "1 deselected, 1 error"
                       "def test_kr(): assert False\ndef test_err(boom): pass\n",
-        "test_z7.py": "def test_kr(): assert False\n"}, known="".join(f"service/tests/{k}\n" for k in (  # all deselected: rc 5
-        "test_z3.py::test_kr", "test_z4.py boom at #.#", "test_z6.py::test_kr", "test_z7.py::test_kr")))
+        "test_z7.py": "def test_kr(): assert False\n",
+        "test_z8.py": "import warnings\nwarnings.warn('dep')\ndef test_kr(): assert False\n"},  # "1 deselected, 1 warning"
+        known="".join(f"service/tests/{k}\n" for k in (  # all deselected: rc 5
+        "test_z3.py::test_kr", "test_z4.py boom at #.#", "test_z6.py::test_kr", "test_z7.py::test_kr", "test_z8.py::test_kr")))
     r = run(CHECK_JOBS="3")
-    assert r.returncode == 1 and _rows(r) == ["== (b) changed tests (6)", "PASS service/tests/test_z1.py",
+    assert r.returncode == 1 and _rows(r) == ["== (b) changed tests (7)", "PASS service/tests/test_z1.py",
         "FAIL service/tests/test_z2.py", "KNOWN-RED service/tests/test_z3.py", "PASS service/tests/test_z3.py",
         "KNOWN-RED service/tests/test_z4.py", "KNOWN-RED service/tests/test_z6.py", "FAIL service/tests/test_z6.py",
-        "KNOWN-RED service/tests/test_z7.py", "KNOWN-RED service/tests/test_z7.py", "== (c) promoted tests (0)",
+        "KNOWN-RED service/tests/test_z7.py", "KNOWN-RED service/tests/test_z7.py",
+        "KNOWN-RED service/tests/test_z8.py", "KNOWN-RED service/tests/test_z8.py", "== (c) promoted tests (0)",
         "== (d) touched-area tests (1, CHECK_JOBS=3)", "PASS service/tests/test_uses_m.py"], r.stdout
     assert "FAIL service/tests/test_z6.py: 1 deselected, 1 error" in r.stdout
     (t / "test_z2.py").unlink(), (t / "test_z6.py").unlink()
     r = run(PREMERGE_DEFER_AFTER_S="0")
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py" in r.stdout, r.stdout
-    assert "premerge: OK (0 skipped, 3 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
+    assert "premerge: OK (0 skipped, 4 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
     r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S="3", ZZ_SLEEP="60")  # (d) still running at the stop time: cut, deferred
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py (cut at the fast budget)" in r.stdout, r.stdout
     for stop, how in [(s, h) for s in ("60", "600") for h in ("ZZ_KILL", "ZZ_124")]:  # killed / exit 124 before the cap

@@ -93,7 +93,7 @@ class FansEventIntake:
         digest = sha256(raw_body).hexdigest()
         now = utcnow()
         with Session(self.engine) as s, s.begin():
-            connection = self._resolve(s, body, event, now)
+            connection = self._resolve(s, body, event, now, expected_account=expected_account)
             if connection is None:
                 raise Refused('provider account is not bound')
             # An authenticated provider event is not sufficient authority to
@@ -207,11 +207,23 @@ class FansEventIntake:
                     before_json=json.dumps(evidence,sort_keys=True), result_json=json.dumps(result,sort_keys=True),
                     created_at=utcnow()))
 
-    def _resolve(self, s, body, event, now):
-        """Find the connection row for this delivery; a reconnect (new acct_) re-binds by creator id."""
+    def _resolve(self, s, body, event, now, *, expected_account=None):
+        """Find the connection row for this delivery; a reconnect (new acct_) re-binds by creator id.
+
+        Epochs are per Fastt account, so rows of different accounts are never ranked against each
+        other: a scoped delivery reads only its own account, and an unscoped one refuses a provider
+        id that spans accounts rather than route it to whichever account has the higher epoch."""
         provider_id = body['account_id']
-        connection = s.scalar(select(OfFansConnection).where(OfFansConnection.provider_account_id == provider_id)
-                              .order_by(OfFansConnection.epoch.desc()).limit(1))
+        matches = s.scalars(select(OfFansConnection).where(OfFansConnection.provider_account_id == provider_id)
+                            .order_by(OfFansConnection.epoch.desc())).all()
+        if expected_account is not None:
+            own = [c for c in matches if c.account_id == expected_account]
+            if matches and not own:
+                raise Refused('webhook account scope mismatch')
+            matches = own
+        if len({c.account_id for c in matches}) > 1:
+            raise Refused('provider account is bound to more than one account')
+        connection = matches[0] if matches else None
         if connection is not None:
             active = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == connection.account_id,
                                                              OfFansConnection.status == 'active'))
@@ -229,8 +241,8 @@ class FansEventIntake:
         prior = s.scalars(select(OfFansConnection).where(OfFansConnection.provider_creator_id == creator)
                           .order_by(OfFansConnection.epoch.desc())).all()
         accounts = {c.account_id for c in prior}
-        if len(accounts) != 1:
-            return None  # unknown or ambiguous creator: never invent a binding
+        if len(accounts) != 1 or (expected_account is not None and accounts != {expected_account}):
+            return None  # unknown, ambiguous or another account's creator: never invent a binding or lock it
         account = accounts.pop()
         latest = prior[0]
         binding = s.get(OfCreatorBinding, latest.binding_id)

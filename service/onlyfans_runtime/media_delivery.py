@@ -27,6 +27,18 @@ def media_ids(raw):
     return ids
 
 
+def _unusable(raw_json):
+    """Provider metadata forbids the sale (vault_management.unusable). Rows with no
+    imported metadata (legacy/synthetic) carry no evidence; unreadable metadata refuses."""
+    if raw_json is None:
+        return None
+    from .vault_management import unusable
+    try:
+        return unusable(json.loads(raw_json))
+    except (ValueError, TypeError):
+        return "unreadable"
+
+
 def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     """Bounded terms; send paths lock, readiness uses its read-only snapshot."""
     _id(item_id)
@@ -66,7 +78,8 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     media_query = select(VaultItem).where(VaultItem.account_id == account_id,
         VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)
     rows = session.scalars(media_query.with_for_update(read=True) if lock else media_query).all()
-    if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"} for r in rows):
+    if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"}
+                                    or _unusable(r.raw_json) for r in rows):
         raise Refused("catalogue media unavailable")
     snapshot = {"item": {key: getattr(item, key) for key in (
         "id", "account_id", "script_id", "enabled", "kind", "label", "description_for_ai",

@@ -58,3 +58,5 @@ service/tests/test_history_capacity_turns.py
 service/tests/test_plan_c_sim_pg.py
 service/tests/test_w3_ro_recent_inbox_pg.py
 service/tests/test_vault_auto_folders_uncertain.py
+service/tests/test_w1_fans_api_adapter_pg.py
+service/tests/test_w2_conversation_engine_sale_drm_pg.py

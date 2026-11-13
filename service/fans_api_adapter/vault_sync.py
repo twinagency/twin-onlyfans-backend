@@ -325,14 +325,20 @@ def sync_vault_lists(client):
 
 def create_catalogue_item(store, tenant, account, media_ids, *, price_cents, label, description_for_ai,
                           preview_ids=(), kind=None):
-    """Operator-approved catalogue entry over synced, still-sellable vault media."""
+    """Operator-approved catalogue entry over synced, still-sellable vault media.
+
+    Same per-asset gate as the canonical creator (`content_ready`): ready, not DRM,
+    observed with this connection and inside the latest complete selection.
+    """
+    from onlyfans_runtime.vault_management import _content_connection, content_ready
     media_ids = [int(v) for v in media_ids]
     if not media_ids or len(set(media_ids)) != len(media_ids) or not 300 <= price_cents <= 20000:
         raise Refused('invalid catalogue item')
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant, account)
+        runtime = store._runtime(s, tenant, account)
+        connection = _content_connection(s, runtime)
         rows = s.scalars(select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id.in_(media_ids))).all()
-        if len(rows) != len(media_ids) or any(r.removed_at is not None for r in rows):
+        if len(rows) != len(media_ids) or not all(content_ready(s, runtime, r, connection)[0] for r in rows):
             raise Refused('media is not a synced sellable vault item')
         item = CatalogItem(account_id=account, kind=kind or ('video' if any(r.kind == 'video' for r in rows) else 'image'),
                            label=label, description_for_ai=description_for_ai, media_ids=json.dumps(media_ids),

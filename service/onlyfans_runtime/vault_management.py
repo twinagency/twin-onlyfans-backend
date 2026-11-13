@@ -282,12 +282,38 @@ def _provenance(row, observation, job, connection, binding, *, current_revision=
         and observation.raw_hash == digest(row.raw_json))
 
 
+def unusable(raw):
+    """Reason the provider's own item metadata forbids offering an asset, else None.
+
+    One per-asset predicate (OQ-1: every item) for curation (`_ready`) and every
+    sale (`catalog_terms`). Absent metadata is not judged here; `_ready` requires it.
+    """
+    if type(raw) is not dict:
+        return None
+    if raw.get("isDeleted") is True or raw.get("isHidden") is True:
+        return "removed"
+    if raw.get("isReady") is False or raw.get("isProcessing") is True or raw.get("canView") is False or raw.get("hasError") is True:
+        return "not_ready"
+    return None
+
+
+def protected(raw):
+    """DRM video: an explicit drm marker, or video files without a progressive full URL."""
+    from .vault_video import protected_source
+    files = raw.get("files")
+    full = files.get("full") if type(files) is dict else None
+    url = full.get("url") if type(full) is dict else None
+    return bool(protected_source(raw) or raw.get("type") == "video" and type(files) is dict
+                and not (type(url) is str and url.startswith("https://")))
+
+
 def _ready(row, observation, job, connection, binding):
     """Whether a verified native vault identity may be curated for an offer.
 
     The native message body contains vault media IDs, never CDN source URLs.
-    Protected videos legitimately have no progressive full-file URL. Playback
-    has its own source/cache checks in vault_video; it grants no offer rights.
+    Native protected videos legitimately have no progressive full-file URL.
+    FansAPI imports never offer DRM videos (OQ-3). Playback has its own
+    source/cache checks in vault_video; it grants no offer rights.
     """
     if row.removed_at is not None:
         return False, "removed"
@@ -306,12 +332,15 @@ def _ready(row, observation, job, connection, binding):
         return False, "readiness_unknown"
     if raw.get("id") != row.media_id or raw.get("type") != row.kind:
         return False, "unverified_owner"
-    if raw.get("isDeleted") is True or raw.get("isHidden") is True:
-        return False, "removed"
+    reason = unusable(raw)
+    if reason == "removed":
+        return False, reason
     if "isReady" not in raw:
         return False, "readiness_unknown"
-    if raw.get("isReady") is not True or raw.get("isProcessing") is True or raw.get("canView") is False or raw.get("hasError") is True:
+    if reason or raw.get("isReady") is not True:
         return False, "not_ready"
+    if fansapi and protected(raw):
+        return False, "drm"
     return True, None
 
 

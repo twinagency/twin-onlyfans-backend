@@ -229,10 +229,13 @@ class NativeLoopbackConnector:
                 fan_row = _id(row["fromUser"]["id"]) == fan_id if reason is not None else False
                 # A markup-only row is skipped only below a newer kept row: a fan's needs
                 # newer fan text (else the engine replies to an older message), a creator's
-                # needs any newer kept row (else an older fan message a human already
-                # answered becomes the latest event and re-arms a reply). Else refuse.
-                if reason is None or reason == "formatting" and not any(
-                        event.direction == "in" or not fan_row for event in events):
+                # needs any newer kept row or an archive page (before_id: the newest event
+                # came from a newer page), else an older fan message a human already
+                # answered becomes the latest event and re-arms a reply. Else refuse.
+                if reason == "formatting":
+                    newer = (any(event.direction == "in" for event in events) if fan_row
+                             else bool(events) or before_id is not None)
+                if reason is None or reason == "formatting" and not newer:
                     raise
                 skipped[reason] = skipped.get(reason, 0) + 1
                 indexes.append(index)

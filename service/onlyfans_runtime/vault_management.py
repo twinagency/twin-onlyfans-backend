@@ -315,7 +315,9 @@ def protected_source(raw):
 
 def fansapi_drm(kind, raw):
     """FansAPI video with a DRM marker or no progressive https full URL (files
-    missing included). FansAPI never offers it (OQ-3); native DRM stays offerable."""
+    missing included). FansAPI never offers it (OQ-3); native DRM stays offerable.
+    Curation keys "FansAPI" on the row's sync job; sale (media_delivery) on the
+    account's current delivery policy."""
     return kind == "video" and (https_url(raw.get("files"), "full") is None or protected_source(raw))
 
 

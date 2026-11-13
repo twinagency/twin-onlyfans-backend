@@ -258,18 +258,18 @@ echo "docker_host=${DOCKER_HOST:-local}" >> "$BUILD_RECORD/manifest.txt"
 
 if [ "${#COMBINE_DIRS[@]}" -gt 0 ]; then
   FAILED=0
-  RESULTS=$BUILD_RECORD/results.tsv; printf 'suite\texit\tsummary\tlog\thost\n' > "$RESULTS"
+  RESULTS=$BUILD_RECORD/results.tsv; printf 'suite\texit\tsummary\tlog\n' > "$RESULTS"
   for d in "${COMBINE_DIRS[@]}"; do
     [ -f "$d/manifest.txt" ] && [ -f "$d/results.tsv" ] || { echo "combine: $d has no manifest/results" >&2; FAILED=1; continue; }
     [ "$(sed -n 's/^image_id=//p' "$d/manifest.txt" | tail -1)" = "$IMAGE_ID" ] || { echo "combine: $d ran on a different image" >&2; FAILED=1; continue; }
     [ "$(sed -n 's/^source_commit=//p;s/^requested_commit=//p' "$d/manifest.txt" | tail -1)" = "$FULL" ] || { echo "combine: $d is for another commit" >&2; FAILED=1; continue; }
     grep -q '^qualification_exit=shard:' "$d/manifest.txt" || { echo "combine: $d is not a finished shard record" >&2; FAILED=1; continue; }
     host=$(sed -n 's/^docker_host=//p' "$d/manifest.txt" | tail -1)
-    tail -n +2 "$d/results.tsv" | awk -F'\t' -v h="$host" -v d="$d" 'BEGIN{OFS="\t"} {print $1,$2,$3,$4,h}' >> "$RESULTS"
+    tail -n +2 "$d/results.tsv" | awk -F'\t' -v h="$host" 'BEGIN{OFS="\t"} {print $1,$2,$3" [ran on "h"]",$4}' >> "$RESULTS"
   done
   for required in "${REQUIRED_SUITES[@]}" legacy-isolated; do
     n=$(awk -F'\t' -v r="$required" 'NR>1 && $1==r && $2=="0"{c++} END{print c+0}' "$RESULTS")
-    [ "$n" = 1 ] || { FAILED=1; printf '%s\t%s\t%s\t%s\t%s\n' "$required" INCOMPLETE "required group missing, failed or run $n times across shards" - - | tee -a "$RESULTS"; }
+    [ "$n" = 1 ] || { FAILED=1; printf '%s\t%s\t%s\t%s\n' "$required" INCOMPLETE "required group missing, failed or run $n times across shards" - | tee -a "$RESULTS"; }
   done
   if awk -F'\t' 'NR>1 && $2!="0"{bad=1} END{exit !bad}' "$RESULTS"; then FAILED=1; fi
   for d in "${COMBINE_DIRS[@]}"; do for f in "$d"/suite-*.log; do

@@ -209,3 +209,16 @@ def test_every_docker_format_template_is_quoted_and_labels_are_quoted_keys():
             assert template[0] in "'\"", line
             if "Labels" in template:
                 assert re.search(r'Labels \\?"[\w.]+\\?"', template), line
+
+
+def test_a_shard_run_can_never_qualify_and_combine_applies_the_unchanged_completeness_rules():
+    """--shard exits before the required-group and browser checks and says so; --combine is the only path that can qualify a sharded
+    release: every required group (plus the isolated legacy process) must have exactly one passing row on ONE image id, no skips."""
+    shard = SOURCE[SOURCE.index('if [ "$SHARD" = 1 ]; then'):]
+    assert shard.index('qualification_exit=shard:') < shard.index('for required in "${REQUIRED_SUITES[@]}"; do')
+    assert 'exit "$FAILED"' in shard[:shard.index('for required in "${REQUIRED_SUITES[@]}"; do')]
+    combine = SOURCE[SOURCE.index('if [ "${#COMBINE_DIRS[@]}" -gt 0 ]; then\n  FAILED=0'):]
+    combine = combine[:combine.index('exit "$FAILED"')]
+    for needle in ('for required in "${REQUIRED_SUITES[@]}" legacy-isolated; do', '"$IMAGE_ID"', '"$FULL"', 'skipped', 'browser_check', '$n" = 1'):
+        assert needle in combine, needle
+

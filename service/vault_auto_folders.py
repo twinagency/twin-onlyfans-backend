@@ -83,12 +83,37 @@ def categories(item):
     return sorted(result) or ["uncategorised"]
 
 
+def _auto_memberships(session, account_id, media_id, keys=None):
+    """(key, folder id) of the item's live auto-category memberships, optionally limited to keys.
+    Miscellaneous/Unsorted and archived folders are never included."""
+    owner = VaultFolder.created_by
+    scope = (owner.in_([OWNER_PREFIX + k for k in keys]) if keys is not None
+             else owner.startswith(OWNER_PREFIX, autoescape=True))
+    rows = session.execute(select(VaultFolder.id, owner).join(VaultFolderItem,
+        (VaultFolderItem.account_id == VaultFolder.account_id) & (VaultFolderItem.folder_id == VaultFolder.id))
+        .where(VaultFolder.account_id == account_id, VaultFolderItem.media_id == media_id,
+               VaultFolder.deleted_at.is_(None), scope,
+               owner.notin_([OWNER_PREFIX + "miscellaneous", OWNER_PREFIX + "pending"]))).all()
+    return [(c[len(OWNER_PREFIX):], fid) for fid, c in rows]
+
+
+def _withdraw_filings(session, account_id, media_id, filed):
+    """Remove live memberships in auto folders the classifier filed; return their keys. Operator additions,
+    Miscellaneous/Unsorted and archived folders are untouched. Idempotent: a second call finds nothing."""
+    rows = _auto_memberships(session, account_id, media_id, sorted(filed)) if filed else []
+    if rows:
+        session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
+            VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_([fid for _, fid in rows])))
+    return {key for key, _ in rows}
+
+
 def assign_sync(session, account_id, media_id, *, commercial=False):
     """Assign once in the caller's transaction. Account lock serializes folders.
 
     Existing operator folders are never adopted by matching their display name.
     Archived auto folders are not recreated. Only the internally owned Unsorted
     membership is removed after classification; operator memberships are retained.
+    A commercially uncertain item also leaves its internal category folders.
     """
     owner = session.scalar(select(Account.id).where(Account.id == account_id).with_for_update())
     if owner is None:
@@ -116,6 +141,10 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
     wanted = ["pending"] if pending else categories(item)
     evidenced = list(wanted)
     filed = None
+    # V1 already classified these categories. A migration must not re-add a
+    # membership an operator removed, or recreate their archived folders.
+    # (Only a genuine V1 item: this module sets both markers itself on every v2 pass.)
+    legacy = not pending and fields.get(MARKER) is True and fields.get(CURRENT_MARKER) is not True
     if commercial:
         from vault_describe_state import stamp_of
         confidence=effective_value(item,"confidence")
@@ -129,9 +158,6 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
             "status":"uncertain" if uncertain else "proposed","reason":reason,
             "content_stamp":stamp_of(item),"categories":["miscellaneous"] if uncertain else wanted,
             "sale_approved":False}
-        if fields.get(CURRENT_MARKER) is True and previous == classification:
-            return {"status": "already_categorised"}   # unchanged evidence: no write, no membership churn
-        fields["_commercial_classification_v1"]=classification
         saved = fields.get(FILED)
         if isinstance(saved, list):
             filed = {k for k in saved if isinstance(k, str)}
@@ -142,15 +168,23 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
         elif isinstance(previous, dict):
             filed = set()           # filed as uncertain only; nothing automatic to preserve
         else:
-            filed = set(evidenced)  # categorised before commercial mode: respect the current memberships
-        if uncertain:wanted=["miscellaneous"]
-    # V1 already classified these categories. A migration must not re-add a
-    # membership an operator removed, or recreate their archived folders.
-    # (Only a genuine V1 item: this module sets both markers itself on every v2 pass.)
-    if not pending and fields.get(MARKER) is True and fields.get(CURRENT_MARKER) is not True:
-        wanted = [key for key in wanted if key not in LEGACY_KEYS]
-        if filed is not None:
+            # categorised before commercial mode (no FILED): its live auto filings count as filed, so evidence
+            # that changed or vanished cannot strand them; evidenced-but-removed stays not re-added.
+            filed = set(evidenced) | {key for key, _ in _auto_memberships(session, account_id, media_id)}
+        if legacy:
             filed |= LEGACY_KEYS
+        withdrawn = set()
+        if uncertain:
+            # Uncertain is Miscellaneous only. Withdrawn filings are not operator removals: un-file them so
+            # confident evidence re-files them. Runs before the fast return so already-uncertain rows heal.
+            wanted = ["miscellaneous"]
+            withdrawn = _withdraw_filings(session, account_id, media_id, filed)
+            filed -= withdrawn
+        if fields.get(CURRENT_MARKER) is True and previous == classification and not withdrawn:
+            return {"status": "already_categorised"}   # unchanged evidence: no write, no membership churn
+        fields["_commercial_classification_v1"]=classification
+    if legacy:
+        wanted = [key for key in wanted if key not in LEGACY_KEYS]
     if filed is not None and not pending and wanted != ["miscellaneous"]:
         wanted = [key for key in wanted if key not in filed]
     for key in wanted:
@@ -183,16 +217,15 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
                 VaultFolder.created_by.in_([OWNER_PREFIX+"pending",OWNER_PREFIX+"miscellaneous"] if commercial and "miscellaneous" not in wanted else [OWNER_PREFIX+"pending"]))
             session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
                 VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_(pending_folders)))
-        if commercial:
-            proposed = fields["_commercial_classification_v1"]["status"] == "proposed"
-            if proposed:
-                # Only the internally owned Miscellaneous filing is withdrawn; operator folders are never touched.
-                misc = select(VaultFolder.id).where(VaultFolder.account_id == account_id,
-                    VaultFolder.created_by == OWNER_PREFIX + "miscellaneous")
-                session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
-                    VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_(misc)))
-            fields[FILED] = sorted(filed | (set(wanted) if proposed else set()))
+        if commercial and not uncertain:
+            # Only the internally owned Miscellaneous filing is withdrawn; operator folders are never touched.
+            misc = select(VaultFolder.id).where(VaultFolder.account_id == account_id,
+                VaultFolder.created_by == OWNER_PREFIX + "miscellaneous")
+            session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
+                VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_(misc)))
         fields.update({MARKER: True, CURRENT_MARKER: True})
+    if commercial:
+        fields[FILED] = sorted(filed if uncertain else filed | set(wanted))
     item.ai_fields_json = json.dumps(fields, ensure_ascii=False)
     return {"status": "awaiting_metadata" if pending else "categorised", "categories": wanted}
 

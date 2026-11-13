@@ -249,3 +249,9 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - Slots: 0 delegated fix workers running (HARN-5/G06b/F2d driven inline) → slot free for supervisor's W7 L2; 1 fix worker (G02-01) once the 2 running gates finish (machine load).
 - F2d: DS r1 (counts as Flash) on d51dc6f7: blocker+2 major+1 minor, all already closed by 51a2ba05 (in-place save, boot OSError, try-read + symlink/dir, entry routing-field check); host/port type check rejected (bad host fails the request, not direct egress; i). Q1 (i): client-build failure takes the existing FileNotFoundError path (executor propagates; transaction_ingest → None), no new tight loop.
 - 14:2xZ (owner GO 14:3xZ) Stack restart under STACK.lock (released): /tmp/stack-live 31d09390 → **345e7657** (#113–#123 live; 11 merges). Barriers: batch1 G06d #121, batch2 G06s #119 cleared; batch3 none (m). No migrations 31d09390..345e7657; DB 0134 (m). pg_dump .local-dev/backups/twin_of_app-pre-345e7657-*.dump 16MB. api+worker+sign-in restarted. check.sh live GREEN 2s (m). OF 429: worker 0 / api 0, Tracebacks 0 (m). Evidence .local-dev/evidence/fix/live-345e7657.
+
+## 14:4xZ stack restart (batch3 barrier cleared) 345e7657 → e2783bc3
+- Barrier: batch rwl 3 #4 `_disable_sends` silent give-up, upgraded to blocker by Flash → G-DS #125 e2783bc3. The 14:2xZ restart predated this upgrade; no regression, since 31d09390 also lacked G-DS and sends stay disabled.
+- Live now: #124 F1b, #125 G-DS. No migration files in 345e7657..e2783bc3.
+- pg_dump 16MB in .local-dev/backups. of-up rc=0. check.sh live GREEN 1s (measured). worker/of-api: 429 = 0, Traceback = 0 (tail 3000 lines).
+- Evidence: .local-dev/evidence/fix/live-e2783bc3.

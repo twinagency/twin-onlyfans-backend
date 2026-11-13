@@ -14,7 +14,8 @@ A verdict is *scoped*, never a bare keyword hit:
 * ``hardship``        spending money on ESSENTIALS is at risk (food, rent, bills, medicine, children).
 * ``complaint``       a material complaint or dispute about something he paid for.
 * ``identity``        the fan asks whether he is talking to a bot / asks for a human (existing detector).
-* ``minor``           minor-implying roleplay (school / teen / step-family terms) or a stated age under 18. Hard stop.
+* ``minor``           minor-implying roleplay (school / teen / step-family terms), a minor self-assertion or a stated
+                      age under 18 (shared with the engine: ``conversation_engine.minor_signal``). Hard stop.
 
 Deliberately NOT matched (these are the legitimate neighbours the tests pin): "stop teasing me", "stop it" in play,
 "I don't want you to stop", the isolated word "rent", routine budget haggling ("out of my budget, can you do 20"),
@@ -26,7 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from conversation_engine.safety_context import UNDER_18 as _UNDER_18
+from conversation_engine.minor_signal import _MINOR, _STEP, is_minor  # noqa: F401  (_MINOR/_STEP: linearity test)
 
 from .identity import denies_automation, discloses_ai, sincere_identity_question, wants_human
 
@@ -146,31 +147,9 @@ _HARDSHIP = (
     re.compile(r"\b(?:my|the)\s+(?:weekly\s+|monthly\s+|whole\s+)?(?:wages|pay(?:check)?|salary|paycheck|savings)\b[^.!?\n]{0,40}\b(?:instead\s+of|rather\s+than)\b", re.I),
 )
 
-# Minor / age (W5NR-5): matched on the full text (before quote stripping); explicit disclosures are never exempt.
-# A stated age needs a first-person subject; any continuation counts ("im 16 tbh", "16 & horny", "16 next month") unless
-# the number carries a quantity unit or a height mark, so "I'm 15 minutes away", "I'm 16 days sober", "I'm 5'10" and
-# "my car is 15 years old" are not ages. Fail-closed: an unlisted unit holds for a human, never sends.
-_QUANTITY_UNIT = (r"(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|wks?|months?|mos?|years?|yrs?|pounds?|lbs?|kgs?|kilos?|"
-                  r"grams?|miles?|mi|km|kms|kilomet(?:er|re)s?|met(?:er|re)s?|feet|foot|ft|inch(?:es)?|cm|mm|percent|dollars?|"
-                  r"bucks|usd|euros?|quid|cents?|times|blocks?|stops?|exits?|drinks?|beers?|shots?|rounds?|episodes?|games?|"
-                  r"points?|levels?|pages?|chapters?|steps?)")
-_MINOR = (
-    re.compile(r"\b(?:under[\s-]?aged?|under\s*(?:18|eighteen)|jailbait|loli|lolita|shota|pedo\w*|school\s?(?:girl|boy)s?|"
-               r"(?:i'?m|i\s+am|im)\s+(?:(?:still|only|just)\s+)?a\s+minor)\b", re.I),
-    re.compile(rf"\b(?:(?:i'?m|i\s+am|im)\s+(?:turning|about\s+to\s+turn)|i\s+just\s+turned|i'?m|i\s+am|im|my\s+age\s+is|age\s*:)"
-               rf"\s+(?:a\s+)?(?:(?:only|just|barely|still|almost)\s+)?{_UNDER_18}"
-               r"(?:\s*(?:-\s*)?(?:(?:years?|yrs?)[\s-]*(?:old|of\s+age)|years?(?!\s*\w)|yrs?|yo|y/o|y\.o|f|m(?!\s+(?:away|out|from|ahead|behind|late))|"
-               r"(?:fe)?male)\b|"
-               rf"(?![\w'\"%$]|[.,]\d|\s*(?:-\s*)?{_QUANTITY_UNIT}\b|\s*m\s+(?:away|out|from|ahead|behind|late)\b))", re.I),
-)
-# Native minor set = sibling/child step terms + teen words (step-PARENT roleplay is adult; the engine's banned set is
-# broader by design). Never exempt, like the engine: "my stepsister got a job" is held for a human (G05).
-_STEP = re.compile(r"\b(?:step[ -]?(?:sis|sister|bro|brother|daughter|son)s?|teen(?:s|age|aged|ager|agers)?)\b", re.I)
-
-
-def _minor(raw):
-    t = (raw or "").replace("\u2019", "'")
-    return _first(_MINOR, t) or _STEP.search(t) is not None
+# Minor / age: ONE shared signal with the engine (conversation_engine.minor_signal, G05-PR2), matched on the full text
+# (before quote stripping); explicit disclosures are never exempt.
+_minor = is_minor
 
 _COMPLAINT = (
     re.compile(r"\b(?:refund|charge\s*back|chargeback|scam(?:med|mer|ming)?|rip(?:ped)?[\s-]?off|money\s+back|report(?:ed|ing)?\s+you|dispute|disputing|fraud)\b", re.I),

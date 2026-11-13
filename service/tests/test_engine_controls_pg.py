@@ -32,13 +32,26 @@ def test_new_engine_does_not_run_legacy_detector_or_policy(database, monkeypatch
     monkeypatch.setattr(operator_cases, 'scan', forbidden)
     monkeypatch.setattr(conversation_policy, 'decide', forbidden)
     monkeypatch.setattr(conversation_policy, 'action_of', forbidden)
-    with Session(database[1]) as s, s.begin():
-        # A legacy sales-ladder stop is not a creator contact restriction.
-        s.add(SkipList(account_id=ACCOUNT, fan_id=FAN, reason='ladder_stop'))
     intent = engine.queue(TENANT, ACCOUNT, decision)
     provider = SyntheticFansProvider(message_id=9501)
     assert authority.dispatch(TENANT, ACCOUNT, intent, FansApiSyntheticTransport(store, TENANT, ACCOUNT, provider)) == 'accepted'
     assert calls == [] and len(provider.calls) == 1
+    store.close()
+
+
+def test_new_engine_honours_ladder_stop_without_legacy_policy(database, monkeypatch):
+    # W3TSA-02: ladder_stop is in runtime_stop.STRONGER, so the engine hold (controls.reason) refuses it too.
+    store, authority, engine, decision = setup(database)
+    from onlyfans_runtime import operator_cases, conversation_policy
+    def forbidden(*args, **kwargs):
+        raise AssertionError('legacy conversation policy was invoked')
+    monkeypatch.setattr(operator_cases, 'scan', forbidden)
+    monkeypatch.setattr(conversation_policy, 'decide', forbidden)
+    monkeypatch.setattr(conversation_policy, 'action_of', forbidden)
+    with Session(database[1]) as s, s.begin():
+        s.add(SkipList(account_id=ACCOUNT, fan_id=FAN, reason='ladder_stop'))
+    with pytest.raises(Refused, match='fan_restricted'):
+        engine.queue(TENANT, ACCOUNT, decision)
     store.close()
 
 

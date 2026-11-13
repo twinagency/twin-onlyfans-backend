@@ -285,26 +285,38 @@ def _provenance(row, observation, job, connection, binding, *, current_revision=
 def unusable(raw):
     """Reason the provider's own item metadata forbids offering an asset, else None.
 
-    One per-asset predicate (OQ-1: every item) for curation (`_ready`) and every
-    sale (`catalog_terms`). Absent metadata is not judged here; `_ready` requires it.
+    The one readiness predicate for FansAPI import (vault_sync.classify), curation
+    (`_ready`) and every sale (`catalog_terms`). A missing isReady key is not judged
+    here (native rows may lack it); `_ready` and classify require isReady true.
     """
     if type(raw) is not dict:
-        return None
+        return "unreadable"
     if raw.get("isDeleted") is True or raw.get("isHidden") is True:
         return "removed"
-    if raw.get("isReady") is False or raw.get("isProcessing") is True or raw.get("canView") is False or raw.get("hasError") is True:
+    if raw.get("isReady") is False or raw.get("isProcessing") is True:
         return "not_ready"
+    if raw.get("canView") is False:
+        return "cannot_view"
+    if raw.get("hasError"):
+        return "error"
     return None
 
 
-def protected(raw):
-    """DRM video: an explicit drm marker, or video files without a progressive full URL."""
-    from .vault_video import protected_source
+def https_url(files, name):
+    node = files.get(name) if type(files) is dict else None
+    url = node.get("url") if type(node) is dict else None
+    return url if type(url) is str and url.startswith("https://") and len(url) <= 8192 else None
+
+
+def protected_source(raw):
     files = raw.get("files")
-    full = files.get("full") if type(files) is dict else None
-    url = full.get("url") if type(full) is dict else None
-    return bool(protected_source(raw) or raw.get("type") == "video" and type(files) is dict
-                and not (type(url) is str and url.startswith("https://")))
+    return bool(raw.get("drm") or isinstance(files, dict) and files.get("drm"))
+
+
+def fansapi_drm(kind, raw):
+    """FansAPI video with a DRM marker or no progressive https full URL (files
+    missing included). FansAPI never offers it (OQ-3); native DRM stays offerable."""
+    return kind == "video" and (https_url(raw.get("files"), "full") is None or protected_source(raw))
 
 
 def _ready(row, observation, job, connection, binding):
@@ -330,6 +342,8 @@ def _ready(row, observation, job, connection, binding):
         raw = json.loads(row.raw_json)
     except (ValueError, TypeError):
         return False, "readiness_unknown"
+    if type(raw) is not dict:
+        return False, "readiness_unknown"
     if raw.get("id") != row.media_id or raw.get("type") != row.kind:
         return False, "unverified_owner"
     reason = unusable(raw)
@@ -339,7 +353,7 @@ def _ready(row, observation, job, connection, binding):
         return False, "readiness_unknown"
     if reason or raw.get("isReady") is not True:
         return False, "not_ready"
-    if fansapi and protected(raw):
+    if fansapi and fansapi_drm(row.kind, raw):
         return False, "drm"
     return True, None
 

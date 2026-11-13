@@ -3,7 +3,7 @@
 Each test pins a written invariant (test id = finding id in docs/review/W1-fans-api-adapter/FINDINGS.md;
 L3-01/02/03 exercise vault_sync's own create_catalogue_item — the catalog_terms side is L4 F01's rules test) (REVIEW.md @234155de) that e8e90954 breaks.
 Real PostgreSQL (ONLYFANS_TEST_PG_URL, throwaway), httpx.MockTransport at the wire only.
-Expected at e8e90954: every test here FAILS (red). Green = the finding is fixed.
+L3 tests were red at e8e90954 and are green once G06 lands; L3-P1 is a green proof.
 G24 L3-05..08 tests live off-PR (premerge counts expected failures as skips); bodies kept by the fix orchestrator.
 """
 from datetime import timedelta
@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import VaultItem
-from test_onlyfans_foundation_pg import database
+from test_onlyfans_foundation_pg import database  # noqa: F401
 from test_onlyfans_text_delivery_pg import configured, TENANT, ACCOUNT
 from test_real_transport_pg import real_policy, _item
 from test_engine_real_worker_pg import answer
@@ -26,21 +26,20 @@ DRM_VIDEO = dict(type='video', files={'thumb': {'url': 'https://cdn.example/t.jp
 
 
 def setup(database, script):
-    """script(offset, limit) -> httpx.Response. Records every vault GET offset."""
+    """script(offset, limit) -> httpx.Response."""
     store, authority = configured(database, mode="automated")
     real_policy(database, authority)
     FansWebhookAdapter(store).bind_simulated(TENANT, ACCOUNT, ACCT, CREATOR)
-    calls = []
+    return store, client(script)
 
+
+def client(script):
     def handler(request):
         if request.url.path == "/api/accounts":
             return answer(200, [{"id": ACCT, "onlyfans_id": CREATOR, "is_authenticated": True}])
-        q = request.url.params
-        calls.append(int(q["offset"]))
-        return script(int(q["offset"]), int(q["limit"]))
-    client = build_client(RealFansConfig("synthetic", ACCT, "https://api.fansapi.com", 5),
-                          creator_id=CREATOR, epoch=1, transport=httpx.MockTransport(handler))
-    return store, client, calls
+        return script(int(request.url.params["offset"]), int(request.url.params["limit"]))
+    return build_client(RealFansConfig("synthetic", ACCT, "https://api.fansapi.com", 5),
+                        creator_id=CREATOR, epoch=1, transport=httpx.MockTransport(handler))
 
 
 def listing(items):
@@ -53,8 +52,8 @@ def listing(items):
 @pytest.mark.parametrize("flags", [dict(isReady=False), dict(hasError=True), dict(canView=False), DRM_VIDEO],
                          ids=["not_ready", "error", "cannot_view", "drm"])
 def test_w1_l3_01_02_unready_or_drm_item_cannot_become_catalogue_item(database, flags):
-    store, client, _ = setup(database, listing([_item(11), _item(12, **flags)]))
-    assert sync_vault(store, TENANT, ACCOUNT, client)["complete"]
+    store, wire = setup(database, listing([_item(11), _item(12, **flags)]))
+    assert sync_vault(store, TENANT, ACCOUNT, wire)["complete"]
     with pytest.raises(Refused):
         create_catalogue_item(store, TENANT, ACCOUNT, [12], price_cents=500, label="x", description_for_ai="x")
     store.close()
@@ -62,39 +61,26 @@ def test_w1_l3_01_02_unready_or_drm_item_cannot_become_catalogue_item(database, 
 
 # L3-01b: an item previously retired (removed_at set) is resurrected when re-listed while still unusable.
 def test_w1_l3_01b_retired_unready_item_stays_unsellable_after_resync(database):
-    store, client, _ = setup(database, listing([_item(11), _item(12, isReady=False)]))
-    assert sync_vault(store, TENANT, ACCOUNT, client)["complete"]
+    store, wire = setup(database, listing([_item(11), _item(12, isReady=False)]))
+    assert sync_vault(store, TENANT, ACCOUNT, wire)["complete"]
     with Session(store.engine) as s, s.begin():
         s.get(VaultItem, (ACCOUNT, 12)).removed_at = utcnow() - timedelta(days=1)   # retired by the 659ea29 importer
-    store2, client2, _ = setup_again(database, store, listing([_item(11), _item(12, isReady=False)]))
-    assert sync_vault(store2, TENANT, ACCOUNT, client2, command_key="b" * 64)["complete"]
-    with pytest.raises(Refused):   # invariant: still unsellable (any fix shape: removed_at kept or readiness gate)
+    assert sync_vault(store, TENANT, ACCOUNT, client(listing([_item(11), _item(12, isReady=False)])),
+                      command_key="b" * 64)["complete"]
+    with Session(store.engine) as s:   # the re-listing lifts removed_at: only the readiness gate refuses
+        assert s.get(VaultItem, (ACCOUNT, 12)).removed_at is None
+    with pytest.raises(Refused):
         create_catalogue_item(store, TENANT, ACCOUNT, [12], price_cents=500, label="x", description_for_ai="x")
     store.close()
-
-
-def setup_again(database, store, script):
-    calls = []
-
-    def handler(request):
-        if request.url.path == "/api/accounts":
-            return answer(200, [{"id": ACCT, "onlyfans_id": CREATOR, "is_authenticated": True}])
-        q = request.url.params
-        calls.append(int(q["offset"]))
-        return script(int(q["offset"]), int(q["limit"]))
-    client = build_client(RealFansConfig("synthetic", ACCT, "https://api.fansapi.com", 5),
-                          creator_id=CREATOR, epoch=1, transport=httpx.MockTransport(handler))
-    return store, client, calls
 
 
 # L3-03: vanished item (absent from a complete pass, not isDeleted) stays sellable.
 def test_w1_l3_03_vanished_item_cannot_become_catalogue_item(database):
     items = [_item(11), _item(12)]
-    store, client, _ = setup(database, lambda o, l: listing(items)(o, l))
-    assert sync_vault(store, TENANT, ACCOUNT, client)["complete"]
+    store, wire = setup(database, lambda o, l: listing(items)(o, l))
+    assert sync_vault(store, TENANT, ACCOUNT, wire)["complete"]
     del items[1]
-    _, client2, _ = setup_again(database, store, lambda o, l: listing(items)(o, l))
-    assert sync_vault(store, TENANT, ACCOUNT, client2, command_key="c" * 64)["complete"]
+    assert sync_vault(store, TENANT, ACCOUNT, client(lambda o, l: listing(items)(o, l)), command_key="c" * 64)["complete"]
     with pytest.raises(Refused):
         create_catalogue_item(store, TENANT, ACCOUNT, [12], price_cents=500, label="x", description_for_ai="x")
     store.close()

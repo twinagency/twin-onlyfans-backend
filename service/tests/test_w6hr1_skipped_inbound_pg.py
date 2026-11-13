@@ -141,8 +141,8 @@ def test_skipped_row_bumps_once_and_only_when_newest(database, wire, site, rows,
     store.close()
 
 
-# Second poll: a counted tip head is present (0 reads); a creator-authored skipped head is still re-read (W6HR-2b).
-@pytest.mark.parametrize("rows,bumped,reads", [([tip(30), fan(20)], 1, 0), (CONTROL, 0, 1)], ids=["above", "at_or_below"])
+# Second poll: a counted tip head is present; a covered creator-authored skipped head is settled (W6HR-2b, G03 D2).
+@pytest.mark.parametrize("rows,bumped,reads", [([tip(30), fan(20)], 1, 0), (CONTROL, 0, 0)], ids=["above", "at_or_below"])
 def test_recent_inbox_counts_a_tip_head_once(native, wire, monkeypatch, rows, bumped, reads):
     store, account, reader = native
     connector, state = wire

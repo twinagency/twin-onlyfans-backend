@@ -46,6 +46,12 @@ def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def valid_skipped(skipped):
+    """Shape of a page's skipped fan rows; pure, so callers can check it before any fence."""
+    if type(skipped) is not tuple or any(type(i) is not int for i in skipped):
+        raise Refused("invalid skipped rows")
+
+
 def page_cursor(ids, next_before, before_id=None):
     """Next history cursor: the oldest provider id read on a page.
 
@@ -904,8 +910,7 @@ class Store:
         """A skipped fan row (tip/unsent/deleted) above page ids, floor, high_water, stored rows and skipped_input_id
         (advanced: counted once) bumps input and cancels replies; work on a still-unanswered text re-arms to the newest
         fan text, stored or pending. Runs after the page's rows are recorded; never on archive pages."""
-        if type(skipped) is not tuple or any(type(i) is not int for i in skipped):
-            raise Refused("invalid skipped rows")
+        valid_skipped(skipped)
         if not skipped:
             return
         account, key = runtime.account_id, (runtime.account_id, fan_id)

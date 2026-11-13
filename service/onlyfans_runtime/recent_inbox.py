@@ -5,7 +5,7 @@ page is read again; canonical ingress provides durable deduplication. Archive
 cursors and high-water marks are never advanced by this lane.
 """
 from .provider_read_budget import is_rate_limit
-from collections import deque
+from collections import deque, namedtuple
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -17,14 +17,21 @@ from sqlalchemy.orm import Session
 from db.models import Message, OfConversationState
 from db.onlyfans_models import OfIngress, OfRecovery
 from .provider_read_budget import acquire, current, release, ReadDeferred
-from .store import PAGE_LIMIT, MAX_PENDING, Refused, utcnow
+from .store import PAGE_LIMIT, MAX_PENDING, Refused, utcnow, valid_skipped
 
 INTERVAL_SECONDS = 10
 PAGES_PER_TURN = 4
 TURN_SECONDS = 15
 MAX_QUEUED_FANS = 1000
 FAILED_FAN_RETRY_SECONDS = 60
+# A failing fan backs off 60 s, 120 s, ... capped here; never parked for good.
+MAX_FAN_BACKOFF_SECONDS = 1800
 _STATES_LOCK = threading.Lock()
+Failed = namedtuple("Failed", "head count due")
+
+
+class BadConversationPage(Exception):
+    """One conversation's page failed validation; not an account/connection fence."""
 
 
 @dataclass
@@ -33,9 +40,14 @@ class HeadState:
     discovery_cursor: str | None = None
     pending: deque = field(default_factory=deque)
     heads: dict = field(default_factory=dict)
-    retry_at: dict = field(default_factory=dict)
+    failed: dict = field(default_factory=dict)  # fan -> Failed; count 0 = settled head, not a failure
     last_head_at: object = None
     failures: int = 0
+
+    def backed_off(self, now=None):
+        """Conversations currently waiting out a failed-read backoff."""
+        now = time.monotonic() if now is None else now
+        return sum(rec.count > 0 and rec.due > now for rec in self.failed.values())
 
 
 def _enqueue(state, fans, heads, *, priority, now):
@@ -45,9 +57,7 @@ def _enqueue(state, fans, heads, *, priority, now):
     for fan in fans:
         head = heads.get(fan)
         changed = head is not None and state.heads.get(fan) != head
-        if changed:
-            state.retry_at.pop(fan, None)
-        if state.retry_at.get(fan, 0) > now:
+        if _waiting(state, fan, head, now):
             continue
         if priority and (changed or fan not in waiting):
             promoted.append(fan)
@@ -65,7 +75,28 @@ def _enqueue(state, fans, heads, *, priority, now):
         state.discovery_cursor = None
     keep = set(state.pending) | set(fans)
     state.heads = {fan: head for fan, head in state.heads.items() if fan in keep}
-    state.retry_at = {fan: due for fan, due in state.retry_at.items() if due > now}
+    # Evicted only when unread for a full max backoff past due, so a reset count
+    # restarts after a gap >= MAX_FAN_BACKOFF_SECONDS (rate holds) and records
+    # are bounded by the fans read in the last 2 * MAX_FAN_BACKOFF_SECONDS.
+    state.failed = {fan: rec for fan, rec in state.failed.items() if rec.due + MAX_FAN_BACKOFF_SECONDS > now}
+
+
+def _waiting(state, fan, head, now):
+    """True while a failed fan backs off or its settled head (count 0) is held. A changed non-None head clears it."""
+    rec = state.failed.get(fan)
+    if rec is not None and head is not None and rec.head != head:
+        del state.failed[fan]
+        return False
+    return rec is not None and rec.due > now
+
+
+def _fail(state, fan, now):
+    """Record one failed read; return (count, delay). Only _waiting resets (new non-None head)."""
+    rec = state.failed.get(fan, Failed(None, 0, 0))
+    count = rec.count + 1
+    delay = min(FAILED_FAN_RETRY_SECONDS * 2 ** min(count - 1, 16), MAX_FAN_BACKOFF_SECONDS)
+    state.failed[fan] = Failed(state.heads.get(fan, rec.head), count, now + delay)
+    return count, delay
 
 
 def _read(store, tenant, account, revision, callback, consume):
@@ -99,11 +130,12 @@ def _missing(store, tenant, account, revision, page, claim):
                 and page.heads[fan] > ((state := s.get(OfConversationState, (account, fan))) and state.skipped_input_id or 0)]
 
 
-def _commit(store, tenant, account, revision, fan, page, claim, *, history_only):
+def _validated(fan, page):
+    """Every DB-free check of one fan's page: any refusal here is about this fan."""
     events = [event.normalized() for event in page.events]
     ids = [event.message_id for event in events]
     if (len(events) > PAGE_LIMIT or type(page.has_more) is not bool
-            or page.has_more and not events or ids != sorted(set(ids), reverse=True)
+            or page.has_more and not events and page.next_before is None or ids != sorted(set(ids), reverse=True)
             or any(event.fan_id != fan for event in events)):
         raise Refused("invalid inbox message page")
     from .offer_terms import OfferObservation
@@ -114,6 +146,15 @@ def _commit(store, tenant, account, revision, fan, page, claim, *, history_only)
     offers = [item.normalized() for item in page.observations]
     if any(item.source_kind != "message" or item.fan_id != fan or item.source_id not in ids for item in offers):
         raise Refused("inbox offer outside message page")
+    valid_skipped(page.skipped_inbound)  # Store._skipped_input's only refusal, checked before any fence
+    return events, ids, offers
+
+
+def _commit(store, tenant, account, revision, fan, page, claim, *, history_only):
+    try:
+        events, ids, offers = _validated(fan, page)
+    except Refused as exc:  # fencing (_runtime/_read_connection/current) stays a Refused
+        raise BadConversationPage(str(exc)) from exc
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         store._read_connection(s, runtime, revision)
@@ -180,24 +221,33 @@ def poll_recent(store, tenant, account, reader, *, connection_revision=None, clo
             if not state.pending or attempt and clock() - started >= TURN_SECONDS:
                 break
             fan = state.pending[0]
-            if state.retry_at.get(fan, 0) > clock():
+            if _waiting(state, fan, None, clock()):
                 state.pending.popleft()
                 continue
             try:
-                applied += _read(store, tenant, account, revision,
+                count, page = _read(store, tenant, account, revision,
                     lambda: reader.messages(fan_id=fan, before_id=None, limit=PAGE_LIMIT),
-                    lambda page, claim: _commit(store, tenant, account, revision, fan, page, claim,
-                        history_only=connection_revision is not None))
+                    lambda page, claim: (_commit(store, tenant, account, revision, fan, page, claim,
+                        history_only=connection_revision is not None), page))
+                applied += count
             except (ReadDeferred, NativeRateLimitError, NativeAuthenticationError, Refused):
                 raise
             except Exception as exc:
-                # A deleted/malformed fan cannot pin other fans behind it.
-                # Retry later, or immediately when a newer head ID appears.
-                state.retry_at[fan] = clock() + FAILED_FAN_RETRY_SECONDS
+                # A deleted/malformed fan cannot pin other fans behind it. Back
+                # off exponentially; a newer head ID or a success clears it.
+                attempts, delay = _fail(state, fan, clock())
                 state.failures += 1
                 print(json.dumps({"schemaVersion": "of-recent-inbox.v1", "account": account,
                     "state": "conversation_deferred", "errorType": type(exc).__name__,
-                    "retrySeconds": FAILED_FAN_RETRY_SECONDS}), flush=True)
+                    "attempts": attempts, "retrySeconds": delay}), flush=True)
+            else:
+                state.failed.pop(fan, None)
+                head = state.heads.get(fan)
+                # Read from the top down past the head: if it is still missing (e.g. a tip with no
+                # conversation state) re-reading cannot help. Settle it (count 0) until the head changes.
+                # A page with no rows at all (next_before None) proves nothing: re-read.
+                if head is not None and page.next_before is not None and (not page.has_more or page.next_before <= head):
+                    state.failed[fan] = Failed(head, 0, clock() + MAX_FAN_BACKOFF_SECONDS)
             state.pending.popleft()
         # Keep catching arrivals below the first page, but bound this queue and
         # do not let a bad archive cursor prevent the next live-head poll.

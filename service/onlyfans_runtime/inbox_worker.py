@@ -63,7 +63,8 @@ def poll_account(store, tenant, account):
     return {"imported": applied, "revision": revision,
             "lastHeadAt": state.last_head_at.isoformat() + "Z" if state and state.last_head_at else None,
             "pendingConversations": len(state.pending) if state else 0,
-            "conversationFailures": state.failures if state else 0}
+            "conversationFailures": state.failures if state else 0,
+            "backedOffConversations": state.backed_off() if state else 0}
 
 
 class InboxWorker(threading.Thread):

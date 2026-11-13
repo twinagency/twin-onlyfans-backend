@@ -806,7 +806,7 @@ def test_fan_pushing_a_banned_theme_is_routed_to_a_human_by_journey_signals():
 
 
 @pytest.mark.parametrize('fan,reply', [
-    ('my stepsister got a new job', "that's great news about your stepsister"),
+    ('my sister got a new job', "that's great news about your sister"),
     ('my kids are on holiday', 'hope your kids enjoy their holiday'),
     ('my daughter passed her driving test', "that's wonderful news for your daughter"),
     ('my little boy started school', 'your little boy must be excited'),
@@ -816,6 +816,11 @@ def test_ordinary_family_and_age_mentions_are_not_platform_banned(fan, reply):
     assert 'platform_banned' not in journey_signals(fan)
     outcome, why = reasons(ok(reply), wctx(message=fan, profile=_writer('explicit')))
     assert outcome == 'ok', why
+
+
+def test_step_family_mentions_are_never_exempt_g05():
+    # G05 (fail-closed): step-family terms are never exempt (platform_banned -> human); real relatives stay exempt.
+    assert 'platform_banned' in journey_signals('my stepsister got a new job')
 
 
 def test_direct_underage_identity_assertion_remains_a_safety_hold():

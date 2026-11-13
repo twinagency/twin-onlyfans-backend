@@ -1,4 +1,5 @@
 """Regressions: denied provider slots must not consume archive queue turns."""
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -30,9 +31,13 @@ class HistoryCapacityTests(unittest.TestCase):
         for name in ['claim_scan', 'claim', 'fail', 'page', 'scan_page']:
             setattr(self.recovery, name, Mock())
         self.recovery.claim_scan.return_value = None
-        self.recovery.claim.return_value = SimpleNamespace(fan_id=7, before_id=99)
+        self.recovery.claim.return_value = SimpleNamespace(fan_id=7, before_id=99, page_limit=20)
         self.reader.messages.return_value = SimpleNamespace(events=[], has_more=False, observations=[])
         self.recovery.page.return_value = 'complete'
+        # step() wraps each provider read in history_telemetry.measure (store-backed since #83); the store here is a fake.
+        patcher = patch('onlyfans_runtime.history_telemetry.measure', lambda *a, **kw: nullcontext())
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_step(self, acquire):
         with patch('onlyfans_runtime.worker._provider_claim', acquire), patch('onlyfans_runtime.worker._release_provider') as release:

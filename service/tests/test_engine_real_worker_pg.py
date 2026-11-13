@@ -311,9 +311,16 @@ def test_default_off_flag_policy_and_scope(world, monkeypatch):
 
 def test_ordinary_family_message_does_not_trigger_a_human_hold(world):
     world.say_plain('That sounds like good news')
-    result, _ = world.say('My stepsister got a new job')
+    result, _ = world.say('My little boy got a new job')  # hits a banned term, exempt as a real-relative mention
     assert result['outcome'] == 'accepted'
     assert len(world.fans.posts) == 1
+
+
+def test_step_family_mention_is_held_for_a_human_g05(world):
+    world.say_plain('That sounds like good news')
+    result, _ = world.say('My stepsister got a new job')  # G05: step-family terms are never exempt
+    assert result['outcome'] == 'handed_to_human' and result['reason'] == 'platform_banned'
+    assert world.fans.posts == []
 
 
 def test_synthetic_worker_is_unchanged_and_refuses_the_real_transport(world):

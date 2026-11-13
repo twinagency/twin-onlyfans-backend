@@ -30,7 +30,7 @@ META = {1: {"id": 1, "type": "photo", "isReady": True},
         7: {"id": 7, "type": "photo", "isReady": True},              # removed_at set below
         8: {"id": 8, "type": "photo", "isReady": True}}              # FansAPI: outside the selection
 REMOVED, OUTSIDE = {7}, {8}
-SOLD = {"native": {1, 5, 6, 8}, "fansapi": {1, 5}, "fastt_sqlite": {1, 5, 6, 8}}
+SOLD = {"native": {1, 5, 6, 8}, "fansapi": {1}, "fastt_sqlite": {1, 5, 6, 8}}   # OQ-3R: no DRM (5) on FansAPI
 
 
 def _opener(media, previews, price_cents=1500):
@@ -113,7 +113,7 @@ def test_priced_opener_posts_a_fully_sellable_set_whole(lane):
     assert out["status"] == "ok" and len(lane.posts) == 1
     post = lane.posts[0]
     assert set(post["media_files"]) == lane.want
-    assert post["previews"] == [5] and set(post["previews"]) <= set(post["media_files"])
+    assert post["previews"] == sorted({5} & lane.want) and set(post["previews"]) <= set(post["media_files"])
     assert post["price"] == 15.0                     # price kept, like G06f: never re-priced
 
 
@@ -126,7 +126,7 @@ def test_priced_opener_with_nothing_sellable_skips(lane):
 def test_priced_opener_with_only_free_previews_skips(lane):
     """Every item is also a free teaser: a price on nothing locked, refuse."""
     out = asyncio.run(auto_posts.run(ACC, _opener([5], [5]), run_id=1))
-    assert out["reason"] == "no_sellable_media" and lane.posts == []
+    assert out["reason"] == ("no_sellable_media" if 5 in lane.want else "media_not_sellable") and lane.posts == []
 
 
 def test_refused_terminal_post_still_books_the_repost_cycle(lane):

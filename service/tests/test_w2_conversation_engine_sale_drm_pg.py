@@ -39,13 +39,19 @@ def test_w2s05_an_unusable_paid_video_is_never_offered(database, raw):
 FANSAPI_DRM = ['{"id": 22, "type": "video", "isReady": true, "files": {"full": {"url": null}}}',
                '{"id": 22, "type": "video", "isReady": true}',
                '{"id": 22, "type": "video", "isReady": true, "drm": {"manifest": "synthetic"},'
-               ' "files": {"full": {"url": "https://cdn.example/v.mp4"}}}']
+               ' "files": {"full": {"url": "https://cdn.example/v.mp4"}}}',
+               # Not isReady true: sync stores the item anyway, so the sale must refuse it (classify's rule).
+               '{"id": 22, "type": "video", "files": {"full": {"url": "https://cdn.example/v.mp4"}}}',
+               '{"id": 22, "type": "video", "isReady": 1, "files": {"full": {"url": "https://cdn.example/v.mp4"}}}',
+               '{}']
 
 
-@pytest.mark.parametrize('raw', FANSAPI_DRM, ids=['no_full_url', 'no_files', 'drm_marker'])
+@pytest.mark.parametrize('raw', FANSAPI_DRM, ids=['no_full_url', 'no_files', 'drm_marker',
+                                                  'ready_missing', 'ready_not_bool', 'empty'])
 def test_w2s05_fansapi_drm_video_is_never_sold_native_drm_still_sells(database, raw):
-    """A catalogue row inserted directly (as scripts_api.put_singles does, no curation gate) over a DRM video.
-    FansAPI account: catalog_terms refuses (OQ-3). Native account: the same row still sells (native design)."""
+    """A catalogue row inserted directly (as scripts_api.put_singles does, no curation gate) over a DRM or
+    not-ready video. FansAPI account: catalog_terms refuses (OQ-3, classify's isReady rule). Native account:
+    the same row still sells (native design). Media 21 keeps no metadata, so the FansAPI refusal is media 22's."""
     from test_real_transport_pg import real_policy
     store, authority, engine, model, red, blue = engine_setup(database)
     with database[1].begin() as c:
@@ -57,4 +63,19 @@ def test_w2s05_fansapi_drm_video_is_never_sold_native_drm_still_sells(database, 
         with Session(database[1]) as s, s.begin():
             with pytest.raises(Refused, match='catalogue media unavailable'):
                 catalog_terms(s, ACCOUNT, blue, lock=lock)
+    store.close()
+
+
+def test_w2s05_fansapi_ready_progressive_video_still_sells(database):
+    """Control for the refusals above: a FansAPI isReady-true progressive video, and media with no metadata, sell."""
+    from test_real_transport_pg import real_policy
+    store, authority, engine, model, red, blue = engine_setup(database)
+    with database[1].begin() as c:
+        c.execute(text("UPDATE vault_items SET raw_json=:r WHERE account_id=:a AND media_id=22"),
+                  {'r': '{"id": 22, "type": "video", "isReady": true,'
+                        ' "files": {"full": {"url": "https://cdn.example/v.mp4"}}}', 'a': ACCOUNT})
+    real_policy(database, authority)
+    for lock in (False, True):
+        with Session(database[1]) as s, s.begin():
+            assert catalog_terms(s, ACCOUNT, blue, lock=lock)['media_ids'] == [21, 22]
     store.close()

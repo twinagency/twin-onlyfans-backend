@@ -161,7 +161,10 @@ def _commit(store, tenant, account, revision, fan, page, claim, *, history_only)
         current(store, tenant, claim, session=s)
         if runtime.pending_events + len(events) > MAX_PENDING:
             raise ReadDeferred(utcnow(), "inbox ingress backpressure")
-        store._observe_offers(s, runtime, offers)
+        try:  # message offers: "source fan changed" is this fan's data; account fences ran above
+            store._observe_offers(s, runtime, offers)
+        except Refused as exc:
+            raise BadConversationPage(str(exc)) from exc
         applied = 0
         for event in reversed(events):
             payload = event.payload()

@@ -334,3 +334,12 @@ Live confirm after F3 (or F4) and after F6.
 - **S (<50 LOC) candidates:** G15/G13-F2, G16, G17, G18, G19, G21, G22, G23, G26, G27, G30, G31, G32, G38, G39, G07d, GDS-2, F2c, G08c, NP429-RA, NP429-H. **M:** G13 F1/F5, G14, G20, G34, G35, G36, W3CEA-07B, LW-B, LW-C. **L:** G24, G29, G33.
 - Order (fan-send → money → auth → admin): G06i (barrier) → GDS-2, GDS-6, G22, G08c, G13/G15 → G14, G16, G23, G31, W3CEA-07B → G18, G19, G21, F2c → rest.
 - Merge 48: G06g-b #132 a780ba43 (fast RED 259s = harness interrupt[1] flake only, 45/45 rerun). Batch6 3/4.
+
+## merge 49 (G09 #133 fc7f6425)
+- G09: the model failure detail keeps each field only in its expected shape. Gate RED 370s on the harness interrupt[1] flake only (rerun 45/45). 5/5 red at base, then green (measured).
+- Batch6 (#130–#133) rwl launched on frozen 75dc6b84..fc7f6425: Opus correctness, Opus DA (Codex sub) and Flash.
+- In flight:
+  - W3RCB-01b gate @d1e3d288
+  - G05-G Flash and Opus DA
+  - G06i worker
+  - G10a worker

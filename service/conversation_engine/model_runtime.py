@@ -219,6 +219,7 @@ class ModelRuntime:
                 if now < due:
                     dead.add(row.model)  # not yet due: don't hammer that model
                     pos = max(pos, row.chain_pos + 1)
+        # After the replay loop on purpose: a stored answer of this generation (returned above) is reused, paid for once.
         if unresolved:
             self._hand_over_unknown(turn, [r.outcome for r in unresolved])
         if len(rows) >= cfg.max_calls_per_generation:
@@ -276,15 +277,15 @@ class ModelRuntime:
                     http_refused.append(exc.error_class)
                 continue
             except ModelOutcomeUnknown as exc:
-                incomplete = isinstance(exc, ModelIncompleteResponse)
+                unknown = 'provider_incomplete' if isinstance(exc, ModelIncompleteResponse) else 'timeout'
                 ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id,
-                                    outcome='provider_incomplete' if incomplete else 'timeout', error_class=exc.error_class,
+                                    outcome=unknown, error_class=exc.error_class,
                                     generation_id=getattr(exc,'generation_id',''), endpoint_sha256=getattr(exc,'endpoint_sha256',''))
-                self._hand_over_unknown(turn, outcomes + ['provider_incomplete' if incomplete else 'timeout'])
+                self._hand_over_unknown(turn, [unknown])
             except Exception as exc:  # unclassified client failure: assume it may have been charged
                 ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id, outcome='client_error',
                                     error_class=type(exc).__name__[:60])
-                self._hand_over_unknown(turn, outcomes + ['client_error'])
+                self._hand_over_unknown(turn, ['client_error'])
             raw = result.text if type(getattr(result, 'text', None)) is str else ''
             oversize = len(raw.encode('utf-8')) > cfg.max_output_bytes
             text = raw.encode('utf-8')[:cfg.max_output_bytes].decode('utf-8', 'ignore') if oversize else raw

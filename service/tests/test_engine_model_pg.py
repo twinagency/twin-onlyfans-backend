@@ -303,7 +303,7 @@ def test_timeout_is_unknown_usage_and_keeps_its_full_reservation_until_reconcile
     store, authority, engine, runtime, client, _ = with_model(database, [ModelOutcomeUnknown('timeout'), ok('second try')])
     incoming(store, 1, 'hello')
     with pytest.raises(Refused, match='outcome is unknown; request handed to a human'):
-        engine.plan(TENANT, ACCOUNT, FAN, 1)  # the unknown-outcome cases live in test_w3_trace_ledger_pg
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # handover proof: test_w3_trace_ledger_pg; here: the ledger bound + reconcile
     [first] = rows(database)
     assert (first.status, first.outcome, first.actual_microusd) == ('unknown', 'timeout', None)
     assert runtime.ledger.committed(day=first.cost_day) == BOUND  # the whole upper bound stays counted
@@ -932,17 +932,16 @@ def test_fallback_is_off_by_default_so_an_availability_failure_never_reaches_ano
 
 
 # ---- the fallback (Ronan decision 2026-11-07): availability failures only ---------------------------------------------
-@pytest.mark.parametrize('failure,primary_status', [
-    (ModelNotSent('connect'), 'released'), (ModelHTTPStatus(429), 'released'), (ModelHTTPStatus(503), 'released'),
-    (ModelHTTPStatus(500), 'released')])  # a timeout may have been charged: never a fallback (test_w3_trace_ledger_pg)
-def test_fallback_runs_after_an_availability_failure_of_the_primary(database, failure, primary_status):
+@pytest.mark.parametrize('failure', [ModelNotSent('connect'), ModelHTTPStatus(429), ModelHTTPStatus(503),
+    ModelHTTPStatus(500)])  # a timeout may have been charged: never a fallback (test_w3_trace_ledger_pg)
+def test_fallback_runs_after_an_availability_failure_of_the_primary(database, failure):
     store, authority, engine, runtime, client, _ = with_model(database, [failure, ok('from the fallback')], cfg=config(**FALLBACK))
     incoming(store, 1, 'hello')
     provider = SyntheticFansProvider(message_id=9001)
     _, outcome = run(store, authority, engine, 1, provider)
     assert outcome == 'accepted' and provider.calls[0]['body']['text'] == 'from the fallback'
     first, second = rows(database)
-    assert (first.model, first.chain_step, first.status) == ('m/primary', 'primary', primary_status)
+    assert (first.model, first.chain_step, first.status) == ('m/primary', 'primary', 'released')
     assert (second.model, second.chain_step, second.status, second.outcome) == ('m/fallback', 'fallback', 'settled', 'ok')
     assert [r.model for r in client.requests] == ['m/primary', 'm/fallback']
     assert client.requests[0].messages == client.requests[1].messages  # the SAME inputs went to either model

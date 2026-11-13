@@ -89,6 +89,7 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
     Existing operator folders are never adopted by matching their display name.
     Archived auto folders are not recreated. Only the internally owned Unsorted
     membership is removed after classification; operator memberships are retained.
+    A commercially uncertain item also leaves its internal category folders.
     """
     owner = session.scalar(select(Account.id).where(Account.id == account_id).with_for_update())
     if owner is None:
@@ -175,6 +176,19 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
             if count >= 5000:
                 raise ValueError("Internal folder membership limit reached")
             session.add(VaultFolderItem(account_id=account_id, folder_id=folder.id, media_id=media_id))
+    if commercial and uncertain:
+        # Uncertain is Miscellaneous only: withdraw live automatic category filings (operator folders untouched).
+        # These withdrawals are not operator removals, so they are un-filed and return with confident evidence.
+        auto = session.execute(select(VaultFolder.id, VaultFolder.created_by).join(VaultFolderItem,
+            (VaultFolderItem.account_id == VaultFolder.account_id) & (VaultFolderItem.folder_id == VaultFolder.id))
+            .where(VaultFolder.account_id == account_id, VaultFolderItem.media_id == media_id,
+                   VaultFolder.deleted_at.is_(None), VaultFolder.created_by.startswith(OWNER_PREFIX, autoescape=True),
+                   VaultFolder.created_by.notin_([OWNER_PREFIX + "miscellaneous", OWNER_PREFIX + "pending"]))).all()
+        if auto:
+            session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
+                VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_([r[0] for r in auto])))
+        filed -= {r[1][len(OWNER_PREFIX):] for r in auto}
+        fields[FILED] = sorted(filed)
     if pending:
         fields[PENDING_MARKER] = True
     else:

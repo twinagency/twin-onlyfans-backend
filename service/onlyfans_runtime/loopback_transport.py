@@ -52,7 +52,10 @@ def _listening(server) -> bool:
             return False
     # Darwin cannot read SO_ACCEPTCONN (ENOPROTOOPT). listen() is idempotent on a
     # listening socket and consumes no pending connection, so make it hold instead.
-    server.socket.listen(server.request_queue_size)
+    try:
+        server.socket.listen(server.request_queue_size)
+    except OSError:
+        return False
     return True
 
 

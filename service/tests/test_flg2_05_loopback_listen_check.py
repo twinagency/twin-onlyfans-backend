@@ -46,3 +46,29 @@ def test_not_listening_or_other_error_refuses(monkeypatch, server, answer):
     _patched(monkeypatch, answer)
     with pytest.raises(Refused):
         from_server(server, account_id=ACCOUNT, policy_revision=1)
+
+
+def test_readable_listening_socket_mints(monkeypatch, server):
+    _patched(monkeypatch, 1)
+    assert from_server(server, account_id=ACCOUNT, policy_revision=1).port == server.server_address[1]
+
+
+def test_enoprotoopt_makes_a_bound_not_listening_fixture_listen(monkeypatch):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler, bind_and_activate=False)
+    try:
+        srv.server_bind()
+        _patched(monkeypatch, OSError(errno.ENOPROTOOPT, "Protocol not available"))
+        handle = from_server(srv, account_id=ACCOUNT, policy_revision=1)
+        with socket.create_connection(("127.0.0.1", handle.port), timeout=2):
+            pass
+    finally:
+        srv.server_close()
+
+
+def test_listen_failure_refuses(monkeypatch, server):
+    _patched(monkeypatch, OSError(errno.ENOPROTOOPT, "Protocol not available"))
+    def boom(self, *args):
+        raise OSError(errno.EOPNOTSUPP, "not supported")
+    monkeypatch.setattr(socket.socket, "listen", boom)
+    with pytest.raises(Refused):
+        from_server(server, account_id=ACCOUNT, policy_revision=1)

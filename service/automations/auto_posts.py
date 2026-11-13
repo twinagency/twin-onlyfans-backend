@@ -57,6 +57,7 @@ from datetime import datetime, timedelta
 import account_page  # free-vs-paid page: a paid page has no paid-post lane
 import automation_executor as ax  # shared _make_client seam + enqueue_job
 from automation_registry import register
+from automations import content_resolver
 from automations._pools import has_media_source, pick_media, pick_text
 from db.engine import get_session
 from db.models import Post
@@ -185,10 +186,29 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     except Exception:
         log.debug("automation employee lookup failed; post attribution NULL", exc_info=True)
 
+    # ── The sale gate (G06g): a priced item is a sale, checked at FIRE time ──
+    # (an arc opener is booked days ahead). Explicit pools are filtered BEFORE
+    # sampling so a refused pick never sinks a post that had a sellable id, but
+    # only while the filtered pool still fills the count the author asked for:
+    # fewer items at the same price is never sold (as G06f).
+    need = 0
+    if price and price > 0:
+        pools = {k: _int_list(spec.get(k)) for k in ("media_files", "preview_media_files")}
+        ok = await content_resolver.sellable(account_id, [m for v in pools.values() for m in v])
+        spec = {**spec, **{k: [m for m in v if m in ok] for k, v in pools.items()}}
+        try:
+            need = min(max(1, int(spec.get("media_count") or 1)), len(pools["media_files"]))
+        except (TypeError, ValueError):
+            need = min(1, len(pools["media_files"]))
+
     # ── Fire the OF post (off-thread so the loop never blocks) ───────────
     client = await asyncio.to_thread(ax._make_client, account_id)
     # Sample the image(s) for this fire (folder pull, if any, hits OF → thread).
     media_files = await asyncio.to_thread(pick_media, spec, client)
+    if len(media_files) < need:
+        log.warning("auto_posts account=%s refused priced post: %d of %d requested items sellable",
+                    account_id, len(media_files), need)
+        return await _skip_sale(account_id, rest, employee_id, cycle, "media_not_sellable")
     if not text and not media_files:
         # Pool resolved to nothing (e.g. an empty folder) — skip but keep draining.
         log.warning("auto_posts: media pool resolved empty + no text — skipping item")
@@ -213,6 +233,17 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 if pid not in media_files:
                     media_files.append(pid)
             previews = [p for p in preview_files if p in media_files]
+
+        # The final picks too (folder pulls are not pre-filtered). A refused pick is
+        # never dropped from a priced post (that sells fewer items at the same price,
+        # as G06f): the post is skipped. Nothing locked (only free teasers) = no sale.
+        ok = await content_resolver.sellable(account_id, media_files)
+        refused = [m for m in media_files if m not in ok]
+        if refused or not set(media_files) - set(previews):
+            log.warning("auto_posts account=%s refused priced post: %d of %d picks not sellable",
+                        account_id, len(refused), len(media_files))
+            return await _skip_sale(account_id, rest, employee_id, cycle,
+                                    "media_not_sellable" if refused else "no_sellable_media")
 
     # Shuffle the attachment order (item 35): the pool is sampled but preview ids
     # are appended last, so without this OF's gallery would post free-then-paid in
@@ -281,22 +312,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     remaining = await _drip_rest(account_id, rest, employee_id, cycle)
 
     # ── Repost cycle: the WHOLE list just finished (no rest) → restart ────
-    resend_job_id: int | None = None
-    resend_at_iso: str | None = None
-    if remaining == 0 and resend_count > 0 and resend_after and original_posts:
-        resend_at = now + timedelta(hours=resend_after)
-        resend_job_id = await ax.enqueue_job(
-            account_id, "auto_posts",
-            payload={
-                "posts": original_posts,
-                "resend_after_hours": resend_after,
-                "resend_count": resend_count - 1,
-                "_original_posts": original_posts,
-            },
-            run_at=resend_at,
-            created_by_employee_id=employee_id,
-        )
-        resend_at_iso = resend_at.isoformat() + "Z"
+    resend_job_id, resend_at_iso = (await _restart_cycle(account_id, employee_id, cycle, now)
+                                    if remaining == 0 else (None, None))
 
     return {
         "status": "ok",
@@ -310,6 +327,41 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         "resend_at": resend_at_iso,
         "resends_left": max(resend_count - 1, 0) if resend_count > 0 else 0,
     }
+
+
+async def _restart_cycle(account_id: str, employee_id: int | None, cycle: dict,
+                         now: datetime) -> tuple[int | None, str | None]:
+    """The WHOLE list just finished (no rest): book the next repost cycle, if any."""
+    resend_after, resend_count = cycle.get("resend_after_hours"), cycle.get("resend_count", 0)
+    original_posts = cycle.get("_original_posts")
+    if not (resend_count > 0 and resend_after and original_posts):
+        return None, None
+    resend_at = now + timedelta(hours=resend_after)
+    job_id = await ax.enqueue_job(
+        account_id, "auto_posts",
+        payload={
+            "posts": original_posts,
+            "resend_after_hours": resend_after,
+            "resend_count": resend_count - 1,
+            "_original_posts": original_posts,
+        },
+        run_at=resend_at,
+        created_by_employee_id=employee_id,
+    )
+    return job_id, resend_at.isoformat() + "Z"
+
+
+async def _skip_sale(account_id: str, rest: list, employee_id: int | None, cycle: dict,
+                     reason: str) -> dict:
+    """A priced item the sale gate refused: skipped, but the queue drains and a
+    terminal skip still books the repost cycle (as a posted terminal item does)."""
+    remaining = await _drip_rest(account_id, rest, employee_id, cycle)
+    out = {"status": "skipped", "reason": reason, "remaining": remaining}
+    if remaining == 0:
+        job_id, at = await _restart_cycle(account_id, employee_id, cycle, datetime.utcnow())
+        if job_id is not None:
+            out.update(resend_job_id=job_id, resend_at=at)
+    return out
 
 
 async def _drip_rest(

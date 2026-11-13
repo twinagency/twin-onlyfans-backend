@@ -170,3 +170,6 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - check.sh live GREEN 1s (m). Sign-in still LISTEN 127.0.0.1:8479 (m). Worker post-restart: 29 cycles, 0 Traceback/ERROR/429/evidence_hold (m).
 - LIVE-CHECK G01a/G01b/G02: no owner-mismatch capture or pilot stop exercised (would write; read-only rule) → code at running sha only (i). F0d harness n/a.
 - Fable consult due (12).
+- Fable @12 (03:3xZ): seam fix (a) errno-gated (ENOPROTOOPT only, not platform), 2 red tests; re-run masked loopback PG files at head before G04; F6 + F2d already queued (F6 waits F4, recent_inbox.py). 429s: 9, one account, `chats`, evenly spread (m) → no retry loop (i).
+- FLG2-05 seam fix /tmp/fix-seam (fix/FLG2-05-loopback-enoprotoopt): new test 3/4 red at base e5903d1b, 4/4 green (m). Masked files at head+fix (m): native_connector 31/31, media 38/38, loopback 47, worker 23, worker_media 3, native_loopback 1, egress 51 → no hidden regression from 12 merges. http_pg::test_real_authenticated_read_path now fails later on env (needs ../twin-dashboard/node_modules), base still ENOPROTOOPT. media_pg pin removed. Gate + Flash running.
+- G04 rebased 4bd228b5 (list unions); Flash MERGE + 1 minor fixed (3 must-refuse cases) → 522507d2. Merges after seam.

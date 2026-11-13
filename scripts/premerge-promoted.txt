@@ -51,4 +51,6 @@ service/tests/test_w5_nr_safety_detect.py
 service/tests/test_w4_conversation_engine_c_safety.py
 service/tests/test_w6mw_21_vision_refusal.py
 service/tests/test_w6hr1_skipped_input_migration_pg.py
+service/tests/conversation_engine/test_model_units.py
+service/tests/test_engine_real_worker_pg.py
 service/tests/test_history_capacity_turns.py

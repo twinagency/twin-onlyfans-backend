@@ -207,5 +207,52 @@ class UncertainStaysInCategory(unittest.TestCase):
         self.assertIn(FITNESS, self.owners(), "operator-added membership lost after regaining confidence")
 
 
+    def add_fitness(self):
+        fitness = VaultFolder(account_id=ACCOUNT, created_by=FITNESS, name="Fitness")
+        self.s.add(fitness); self.s.flush()
+        self.s.add(VaultFolderItem(account_id=ACCOUNT, folder_id=fitness.id, media_id=MID)); self.s.flush()
+
+    def test_precommercial_kept_membership_removal_is_remembered(self):
+        """M3: a kept (unevidenced) membership the operator later removes is not re-added by a confident pass."""
+        self.precommercial_selfie()
+        self.analyse("A casual photo.", confidence=40)
+        self.assertIn(SELFIES, self.owners())                               # control: kept while uncertain
+        self.unfile(SELFIES)                                                # operator removal
+        self.analyse("A selfie.", confidence=95)
+        self.assertEqual(self.cls()["status"], "proposed")                  # control
+        self.assertNotIn(SELFIES, self.owners(), "operator-removed membership re-added")
+
+    def test_v1_operator_added_membership_survives_uncertain(self):
+        """M1: legacy V1 keys are no-readd memory only; they never widen what an uncertain pass withdraws."""
+        selfies = VaultFolder(account_id=ACCOUNT, created_by=SELFIES, name="Selfies")
+        self.s.add(selfies); self.s.flush()
+        self.s.add(VaultFolderItem(account_id=ACCOUNT, folder_id=selfies.id, media_id=MID))
+        self.item().ai_fields_json = json.dumps({MARKER: True}); self.s.flush()
+        self.add_fitness()                                                  # operator addition
+        self.analyse("A selfie.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assertNotIn(SELFIES, self.owners())                            # control: evidenced filing withdrawn
+        self.assertIn(FITNESS, self.owners(), "operator-added membership withdrawn on a V1 row")
+        self.analyse("A selfie.", confidence=95)
+        self.assertTrue({SELFIES, FITNESS} <= set(self.owners()), self.owners())
+
+    def test_uncertain_evidence_change_withdraws_newly_evidenced_filing(self):
+        """M2: still uncertain, but evidence now backs the kept Selfies membership; the fast return must not mask it."""
+        self.precommercial_selfie()
+        self.analyse("A casual photo.", confidence=40)
+        self.assertIn(SELFIES, self.owners())                               # control
+        self.analyse("A selfie.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assertNotIn(SELFIES, self.owners(), "evidenced filing kept by the unchanged-classification fast return")
+
+    def test_proposed_item_with_changed_evidence_drops_its_filing(self):
+        """Guard: the classifier's own proposed filing is withdrawn even when uncertain evidence no longer backs it."""
+        self.analyse("A selfie.", confidence=99)
+        self.assertIn(SELFIES, self.owners())                               # control
+        self.analyse("A casual photo.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assertNotIn(SELFIES, self.owners(), "proposed filing survived the uncertain pass")
+
+
 if __name__ == "__main__":
     unittest.main()

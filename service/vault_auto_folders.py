@@ -170,21 +170,27 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
         elif isinstance(previous, dict):
             filed = set()           # filed as uncertain only; nothing automatic to preserve
         else:
-            # Categorised before commercial mode (no FILED): no record says which live memberships the
-            # classifier made, and an operator may add an item to any auto folder. Only current evidence counts
-            # as filed (evidenced-but-removed stays not re-added); a live membership outside it is kept as a
-            # possible operator addition, even if an older, now-changed classification filed it.
-            filed = set(evidenced)
+            filed = set(evidenced)  # categorised before commercial mode: evidenced-but-removed stays not re-added
+        # `filed` is no-readd MEMORY: every category filed, seen live (an operator may add an item to any auto
+        # folder) or V1-classified, so a later operator removal sticks. It never decides what is withdrawn.
+        filed |= {key for key, _ in _auto_memberships(session, account_id, media_id)}
         if legacy:
             filed |= LEGACY_KEYS
         withdrawn = set()
         if uncertain:
-            # Uncertain is Miscellaneous only. Withdrawn filings are not operator removals: un-file them so
-            # confident evidence re-files them. Runs before the fast return so already-uncertain rows heal.
+            # Uncertain is Miscellaneous only. WITHDRAWAL is current evidence plus the classifier's own last
+            # proposed filing; other live memberships are kept as possible operator additions (an operator
+            # membership in a withdrawn category is indistinguishable and removed). Withdrawn filings are not
+            # operator removals: un-file them so confident evidence re-files them. Runs before the fast return
+            # so already-uncertain rows heal and an evidence change is never masked.
             wanted = ["miscellaneous"]
-            withdrawn = _withdraw_filings(session, account_id, media_id, filed)
+            withdraw = set(evidenced)
+            if isinstance(previous, dict) and previous.get("status") == "proposed" and isinstance(previous.get("categories"), list):
+                withdraw |= {k for k in previous["categories"] if isinstance(k, str)}
+            withdrawn = _withdraw_filings(session, account_id, media_id, withdraw)
             filed -= withdrawn
-        if fields.get(CURRENT_MARKER) is True and previous == classification and not withdrawn:
+        if (fields.get(CURRENT_MARKER) is True and previous == classification and not withdrawn
+                and fields.get(FILED) == sorted(filed)):
             return {"status": "already_categorised"}   # unchanged evidence: no write, no membership churn
         fields["_commercial_classification_v1"]=classification
     if legacy:

@@ -204,7 +204,7 @@ class NativeLoopbackConnector:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 indexes.append(index)
                 ids.append(_id(row["id"]))
-                if row["fromUser"]["id"] == fan_id:
+                if _id(row["fromUser"]["id"]) == fan_id:
                     inbound.append(_id(row["id"]))
                 continue
             kept.append(row); events.append(event); ids.append(event.message_id)

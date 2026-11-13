@@ -311,7 +311,7 @@ def test_default_off_flag_policy_and_scope(world, monkeypatch):
 
 def test_ordinary_family_message_does_not_trigger_a_human_hold(world):
     world.say_plain('That sounds like good news')
-    result, _ = world.say('My stepsister got a new job')
+    result, _ = world.say('My sister got a new job')  # step-family terms are held for a human since G05
     assert result['outcome'] == 'accepted'
     assert len(world.fans.posts) == 1
 

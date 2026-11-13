@@ -114,3 +114,36 @@ def test_live_skip_is_infra_partial_down_is_red_all_down_is_infra(tmp_path):
     r = _live_stub(tmp_path / "c", CHECK_DASH=DOWN)
     assert r.returncode == 1 and "PASS sign-in health" in r.stdout, r.stdout
     assert _run("live", _env(tmp_path / "d")).returncode == 2
+
+@pytest.mark.parametrize("mode", ["fast", "wide"])
+def test_deferred_touched_area_is_listed_and_noted_fast_defers_wide_never(tmp_path, mode):
+    stub = 'echo "defer=${PREMERGE_DEFER_AFTER_S:-none}"; echo "DEFERRED to wide: service/tests/test_a.py"'
+    r = _run(mode, _env(tmp_path, CHECK_BUDGET_S="900"), _fake_repo(tmp_path, stub))
+    assert r.returncode == 0 and ("defer=600" if mode == "fast" else "defer=none") in r.stdout, r.stdout + r.stderr
+    assert "deferred to wide: 1 touched-area tests not run" in _verdict(tmp_path)
+    assert next((tmp_path / "ev").iterdir()).joinpath("deferred.txt").read_text() == "DEFERRED to wide: service/tests/test_a.py\n"
+
+def _git(repo, *a): subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+
+def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure(tmp_path):
+    repo, t = tmp_path / "r", tmp_path / "r/service/tests"
+    t.mkdir(parents=True), (repo / "scripts").mkdir(), shutil.copy(ROOT / "scripts/premerge.sh", repo / "scripts")
+    (repo / "scripts/premerge-promoted.txt").write_text("# none\n"), (repo / "service/m.py").write_text("X = 1\n")
+    (repo / "scripts/premerge-known-red.txt").write_text("service/tests/test_z3.py::test_kr\n")
+    (t / "test_uses_m.py").write_text("import m\ndef test_m(): assert m.X\n")
+    _git(repo, "init", "-q"), _git(repo, "add", "."), _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b")
+    (repo / "service/m.py").write_text("X = 2\n")  # touched module -> test_uses_m.py is touched-area (d)
+    (t / "test_z1.py").write_text("import time\ndef test_slow(): time.sleep(1.5)\n")  # finishes last, prints first
+    (t / "test_z2.py").write_text("def test_planted(): assert False, 'planted'\n")
+    (t / "test_z3.py").write_text("def test_ok(): pass\ndef test_kr(): assert False\n")
+    env = {**_env(tmp_path), "BASE": "HEAD", "CHECK_JOBS": "3"}
+    run = lambda **kw: subprocess.run(["bash", "scripts/premerge.sh"], cwd=repo, env={**env, **kw}, capture_output=True, text=True, timeout=120)
+    r = run()
+    lines = [l.split(":")[0] for l in r.stdout.splitlines() if l.startswith(("PASS ", "FAIL ", "KNOWN-RED ", "== (b", "== (c", "== (d"))]
+    assert r.returncode == 1 and lines == ["== (b) changed tests (3)", "PASS service/tests/test_z1.py",
+        "FAIL service/tests/test_z2.py", "KNOWN-RED service/tests/test_z3.py", "PASS service/tests/test_z3.py",
+        "== (c) promoted tests (0)", "== (d) touched-area tests (1, CHECK_JOBS=3)", "PASS service/tests/test_uses_m.py"], r.stdout
+    (t / "test_z2.py").unlink()
+    r = run(PREMERGE_DEFER_AFTER_S="0")
+    assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py" in r.stdout, r.stdout
+    assert "premerge: OK (0 skipped, 1 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout

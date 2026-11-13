@@ -9,3 +9,11 @@ service/tests/test_native_pilot_runtime.py onlyfans_runtime.store.Refused: engin
 service/tests/test_onlyfans_release_package_pg.py::test_schema_compatible_rollback_preserves_evidence_with_commands_closed
 service/tests/test_onlyfans_release_rehearsal_pg.py::test_one_command_demo_smoke_runs_current_screens_and_removes_its_database
 service/tests/test_onlyfans_release_rehearsal_pg.py::test_one_command_demo_removes_its_database_after_frontend_start_failure
+# a1151b1f (measured): RuntimeError "Disable the Moxy owner; retain event, purchase and obligation evidence..."; team base red, queued
+service/tests/test_contextual_release_pg.py::test_mode_save_preserves_scope_and_populated_rollback_retains_unknown
+# a1151b1f (measured): Refused: unsupported media duration claim in model text; team base red, queued
+service/tests/test_engine_defects_pg.py::test_r1_paused_plain_replies_cannot_pitch_price_or_claim_purchase
+# a1151b1f (measured): assert 98658 <= 98304 (catalogue context over cap); team base red, queued
+service/tests/test_moxy_catalogue_context_pg.py::test_hundred_products_reach_model_and_last_item_can_deliver
+# a1151b1f (measured): script, 3 errors, SimpleNamespace has no attribute 'engine'; team base red, queued
+service/tests/test_history_capacity_turns.py FAILED (errors=3)

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # FIX-MODE pipeline gate (added in the first fix PR; CI is billing-locked): every fix PR runs it.
-#   scripts/premerge.sh [extra test files...]   env: BASE PY ONLYFANS_TEST_PG_URL ALLOW_SKIP=1 CHECK_JOBS PREMERGE_DEFER_AFTER_S
+#   scripts/premerge.sh [extra test files...]   env: BASE PY ONLYFANS_TEST_PG_URL ALLOW_SKIP=1 CHECK_JOBS CHECK_FILE_TIMEOUT_S
+#                                                    PREMERGE_DEFER_AFTER_S PREMERGE_STOP_AT_S (both set by check.sh fast)
 # (a) lint python changed since merge-base($BASE) (syntax + undefined names)
 # (b) pytest: changed service/tests/**/test_*.py + extra args        (c) scripts/premerge-promoted.txt (path[::test]/line)
-# (d) touched-area: tests that mention a changed module. With PREMERGE_DEFER_AFTER_S set, (d) targets not started by
-#     then print "DEFERRED to wide: <t>" (check.sh fast); (b)+(c) always run. Targets run CHECK_JOBS (3) at a time,
-#     each its own process, output printed in list order.
+# (d) touched-area: tests that mention a changed module. (d) targets not started by PREMERGE_DEFER_AFTER_S, or cut at
+#     PREMERGE_STOP_AT_S (s since start), print "DEFERRED to wide: <t>"; (b)+(c) are never deferred. Targets run
+#     CHECK_JOBS (3) at a time, each its own process, output printed in list order; files in scripts/premerge-serial.txt
+#     (contention-flaky) run alone.
 # Exit 0 = OK, 1 = FAILED, 2 = INCOMPLETE (something skipped; ALLOW_SKIP=1 accepts). Pre-existing reds live in
 # scripts/premerge-known-red.txt (proven red at base): pytest ids are deselected, a script must end on the listed
 # line (a trailing * = prefix match, for lines with volatile timestamps/ids); any other failure, or a listed script
@@ -24,7 +26,7 @@ JOBS="${CHECK_JOBS:-3}"; [[ $JOBS =~ ^[1-9][0-9]?$ ]] || { echo "premerge: FAILE
 FTO="${CHECK_FILE_TIMEOUT_S:-600}"; [[ $FTO =~ ^[1-9][0-9]{0,4}$ ]] || { echo "premerge: FAILED (CHECK_FILE_TIMEOUT_S=$FTO)"; exit 1; }
 TO="$(command -v timeout || command -v gtimeout || true)"
 [ -n "$TO" ] || { echo "premerge: FAILED (no timeout/gtimeout for the per-file cap)"; exit 1; }
-[[ ${PREMERGE_DEFER_AFTER_S:-0} =~ ^[0-9]+$ ]] || { echo "premerge: FAILED (PREMERGE_DEFER_AFTER_S not an int)"; exit 1; }
+[[ ${PREMERGE_DEFER_AFTER_S:-0}${PREMERGE_STOP_AT_S:-0} =~ ^[0-9]+$ ]] || { echo "premerge: FAILED (PREMERGE_*_S not ints)"; exit 1; }
 list="$(mktemp)" out="$(mktemp -d)"; trap 'rm -rf "$list" "$out"' EXIT
 git diff --name-only --diff-filter=d "$MB" >"$list"; git ls-files --others --exclude-standard >>"$list"
 changed=(); while IFS= read -r f; do changed+=("$f"); done < <(sort -u "$list" | grep '\.py$' || true)
@@ -51,6 +53,7 @@ for f in "${changed[@]+"${changed[@]}"}"; do
   esac
 done
 promoted=(); while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) promoted+=("$l");; esac; done <"$PROMOTED"
+serial=" $(grep -hv '^#' scripts/premerge-serial.txt 2>/dev/null | tr '\n' ' ' || true)"
 known=(); [ -f "$KNOWN" ] && while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) known+=("$l");; esac; done <"$KNOWN"
 
 is_script() {  # run-service-tests.py rule: no pytest import and (__main__ entrypoint or no test_ defs)
@@ -64,12 +67,13 @@ run() {  # one process per target, like run-service-tests.py isolation
     if [[ "$id" == "$t::"* ]]; then cmd+=(--deselect "$id"); echo "KNOWN-RED $id (deselected)"; kr=$((kr+1))
     elif [ "$id" = "$t" ]; then expect="$rest"; fi; done
   [ "$t" = "$file" ] && is_script "$file" && cmd=("$file")
-  res="$("$TO" -k 5 "$FTO" "$PY" "${cmd[@]}" 2>&1)" && rc=0 || rc=$?; last="$(tail -1 <<<"$res")"
+  res="$("$TO" -k 5 "$cap" "$PY" "${cmd[@]}" 2>&1)" && rc=0 || rc=$?; last="$(tail -1 <<<"$res")"
   if [ "$rc" = 0 ]; then
     # pytest exits 0 on in-test skips/xfails: those cases did not run, so they are not a PASS.
     if [ "${cmd[0]}" = -m ] && tail -1 <<<"$res" | grep -qE '[0-9]+ (skipped|xfailed)'; then
       echo "SKIP (pytest: $(tail -1 <<<"$res")) $t"; skip=$((skip+1)); return 0; fi
     if [ -z "$expect" ]; then echo "PASS $t: $(tail -1 <<<"$res")"; else echo "FAIL $t: known-red but passed; drop it from $KNOWN"; fail=1; fi
+  elif { [ "$rc" = 124 ] || [ "$rc" = 137 ]; } && [ "$cap" -lt "$FTO" ]; then echo "DEFERRED to wide: $t (cut at the fast budget)"; def=1
   elif [ "$rc" = 124 ] || [ "$rc" = 137 ]; then echo "FAIL $t: per-file timeout ${FTO}s (CHECK_FILE_TIMEOUT_S)"; tail -30 <<<"$res"; fail=1
   elif [ -n "$expect" ] && { [ "$last" = "$expect" ] || { [ "${expect: -1}" = '*' ] && [[ $last == "${expect%\*}"* ]]; }; }; then
     echo "KNOWN-RED $t: $expect"; kr=$((kr+1))
@@ -81,21 +85,23 @@ run() {  # one process per target, like run-service-tests.py isolation
 targets=(); while IFS= read -r t; do targets+=("$t"); done < <(printf '%s\n' "${tests[@]+"${tests[@]}"}" "$@" | grep . | sort -u)
 nc=${#targets[@]}; targets+=("${promoted[@]+"${promoted[@]}"}"); nd=${#targets[@]}
 while IFS= read -r t; do targets+=("$t"); done < <(printf '%s\n' "${area[@]+"${area[@]}"}" | grep . | sort -u | grep -vxF -f <(printf '%s\n' "${targets[@]:0:$nc}" ""))
-n=0 total=${#targets[@]} deferred=0 defer_at="${PREMERGE_DEFER_AFTER_S:-}"
+n=0 total=${#targets[@]} deferred=0 defer_at="${PREMERGE_DEFER_AFTER_S:-}" stop_at="${PREMERGE_STOP_AT_S:-}"
 hdr() { [ "$1" = 0 ] && echo "== (b) changed tests ($nc)"; [ "$1" = "$nc" ] && echo "== (c) promoted tests ($((nd - nc)))"
   [ "$1" = "$nd" ] && echo "== (d) touched-area tests ($((total - nd)), CHECK_JOBS=$JOBS)"; return 0; }
-flush() { local f s k; while [ "$n" -lt "$1" ] && [ -f "$out/$n.n" ]; do hdr "$n"; cat "$out/$n"; read -r f s k <"$out/$n.n"
-  fail=$((fail | f)) skip=$((skip + s)) kr=$((kr + k)) n=$((n + 1)); done; }
+flush() { local f s k d; while [ "$n" -lt "$1" ] && [ -f "$out/$n.n" ]; do hdr "$n"; cat "$out/$n"; read -r f s k d <"$out/$n.n"
+  fail=$((fail | f)) skip=$((skip + s)) kr=$((kr + k)) deferred=$((deferred + d)) n=$((n + 1)); done; }
 for ((i = 0; i < total; i++)); do
-  if [ "$i" -ge "$nd" ] && [ -n "$defer_at" ] && [ "$SECONDS" -ge "$defer_at" ]; then
-    echo "DEFERRED to wide: ${targets[$i]}" >"$out/$i"; echo "0 0 0" >"$out/$i.n"; deferred=$((deferred + 1)); flush "$i"; continue; fi
-  while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do sleep 0.2; flush "$i"; done
-  ( fail=0 skip=0 kr=0; run "${targets[$i]}" >"$out/$i" 2>&1; echo "$fail $skip $kr" >"$out/$i.t"; mv "$out/$i.t" "$out/$i.n" ) &
-  flush "$i"
+  lim=$JOBS; [[ $serial == *" ${targets[$i]%%::*} "* ]] && lim=1  # serial lane: drain the pool, run alone
+  while [ "$(jobs -rp | wc -l)" -ge "$lim" ]; do sleep 0.2; flush "$i"; done
+  cap=$FTO; [ "$i" -ge "$nd" ] && [ -n "$stop_at" ] && [ $((stop_at - SECONDS)) -lt "$cap" ] && cap=$((stop_at - SECONDS))
+  if [ "$i" -ge "$nd" ] && { [ "$cap" -le 0 ] || { [ -n "$defer_at" ] && [ "$SECONDS" -ge "$defer_at" ]; }; }; then
+    echo "DEFERRED to wide: ${targets[$i]}" >"$out/$i"; echo "0 0 0 1" >"$out/$i.n"; flush "$i"; continue; fi
+  ( fail=0 skip=0 kr=0 def=0; run "${targets[$i]}" >"$out/$i" 2>&1; echo "$fail $skip $kr $def" >"$out/$i.t"; mv "$out/$i.t" "$out/$i.n" ) &
+  [ "$lim" = 1 ] && { wait || true; }; flush "$i"
 done
 wait || true; flush "$total"; [ "$n" = "$total" ] && hdr "$total"
 [ "$n" = "$total" ] || { echo "FAIL runner: no result for ${targets[$n]}"; fail=1; }
-[ "$deferred" = 0 ] || echo "DEFERRED $deferred touched-area tests to scripts/check.sh wide (started after ${defer_at}s)"
+[ "$deferred" = 0 ] || echo "DEFERRED $deferred touched-area tests to scripts/check.sh wide (not started by ${defer_at}s or cut at ${stop_at}s)"
 
 if [ "$fail" != 0 ]; then echo "premerge: FAILED"; exit 1; fi
 if [ "$skip" != 0 ] && [ "${ALLOW_SKIP:-}" != 1 ]; then echo "premerge: INCOMPLETE ($skip skipped)"; exit 2; fi

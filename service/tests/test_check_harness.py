@@ -130,7 +130,7 @@ def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure
     t.mkdir(parents=True), (repo / "scripts").mkdir(), shutil.copy(ROOT / "scripts/premerge.sh", repo / "scripts")
     (repo / "scripts/premerge-promoted.txt").write_text("# none\n"), (repo / "service/m.py").write_text("X = 1\n")
     (repo / "scripts/premerge-known-red.txt").write_text("service/tests/test_z3.py::test_kr\nservice/tests/test_z4.py boom at *\n")
-    (t / "test_uses_m.py").write_text("import m\ndef test_m(): assert m.X\n")
+    (t / "test_uses_m.py").write_text("import m, os, time\ndef test_m(): time.sleep(float(os.environ.get('ZZ_SLEEP', 0)))\n")
     _git(repo, "init", "-q"), _git(repo, "add", "."), _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b")
     (repo / "service/m.py").write_text("X = 2\n")  # touched module -> test_uses_m.py is touched-area (d)
     (t / "test_z1.py").write_text("import time\ndef test_slow(): time.sleep(1.5)\n")  # finishes last, prints first
@@ -151,3 +151,5 @@ def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure
     r = run(PREMERGE_DEFER_AFTER_S="0")
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py" in r.stdout, r.stdout
     assert "premerge: OK (0 skipped, 2 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
+    r = run(PREMERGE_STOP_AT_S="3", ZZ_SLEEP="60")  # (d) still running at the stop time -> cut, deferred, not FAIL
+    assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py (cut at the fast budget)" in r.stdout, r.stdout

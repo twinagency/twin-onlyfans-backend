@@ -2,8 +2,9 @@
 # Test harness (FIX-MODE F0); merge gate = `scripts/check.sh fast` GREEN. Exit 0 GREEN, 1 RED, 2 INFRA (env missing).
 #   fast  PR gate: premerge.sh lint + changed tests + promoted + touched-area, then live unless stack is down.
 #         HARD budget CHECK_BUDGET_S=900 at nice 10: over = RED; bad budget or no timeout = INFRA, nothing run.
-#         Split (F0d): touched-area tests not started by budget-300 s (budget/2 if smaller) are DEFERRED, listed in the
-#         output + $EV/deferred.txt and noted in the verdict; changed + promoted tests are never deferred.
+#         Split (F0d): touched-area tests not started by budget-300 s, or still running at budget-200 s (budget/2, 3/4
+#         if budget <= 600), are DEFERRED: listed in the output + $EV/deferred.txt and noted in the verdict. Changed +
+#         promoted tests are never deferred (they can still blow the budget = RED).
 #   wide  same full set as fast, nothing deferred, no budget. The orchestrator runs it before every stack restart.
 #   live  scripts/check_live.py (read-only; see its docstring), 180 s cap.   full  run-service-tests + vitest.
 # Evidence .check-evidence/<UTC-ts>-<shortsha>/. env: PY ONLYFANS_TEST_PG_URL ALLOW_SKIP CHECK_BUDGET_S CHECK_EVIDENCE_ROOT CHECK_JOBS
@@ -37,11 +38,12 @@ case "$mode" in
 fast)
   budget="${CHECK_BUDGET_S:-900}"
   if ! [[ $budget =~ ^[1-9][0-9]{0,4}$ ]]; then infra=1; note "CHECK_BUDGET_S=$budget not a positive int <= 99999: nothing run"
-  else step premerge "$budget" env PREMERGE_DEFER_AFTER_S=$((budget > 600 ? budget - 300 : budget / 2)) scripts/premerge.sh
+  else step premerge "$budget" env PREMERGE_DEFER_AFTER_S=$((budget > 600 ? budget - 300 : budget / 2)) \
+    PREMERGE_STOP_AT_S=$((budget > 600 ? budget - 200 : budget * 3 / 4)) scripts/premerge.sh
   premerge_rc $?
   left=$((budget - (SECONDS - T0))); [ "$left" -gt 0 ] && live $((left < 180 ? left : 180)) skip
   [ $((SECONDS - T0)) -ge "$budget" ] && { red=1; note "wall $((SECONDS - T0))s >= budget ${budget}s"; }; fi ;;
-wide) budget=none; step premerge 0 env -u PREMERGE_DEFER_AFTER_S scripts/premerge.sh; premerge_rc $?; live 180 skip ;;
+wide) budget=none; step premerge 0 env -u PREMERGE_DEFER_AFTER_S -u PREMERGE_STOP_AT_S scripts/premerge.sh; premerge_rc $?; live 180 skip ;;
 live) live 180 infra ;;
 full)
   args=(); if [ -n "${ONLYFANS_TEST_PG_URL:-}" ]; then args=(--postgres); else infra=1; note "no ONLYFANS_TEST_PG_URL: *_pg.py modules not run"; fi

@@ -124,8 +124,26 @@ def test_archive_page_top_creator_markup_only_row_is_skipped(tmp_path):
     assert [event.message_id for event in page.events] == [10] and page.skipped_inbound == ()
 
 
-def test_archive_page_top_fan_markup_only_row_still_refuses(tmp_path):
+def test_archive_page_top_fan_markup_only_row_is_skipped(tmp_path):
+    # Flash W3RCB-01b (major): archive/offer-import recovery re-queues a refused cursor forever.
     fan = native_message(20, owner=OWNER, text='<p><img src="x"></p>')
     older = native_message(10, owner=OWNER, outgoing=True, text="<p>Synthetic older reply</p>")
+    page = _read_page([fan, older], tmp_path, before_id=50)
+    assert [event.message_id for event in page.events] == [10] and page.skipped_inbound == (20,)
+
+
+def test_head_fan_markup_row_below_only_creator_rows_refuses(tmp_path):
+    # Flash minor: pins the fan rule (newer FAN text), not just any newer kept row.
+    rows = [native_message(30, owner=OWNER, outgoing=True, text="<p>Synthetic reply</p>"),
+            native_message(20, owner=OWNER, text='<p><img src="x"></p>'),
+            native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")]
     with pytest.raises(NativeProtocolError):
-        _read_page([fan, older], tmp_path, before_id=50)
+        _read_page(rows, tmp_path)
+
+
+def test_skipped_bottom_row_still_advances_the_cursor(tmp_path):
+    # Flash minor: next_before must come from the skipped row when it is the oldest.
+    rows = [native_message(30, owner=OWNER, text="<p>Synthetic newer inbound</p>"),
+            native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')]
+    page = _read_page(rows, tmp_path)
+    assert [event.message_id for event in page.events] == [30] and page.next_before == 20

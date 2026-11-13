@@ -222,3 +222,10 @@ def test_a_shard_run_can_never_qualify_and_combine_applies_the_unchanged_complet
     for needle in ('for required in "${REQUIRED_SUITES[@]}" legacy-isolated; do', '"$IMAGE_ID"', '"$FULL"', 'skipped', 'browser_check', '$n" = 1'):
         assert needle in combine, needle
 
+
+def test_browser_check_is_defined_before_either_mode_calls_it():
+    """The first sharded combine died with 'browser_check: command not found': a shell function must be defined before it runs."""
+    definition = SOURCE.index('browser_check() {')
+    calls = [m.start() for m in re.finditer(r"^\s*browser_check$", SOURCE, re.M)]
+    assert len(calls) == 2 and all(definition < call for call in calls), (definition, calls)
+

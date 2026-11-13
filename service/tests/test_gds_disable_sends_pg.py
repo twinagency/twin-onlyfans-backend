@@ -65,3 +65,27 @@ def test_stop_that_cannot_apply_raises_and_holds_the_projection(supervised, monk
         assert s.get(OfDeliveryPolicy, ACCOUNT).enabled is True   # honest: the stop did NOT apply ...
         row = s.query(OfFansProjection).filter_by(account_id=ACCOUNT, event_key='gds-broken').one()
         assert (row.status, row.detail) == ('held', 'send_stop_failed')   # ... and an operator can see that
+
+
+def test_held_failed_stop_is_operator_reprojectable_and_rerunning_applies_it(supervised, monkeypatch):
+    # Flash G-DS (major): a send_stop_failed hold must not be terminal. The operator re-drive (reconcile sets the
+    # projection back to pending) re-runs _account, which re-applies the stop once the policy owner is back.
+    from conversation_engine.operator_v2 import _REPROJECTABLE_DETAILS
+    from fans_api_adapter.events import FansEventIntake
+    world, _, _, _, pilot = supervised
+    original = TextAuthority._configure_in_session
+    monkeypatch.setattr(TextAuthority, '_configure_in_session',
+                        lambda self, s, runtime, **kw: (_ for _ in ()).throw(Refused('policy owner unavailable')))
+    with pytest.raises(Refused):
+        _auth_failed(pilot, 'gds-redrive')()
+    assert 'send_stop_failed' in _REPROJECTABLE_DETAILS
+    monkeypatch.setattr(TextAuthority, '_configure_in_session', original)
+    with Session(world.database[1]) as s, s.begin():
+        row = s.query(OfFansProjection).filter_by(account_id=ACCOUNT, event_key='gds-redrive').one()
+        row.status, row.detail = 'pending', 'operator_reproject'   # what operator_v2 reconcile writes
+    FansEventIntake(world.store).reproject_pending(ACCOUNT)
+    with Session(world.database[1]) as s:
+        assert s.get(OfDeliveryPolicy, ACCOUNT).enabled is False
+        row = s.query(OfFansProjection).filter_by(account_id=ACCOUNT, event_key='gds-redrive').one()
+        assert row.status == 'projected', (row.status, row.detail)
+    assert world.fans.posts == []

@@ -187,3 +187,6 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 
 ## 2026-11-13 HARN-2
 - #99 fix/HARN-2-terminal-exception (23+/5-): when output ends on SQLAlchemy footer, the pin matches the last exception line; commercial_full_path pinned (base red 1d2c5f36). Red test measured red → green; harness 43 passed; fast GREEN 94s; real output matches pin. Solo Flash running.
+- 06:xxZ HARN-2 merged #99 dbe5ded2 (merge 16; Flash 2 findings fixed + mutation-proven; fast 94/66s). Fable@16: G05 → no-exemption shape (school/teen/step never exempt, fail-closed; real-relative mentions held for a human, accepted); check alembic 0134 pre-restart; one restart after G05+F4-1a; re-run loopback PG tests before F4-1b.
+- G05 final 642fc7fd (264 LOC, 165 passed, fast GREEN 175s, 19/19 lens false-negative probes held both paths) → Flash final v2 running. PR2 queued: engine "step-sis"/"stepbros", native "im a kid", obfuscated ages, non-English, predicate allow-list only on held-case volume.
+- F4: alembic single head 0134 (m; 0019/0021 merged by 0022 tuple). Deferred PG run on 08405a72: non-pass = caption_vault 1 error, fastt_campaign_controls_pg 6 failed, http_pg real_authenticated_read_path — all identical at base 1d2c5f36 (m). Loopback seam re-run at head: 197/198, only http_pg base-red (m). W6HR-1a merged-with-target 5ab50ace → fast gate running.

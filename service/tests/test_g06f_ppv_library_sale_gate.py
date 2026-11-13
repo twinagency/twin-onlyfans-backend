@@ -3,6 +3,8 @@
 Synthetic SQLite vault (fixture from G06d), fake mass sender + fake OF client that only record,
 no provider calls, no sends. Base attached every library media id unchecked, so a hidden / errored /
 not-ready / removed item rode inside a priced mass PPV and its paired feed post.
+An authored entry is sold whole or not at all: any refused item refuses the send (Codex/Flash G06f:
+filtering sold a smaller set, or only the free teaser, at the authored price and caption).
 """
 import asyncio
 import json
@@ -26,7 +28,8 @@ META = {1: {"id": 1, "type": "photo", "isReady": True},
         4: {"id": 4, "type": "photo", "isReady": True, "isHidden": True},
         5: {"id": 5, "type": "video", "isReady": True},              # DRM: ready, no full URL
         6: {"id": 6, "type": "photo"},                               # isReady absent
-        7: {"id": 7, "type": "photo", "isReady": True}}              # removed_at set below
+        7: {"id": 7, "type": "photo", "isReady": True},              # removed_at set below
+        8: {"id": 8, "type": "audio", "isReady": True}}              # unsupported kind
 REMOVED = {7}
 SOLD = {"native": {1, 5, 6}, "fansapi": {1, 5}, "fastt_sqlite": {1, 5, 6}}  # FansAPI requires isReady true
 
@@ -93,6 +96,10 @@ def lane(request, tmp_path, monkeypatch):
     monkeypatch.setattr(ppv_send, "_ghost_dark_ids", nobody_dark)
     monkeypatch.setattr(ppv_send, "_split_owners", nobody_owns)
 
+    async def no_known(account_id):
+        return set()
+    monkeypatch.setattr(ppv_send, "_all_fan_ids", no_known)   # broadcast: no fans cache table here
+
     async def setup():
         async with engine.begin() as c:
             sale = () if request.param == "fastt_sqlite" else (
@@ -125,37 +132,55 @@ def _fire(lane, entry):
     return asyncio.run(ppv_send.run(ACC, {"ppv_id": entry["id"]}, run_id=1))
 
 
-def test_arc_send_drops_refused_media(lane):
-    """Refused paid ids leave every cell and the paired feed post; previews stay ⊆ sold media."""
-    res = _fire(lane, _entry(list(META), [2, 5]))
-    assert res["status"] == "ok" and lane.sent
-    for p in lane.sent:
-        assert set(p["media_files"]) == lane.want
-        assert set(p["previews"]) <= set(p["media_files"]) and set(p["previews"]) <= {5}
-    assert len(lane.posts) == 1 and set(lane.posts[0]["media_files"]) == lane.want
-    assert set(lane.posts[0]["previews"]) <= {5}
+SELLABLE = [1, 5]   # sellable on every lane
 
 
-def test_nothing_sellable_refuses_the_send(lane):
-    """All media refused → skipped with a reason, never a price on zero media (base: sent [2,3,4,7])."""
-    res = _fire(lane, _entry([2, 3, 4, 7], [2]))
-    assert (res["status"], res["reason"]) == ("skipped", "no_sellable_media")
+def test_any_refused_media_refuses_the_whole_send(lane):
+    """Refused ids among the authored set → no cell, no broadcast, no paired feed post (base: sent all 8)."""
+    asyncio.run(lane.library(_entry(list(META), [2, 5]), reach_all=True))
+    res = asyncio.run(ppv_send.run(ACC, {"ppv_id": _entry([], [])["id"]}, run_id=1))
+    assert (res["status"], res["reason"]) == ("skipped", "media_not_sellable")
     assert lane.sent == [] and lane.posts == []
 
 
+@pytest.mark.parametrize("media,previews", [([2, 5], [5]),        # paid item refused, only the free preview left
+                                            ([1, 5], [2]),        # preview option not in the set: dropped as before
+                                            ([1, 4], [1]),        # hidden
+                                            ([1, 7], []),         # removed
+                                            ([1, 8], []),         # unsupported kind
+                                            ([2, 3, 4, 7], [2])])  # nothing sellable
+def test_partly_refused_sets_never_sell_reduced(lane, media, previews):
+    res = _fire(lane, _entry(media, previews))
+    if set(media) <= lane.want:   # ([1, 5], [2]): all media sellable, stray preview option ignored
+        assert res["status"] == "ok"
+        return
+    assert (res["status"], res["reason"]) == ("skipped", "media_not_sellable")
+    assert lane.sent == [] and lane.posts == []
+
+
+def test_fully_sellable_set_sends_unchanged_in_cells_broadcast_and_feed(lane):
+    asyncio.run(lane.library(_entry(SELLABLE, [5]), reach_all=True))
+    res = asyncio.run(ppv_send.run(ACC, {"ppv_id": _entry([], [])["id"]}, run_id=1))
+    assert res["status"] == "ok" and lane.sent
+    assert any(p.get("user_lists") is not None for p in lane.sent)   # the house broadcast fired
+    for p in lane.sent:
+        assert p["media_files"] == SELLABLE and set(p["previews"]) <= {5}
+    assert len(lane.posts) == 1 and lane.posts[0]["media_files"] == SELLABLE
+
+
 def test_feed_post_refuses_unsellable_media(lane):
-    """The manual post-now path (`post_to_feed`) shares the gate."""
+    """The manual post-now path (`post_to_feed`) shares the gate: a selection with any refused id is refused."""
     entry = _entry([1, 2, 4], [2])
-    res = asyncio.run(ppv_send.post_to_feed(ACC, entry, media_files=[2, 4]))
-    assert (res["status"], res["reason"]) == ("skipped", "no_sellable_media") and lane.posts == []
-    res = asyncio.run(ppv_send.post_to_feed(ACC, entry))
-    assert res["status"] == "ok" and lane.posts[-1]["media_files"] == [1]
-    assert lane.posts[-1]["previews"] == []
+    for files in ([2, 4], None, [1, 2]):
+        res = asyncio.run(ppv_send.post_to_feed(ACC, entry, media_files=files))
+        assert (res["status"], res["reason"]) == ("skipped", "media_not_sellable") and lane.posts == []
+    res = asyncio.run(ppv_send.post_to_feed(ACC, entry, media_files=[1]))
+    assert res["status"] == "ok" and lane.posts[-1]["media_files"] == [1] and lane.posts[-1]["previews"] == []
 
 
 def test_owner_leg_refuses_unsellable_substitute(lane, monkeypatch):
-    """The owner leg's substitute PPV passes the same gate: all refused → no `#sub` send."""
-    sub = _entry([2, 3], [], id="sub")
+    """The owner leg's substitute PPV passes the same gate: one refused item → no `#sub` send."""
+    sub = _entry([1, 2], [], id="sub")
 
     async def first_owns(account_id, media, rows):
         return list(rows[1:]), list(rows[:1])
@@ -164,8 +189,8 @@ def test_owner_leg_refuses_unsellable_substitute(lane, monkeypatch):
         return sub
     monkeypatch.setattr(ppv_send, "_split_owners", first_owns)
     monkeypatch.setattr(ppv_send, "_pick_second_ppv", substitute)
-    main = _entry(list(META), [], also_post_to_feed=False)
+    main = _entry(SELLABLE, [], also_post_to_feed=False)
     asyncio.run(lane.library(main, sub, owner_second_leg=True))
     res = asyncio.run(ppv_send.run(ACC, {"ppv_id": main["id"]}, run_id=1))
-    assert res["second_leg"]["reason"] == "no_sellable_media"
+    assert res["second_leg"]["reason"] == "media_not_sellable"
     assert [p["automation_ref"] for p in lane.sent] == [main["id"]]

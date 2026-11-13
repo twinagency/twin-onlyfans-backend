@@ -998,11 +998,12 @@ async def post_to_feed(account_id: str, ppv: dict, *, employee_id: int | None = 
         media_ids = list(ppv_media)
     if not media_ids:
         return {"status": "skipped", "reason": "no_media"}
-    ok = await content_resolver.sellable(account_id, media_ids)   # the sale gate (G06f)
-    media_ids = [m for m in media_ids if m in ok]
-    if not media_ids:
-        log.warning("post_to_feed account=%s ppv=%s refused: no sellable media", account_id, ppv.get("id"))
-        return {"status": "skipped", "reason": "no_sellable_media"}
+    ok = await content_resolver.sellable(account_id, media_ids)   # the sale gate (G06f), all-or-nothing
+    refused = [m for m in media_ids if m not in ok]
+    if refused:
+        log.warning("post_to_feed account=%s ppv=%s refused: %d of %d media not sellable",
+                    account_id, ppv.get("id"), len(refused), len(media_ids))
+        return {"status": "skipped", "reason": "media_not_sellable", "refused_media": len(refused)}
     media_set = set(media_ids)
     # Previews must be ⊆ media_files (OF rejects/ignores stray ids), mirroring the message path.
     prev_src = previews_override if previews_override is not None else (ppv.get("preview_options") or [])
@@ -1301,13 +1302,20 @@ def _ppv_media(ppv: dict) -> PpvMedia:
                           if str(x).strip() and int(x) in keep])
 
 
-async def _sellable_media(account_id: str, ppv: dict) -> PpvMedia:
+async def _sellable_media(account_id: str, ppv: dict) -> PpvMedia | None:
     """`_ppv_media` through the sale gate at FIRE time (`content_resolver.sellable`): a library or
-    arc entry is planned days ahead, so an item hidden / errored / not ready / removed / out of the
-    FansAPI selection since then is dropped here. Previews stay ⊆ ids; empty ids = refuse the send."""
+    arc entry is planned days ahead, so an item can be hidden / errored / not ready / removed / out of
+    the FansAPI selection by then. The entry is an authored set whose price and caption describe all
+    of it, so it is sold whole or not at all: any refused item (paid or preview) → None = refuse the
+    send. Filtering would sell a smaller set, or only the free teaser, at the original price."""
     media = _ppv_media(ppv)
     ok = await content_resolver.sellable(account_id, media.ids)
-    return PpvMedia([m for m in media.ids if m in ok], [m for m in media.previews if m in ok])
+    refused = [m for m in media.ids if m not in ok]
+    if refused:
+        log.warning("ppv_send account=%s ppv=%s refused: %d of %d media not sellable",
+                    account_id, ppv.get("id"), len(refused), len(media.ids))
+        return None
+    return media
 
 
 async def _hero_media_ids(account_id: str, media_ids: list[int],
@@ -1843,9 +1851,9 @@ async def _run_owner_leg(ctx: _SendCtx, cfg: dict, now: datetime, *,
     else:
         ppv_id = str(ppv.get("id"))
         media = await _sellable_media(ctx.account_id, ppv)
-        rows, _ = await _split_owners(ctx.account_id, media, owner_rows) if media.ids else ([], [])
-        if not media.ids:
-            report = {"status": "skipped", "reason": "no_sellable_media", "ppv_id": ppv_id,
+        rows = (await _split_owners(ctx.account_id, media, owner_rows))[0] if media is not None else []
+        if media is None:
+            report = {"status": "skipped", "reason": "media_not_sellable", "ppv_id": ppv_id,
                       "owner_fans": owner_fans}
             leg = _LegResult(0, 0, 0, [])
         elif not rows:
@@ -1979,10 +1987,9 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     # is clamped into these; the authored base_price_cents is never rewritten.
     bounds = price_bounds(cfg)
     bcast_cents = max(bounds[0], min(base_cents, bounds[1]))
-    media = await _sellable_media(account_id, ppv)
-    if not media.ids:   # never a price on zero media
-        log.warning("ppv_send account=%s ppv=%s refused: no sellable media", account_id, ppv_id)
-        return {"status": "skipped", "reason": "no_sellable_media", "ppv_id": ppv_id}
+    media = await _sellable_media(account_id, ppv)   # non-empty ids — _unsendable_reason gated it
+    if media is None:   # never the authored price on a reduced set
+        return {"status": "skipped", "reason": "media_not_sellable", "ppv_id": ppv_id}
     day_idx = now.toordinal()   # rotates the preview once per day → fresh on each resend
     # AI caption at send: ONE finished line about this media, written now and
     # shared by every cell below. Default OFF per account. Arrives already

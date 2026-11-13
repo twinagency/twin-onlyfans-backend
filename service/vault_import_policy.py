@@ -129,26 +129,47 @@ def advance(value, read, rows, more, known, page_hash, now, page_size):
     return value
 
 
+def _latest_selection(account):
+    """Window of the latest completed FansAPI job at the account's current binding and active epoch."""
+    from sqlalchemy import select
+    from db.onlyfans_vault_models import OfVaultSyncJob
+    from db.onlyfans_models import OfRuntime
+    from db.onlyfans_engine_models import OfFansConnection
+    return (select(OfVaultSyncJob.window_json).join(OfRuntime,
+        OfRuntime.account_id==OfVaultSyncJob.account_id).join(OfFansConnection,
+        (OfFansConnection.account_id==OfVaultSyncJob.account_id)&
+        (OfFansConnection.epoch==OfVaultSyncJob.connection_revision))
+        .where(OfVaultSyncJob.account_id==account,OfVaultSyncJob.provider_kind=="fansapi",
+            OfVaultSyncJob.status=="complete",OfVaultSyncJob.binding_id==OfRuntime.binding_id,
+            OfFansConnection.binding_id==OfRuntime.binding_id,OfFansConnection.status=="active",
+            OfVaultSyncJob.provider_account==OfFansConnection.provider_account_id)
+        .order_by(OfVaultSyncJob.completed_at.desc(),OfVaultSyncJob.job_id.desc()).limit(1))
+
+
 def commercial_window():
     """Latest completed account/binding/epoch selection; no history rows are removed."""
     from sqlalchemy import select,cast,func,BigInteger
     from sqlalchemy.dialects.postgresql import JSONB
     from db.models import VaultItem
-    from db.onlyfans_vault_models import OfVaultSyncJob
-    from db.onlyfans_models import OfRuntime
-    from db.onlyfans_engine_models import OfFansConnection
-    selected=(select(OfVaultSyncJob.window_json).join(OfRuntime,
-        OfRuntime.account_id==OfVaultSyncJob.account_id).join(OfFansConnection,
-        (OfFansConnection.account_id==OfVaultSyncJob.account_id)&
-        (OfFansConnection.epoch==OfVaultSyncJob.connection_revision))
-        .where(OfVaultSyncJob.account_id==VaultItem.account_id,OfVaultSyncJob.provider_kind=="fansapi",
-            OfVaultSyncJob.status=="complete",OfVaultSyncJob.binding_id==OfRuntime.binding_id,
-            OfFansConnection.binding_id==OfRuntime.binding_id,OfFansConnection.status=="active",
-            OfVaultSyncJob.provider_account==OfFansConnection.provider_account_id)
-        .order_by(OfVaultSyncJob.completed_at.desc(),OfVaultSyncJob.job_id.desc()).limit(1)
-        .correlate(VaultItem).scalar_subquery())
+    selected=_latest_selection(VaultItem.account_id).correlate(VaultItem).scalar_subquery()
     ids=select(cast(func.jsonb_array_elements_text(cast(selected,JSONB)["selected"]),BigInteger)).correlate(VaultItem)
     return VaultItem.media_id.in_(ids)
+
+
+def outside_selection(session,account,media_ids):
+    """Media verified outside the commercial selection, read once. Absence is evidence only when the latest
+    completed selection at the current binding/epoch is a full listing (0 < selected < 1000; a capped window
+    always holds 1000) and the media was not re-observed after it completed. No selection (session gone,
+    reconnect mid-import: transient until the next one completes), an empty or a capped one is unknown: none."""
+    from sqlalchemy import select
+    from db.onlyfans_vault_models import OfVaultObservation,OfVaultSyncJob
+    latest=session.execute(_latest_selection(account).add_columns(OfVaultSyncJob.completed_at)).first() if media_ids else None
+    selected={int(m) for m in json.loads(latest.window_json)["selected"]} if latest else set()
+    if not 0<len(selected)<1000:
+        return set()
+    return set(media_ids)-selected-set(session.scalars(select(OfVaultObservation.media_id).where(
+        OfVaultObservation.account_id==account,OfVaultObservation.media_id.in_(media_ids),
+        OfVaultObservation.observed_at>latest.completed_at)))
 
 
 def automatic_window():

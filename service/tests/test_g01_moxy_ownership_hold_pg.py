@@ -70,7 +70,7 @@ def test_flg2_01_corrupt_evidence_after_a_landed_part_keeps_the_receipt_and_hold
     assert authority.dispatch(TENANT, ACCOUNT, first, SyntheticTextTransport(ACCOUNT, message_id=9001, on_send=corrupt)) == 'accepted'
     with Session(engine) as s:
         e = s.get(MoxyEvent, (ACCOUNT, identity))
-        assert (e.status, e.reason) == ('held', 'ownership evidence unavailable')
+        assert (e.status, e.reason, e.intent_id) == ('held', 'ownership evidence unavailable', None)
         import json
         assert [r['message_id'] for r in json.loads(e.payload_json)['_moxy_delivery']['receipts']] == [9001]
         assert [c.category for c in s.scalars(select(OfOperatorCase).where(

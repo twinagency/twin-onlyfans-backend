@@ -1568,7 +1568,7 @@ def current(s,intent):
         from onlyfans_runtime.operator_cases import policy_facts
         if any(scope in {'all','commercial'} for _,scope in policy_facts(s,intent.account_id,intent.fan_id)[2]):return False
     try:snap=snapshot(s,intent.account_id,intent.fan_id,event)
-    except Refused:return False  # unreadable evidence: not current; the step tick holds the event
+    except Refused:return False  # unreadable evidence: not current (intent is cancelled; FLG3-01 follow-up)
     return digest(snap)==event.snapshot_hash and decision['text']==intent.body
 
 
@@ -1618,7 +1618,7 @@ def delivered(s,intent):
             payload['_moxy_conversation_progress']={'version':1,'unanswered_input_ids':original['unanswered_input_ids']}
             e.payload_json=canonical(payload)
     if remaining:
-        if refused is not None:_evidence_hold(s,intent.account_id,e,refused)
+        if refused is not None:e.intent_id=None;_evidence_hold(s,intent.account_id,e,refused)
         elif not continuation_ok:
             e.status='stale';e.reason='moxy_conversation_interrupted'
         else:

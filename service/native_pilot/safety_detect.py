@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from conversation_engine.safety_context import UNDER_18 as _UNDER_18, sensitive_match
+from conversation_engine.safety_context import UNDER_18 as _UNDER_18
 
 from .identity import denies_automation, discloses_ai, sincere_identity_question, wants_human
 
@@ -160,13 +160,13 @@ _MINOR = (
                r"(?=\s*(?:[!?;\n]|[.,](?!\d)|$|(?:and|but|lol|haha+|lmao|tho|rn|btw|ok|okay)\b|[^\x00-\x7f])))", re.I),
 )
 # Native minor set = sibling/child step terms + teen words (step-PARENT roleplay is adult; the engine's banned set is
-# broader by design). They go through the engine's single exemption: someone's real relative ("my teenager got a job").
+# broader by design). Never exempt, like the engine: "my stepsister got a job" is held for a human (G05).
 _STEP = re.compile(r"\b(?:step[ -]?(?:sis|sister|bro|brother|daughter|son)s?|teen(?:s|age|aged|ager|agers)?)\b", re.I)
 
 
 def _minor(raw):
     t = (raw or "").replace("\u2019", "'")
-    return _first(_MINOR, t) or sensitive_match(_STEP, t) is not None
+    return _first(_MINOR, t) or _STEP.search(t) is not None
 
 _COMPLAINT = (
     re.compile(r"\b(?:refund|charge\s*back|chargeback|scam(?:med|mer|ming)?|rip(?:ped)?[\s-]?off|money\s+back|report(?:ed|ing)?\s+you|dispute|disputing|fraud)\b", re.I),

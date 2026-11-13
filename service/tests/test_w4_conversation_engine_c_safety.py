@@ -44,13 +44,14 @@ def test_g05_bare_or_cast_step_family_is_banned(text):
                                   "I'm with my stepsister at the mall", "my stepsister got a new job as a nurse",
                                   "my stepbrother will be visiting", "my older stepsister got a new job",
                                   "my teenager got a new job", "my teenager is visiting", "my stepsis is 18"])
-def test_g05_real_relative_step_family_is_exempt(text):
-    assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is None
+def test_g05_real_relative_step_family_is_held_for_a_human(text):
+    # No exemption (G05, Fable): a cue-list exemption leaked casting forms; held cases are cheap while sending is off.
+    assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is not None
 
 
 def test_g05_step_family_scan_is_linear():
     import time
-    text = "my stepsis is here " * 1200  # ~22KB, 1200 exempt matches
+    text = "my stepsis is here " * 1200 + "minor"  # ~22KB
     t0 = time.perf_counter()
-    assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is None
+    assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is not None
     assert time.perf_counter() - t0 < 0.5

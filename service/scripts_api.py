@@ -1286,6 +1286,31 @@ def _validate_item(raw: Any) -> dict:
     }
 
 
+async def _refuse_unusable_media(s, account_id: str, clean: list[dict]) -> None:
+    """Save-time twin of the sale boundary's row rule (media_delivery.catalog_terms):
+    an enabled single over removed media or media whose provider metadata forbids a
+    sale (vault_management.unusable; on FansAPI also not isReady true / DRM video)
+    is a 422, not a silent ok. Only positive evidence refuses: media with no vault
+    row (vault not mirrored yet) saves and stays refused at the sale; the FansAPI
+    commercial selection is checked at the sale only."""
+    from sqlalchemy import inspect
+    from db.models import VaultItem
+    from onlyfans_runtime.media_delivery import _unusable
+    from onlyfans_runtime.provider_read_budget import native_family_clause
+    ids = {m for it in clean if it["enabled"] for m in json.loads(it["media_ids"])}
+    if not ids:
+        return
+    # A legacy DB without the delivery-policy table is native by definition.
+    policy = await s.run_sync(lambda ss: inspect(ss.connection()).has_table("of_delivery_policy"))
+    fansapi = policy and not await s.scalar(select(native_family_clause(account_id)))
+    for row in (await s.scalars(select(VaultItem).where(VaultItem.account_id == account_id,
+            VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id))).all():
+        why = "removed" if row.removed_at is not None else _unusable(row, fansapi)
+        if why:
+            raise HTTPException(422, f"media {row.media_id} cannot be sold ({why}); "
+                                     "remove it or disable its single")
+
+
 class _ItemsBody(BaseModel):
     account_id: str
     items: list[dict]
@@ -1302,6 +1327,7 @@ async def put_singles(body: _ItemsBody = Body(...)) -> dict:
     clean = [_validate_item(it) for it in body.items]
     now = datetime.utcnow()
     async with get_session() as s:
+        await _refuse_unusable_media(s, body.account_id, clean)
         await s.execute(sa_delete(CatalogItem).where(
             CatalogItem.account_id == body.account_id,
             CATALOG_IS_SINGLE))

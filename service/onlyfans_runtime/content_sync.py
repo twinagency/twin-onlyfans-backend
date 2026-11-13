@@ -337,7 +337,8 @@ def _media_states(s, account, runtime, connection, media):
     from .vault_management import content_ready,_content_connection
     try:connection=_content_connection(s,runtime)
     except Refused:connection=None
-    states = {}
+    import vault_import_policy
+    states, outside = {}, None
     for mid in media:
         row = s.get(VaultItem, (account, mid))
         if row is None:
@@ -346,9 +347,13 @@ def _media_states(s, account, runtime, connection, media):
         observation = s.get(OfVaultObservation, (account, mid))
         job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
         ok, why = content_ready(s,runtime,row,connection)
-        # Only an authoritative removal is unusable; stale ownership, processing
-        # or unknown readiness (expired session, incomplete page) is not deletion.
-        states[mid] = "ok" if ok else "unusable" if why == "removed" else "unverified"
+        # Only an authoritative removal, or absence from a completed FansAPI selection at the
+        # current epoch, is unusable; stale ownership, processing or unknown readiness
+        # (expired session, incomplete page, no selection yet) is not deletion.
+        if why == "outside_commercial_selection" and outside is None:
+            outside = vault_import_policy.outside_selection(s, account, list(media))
+        states[mid] = ("ok" if ok else "unusable" if why == "removed"
+            or why == "outside_commercial_selection" and mid in outside else "unverified")
     return states
 
 

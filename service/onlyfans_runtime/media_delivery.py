@@ -91,6 +91,12 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"}
                                     or _unusable(r, fansapi) for r in rows):
         raise Refused("catalogue media unavailable")
+    # FansAPI: media a completed selection at the current epoch lacks (vanished or past the
+    # window) is refused like curation refuses it; no selection yet is unknown and still sells.
+    # Native accounts have no commercial selection and are unchanged.
+    import vault_import_policy
+    if fansapi and vault_import_policy.outside_selection(session, account_id, ids):
+        raise Refused("catalogue media unavailable")
     snapshot = {"item": {key: getattr(item, key) for key in (
         "id", "account_id", "script_id", "enabled", "kind", "label", "description_for_ai",
         "price_cents", "is_free_teaser", "updated_at")},

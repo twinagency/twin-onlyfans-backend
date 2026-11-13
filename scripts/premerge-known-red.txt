@@ -46,6 +46,5 @@ service/tests/test_native_pilot_service.py AssertionError: timeout waiting for f
 service/tests/test_concurrent_admission_units.py::test_concurrent_migration_is_the_release_head
 # 29f28729 (measured, G01): macOS env red; loopback_transport.py:63 getsockopt(SO_ACCEPTCONN) is ENOPROTOOPT (Linux-only).
 service/tests/test_onlyfans_media_pg.py::test_native_reply_and_existing_media_use_one_call_quote_and_real_http
-# base reds at 91547788 (measured 2026-11-13, red with and without G01b; team queue)
-service/tests/test_moxy_input_supersession_pg.py::test_explicit_retirement_keeps_old_inputs_in_history_only
+# base red at 91547788 (measured 2026-11-13, red with and without G01b; load test, also in the serial lane; team queue)
 service/tests/test_moxy_multicreator_load_pg.py::test_three_creators_concurrent_mixed_load

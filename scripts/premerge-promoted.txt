@@ -47,3 +47,4 @@ service/tests/test_w2_conversation_engine_sale_pg.py
 service/tests/test_g01_moxy_ownership_hold_pg.py
 service/tests/test_flg2_05_loopback_listen_check.py
 service/tests/test_w3_rcb_history_page.py
+service/tests/test_w6hr1_skipped_input_migration_pg.py

@@ -11,8 +11,10 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import CatalogItem, VaultItem
+from db.models import VaultItem
 from onlyfans_runtime.store import Refused, utcnow
+from onlyfans_runtime.vault_management import (InvalidVault, _content_connection, create_catalog_single,
+                                             https_url, unusable)
 
 SELLABLE_KINDS = {'photo', 'video'}
 # Provider retry timing. Attempts and the due time are persisted on the job that owns the kept cursor.
@@ -32,12 +34,6 @@ def iso_utc(moment):
     return None if moment is None else moment.replace(microsecond=0).isoformat() + 'Z'
 
 
-def _url(files, name):
-    node = files.get(name) if type(files) is dict else None
-    url = node.get('url') if type(node) is dict else None
-    return url if type(url) is str and url.startswith('https://') and len(url) <= 8192 else None
-
-
 def classify(item):
     """Return (row dict, None) for a sellable item or (None, reason) for a skipped one."""
     try:
@@ -48,12 +44,9 @@ def classify(item):
         return None, 'bad_id'
     kind = item.get('type')
     files = item.get('files')
-    if item.get('isReady') is not True:
-        return None, 'not_ready'
-    if item.get('canView') is False:
-        return None, 'cannot_view'
-    if item.get('hasError'):
-        return None, 'error'
+    reason = unusable(item) or (None if item.get('isReady') is True else 'not_ready')
+    if reason:
+        return None, reason
     if kind not in SELLABLE_KINDS:
         return None, 'unsupported_kind'
     lists = sorted(int(s['id']) for s in item.get('listStates') or []
@@ -61,7 +54,7 @@ def classify(item):
                    and str(s.get('id', '')).isdecimal())
     # Metadata identity, not a byte hash: honest kind so nothing mistakes it for content proof.
     identity = {'id': media_id, 'type': kind, 'createdAt': item.get('createdAt'), 'duration': item.get('duration') or 0}
-    return {'media_id': media_id, 'kind': kind, 'thumb_url': _url(files, 'thumb'), 'full_url': _url(files, 'full'),
+    return {'media_id': media_id, 'kind': kind, 'thumb_url': https_url(files, 'thumb'), 'full_url': https_url(files, 'full'),
             'duration_seconds': int(item.get('duration') or 0) or None, 'folders': lists,
             'content_hash': sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
             'content_hash_kind': 'vault-metadata-v1'}, None
@@ -324,20 +317,14 @@ def sync_vault_lists(client):
 
 
 def create_catalogue_item(store, tenant, account, media_ids, *, price_cents, label, description_for_ai,
-                          preview_ids=(), kind=None):
-    """Operator-approved catalogue entry over synced, still-sellable vault media."""
-    media_ids = [int(v) for v in media_ids]
-    if not media_ids or len(set(media_ids)) != len(media_ids) or not 300 <= price_cents <= 20000:
-        raise Refused('invalid catalogue item')
+                          preview_ids=()):
+    """Operator-approved fixed catalogue entry: the canonical creator (`create_catalog_single`:
+    locked rows, per-asset `content_ready`, previews within media, no duplicate shelf)."""
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant, account)
-        rows = s.scalars(select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id.in_(media_ids))).all()
-        if len(rows) != len(media_ids) or any(r.removed_at is not None for r in rows):
-            raise Refused('media is not a synced sellable vault item')
-        item = CatalogItem(account_id=account, kind=kind or ('video' if any(r.kind == 'video' for r in rows) else 'image'),
-                           label=label, description_for_ai=description_for_ai, media_ids=json.dumps(media_ids),
-                           preview_media_ids=json.dumps([int(v) for v in preview_ids]), price_cents=price_cents,
-                           pricing_mode='fixed', enabled=True)
-        s.add(item)
-        s.flush()
-        return item.id
+        runtime = store._runtime(s, tenant, account)
+        try:
+            return create_catalog_single(s, runtime, _content_connection(s, runtime), media=[int(v) for v in media_ids],
+                previews=[int(v) for v in preview_ids], label=label, description=description_for_ai,
+                price_cents=price_cents, enabled=True, pricing_mode='fixed').id
+        except InvalidVault as exc:
+            raise Refused('invalid catalogue item') from exc

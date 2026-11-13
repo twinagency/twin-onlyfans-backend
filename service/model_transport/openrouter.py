@@ -33,20 +33,25 @@ class KeyUnavailable(Exception):
 
 
 # ---- non-200 evidence ----------------------------------------------------------------
-# Bounded and sanitized: never the key, the prompt or a raw body. Only short scalar fields survive.
+# Bounded and sanitized: never the key, the prompt or a raw body. Only short redacted scalar fields survive;
+# free-text messages are kept as a presence marker only.
 _MAX_ERROR_BODY = 65_536
 _SAFE = re.compile(r'[^A-Za-z0-9 ._:/@()\[\],;=+\-\'"?!%#]')
 _SECRET = re.compile(r'(sk-[A-Za-z0-9_-]{6,}|Bearer\s+\S+|[A-Za-z0-9_-]{32,})')
 
 
-def _clean(value, limit, *, redact=False):
+def _clean(value, limit):
+    # Strip first, then redact: stripping after redaction could rejoin a split token. Every field is redacted.
     if type(value) is int and not isinstance(value, bool):
         return value if -10**9 < value < 10**9 else None
     if type(value) is not str or not value:
         return None
-    if redact:
-        value = _SECRET.sub('[redacted]', value)
-    return _SAFE.sub('', value)[:limit] or None
+    return _SECRET.sub('[redacted]', _SAFE.sub('', value))[:limit] or None
+
+
+def _message_marker(value):
+    # Free-text provider messages can echo the prompt (fan text); no pattern can tell, so never store the text.
+    return '[redacted]' if type(value) is str and value.strip() else None
 
 
 def _retry_after(value, *, now=None):
@@ -85,16 +90,16 @@ def _failure_detail(response):
         body = None
     error = body.get('error') if type(body) is dict else None
     if type(error) is dict:
-        for key, limit in (('code', 32), ('type', 64), ('message', 300)):
-            value = _clean(error.get(key), limit, redact=key == 'message')
+        for key, value in (('Code', _clean(error.get('code'), 32)), ('Type', _clean(error.get('type'), 64)),
+                           ('Message', _message_marker(error.get('message')))):
             if value is not None:
-                detail['error' + key.capitalize()] = value
+                detail['error' + key] = value
         meta = error.get('metadata') if type(error.get('metadata')) is dict else {}
         provider = _clean(meta.get('provider_name'), 64)
         if provider is not None:
             detail['providerName'] = provider
     elif type(error) is str:
-        value = _clean(error, 300, redact=True)
+        value = _message_marker(error)
         if value is not None:
             detail['errorMessage'] = value
     return detail

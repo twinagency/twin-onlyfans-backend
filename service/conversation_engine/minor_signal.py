@@ -24,6 +24,10 @@ _MINOR = (
                r"(?:\s*(?:-\s*)?(?:(?:years?|yrs?)[\s-]*(?:old|of\s+age)|years?(?!\s*\w)|yrs?|yo|y/o|y\.o|f|m(?!\s+(?:away|out|from|ahead|behind|late))|"
                r"(?:fe)?male)\b|"
                rf"(?![\w'\"%$]|[.,]\d|\s*(?:-\s*)?{_QUANTITY_UNIT}\b|\s*m\s+(?:away|out|from|ahead|behind|late)\b))", re.I),
+    # An explicit age suffix or label is an age claim on its own, no subject needed: "16yo", "she is 16 y/o", "age 16",
+    # "age:16" (Codex G05-PR2). The label form keeps the quantity exclusions ("age 16 days in the cellar").
+    re.compile(rf"\b{UNDER_18}\s*(?:-\s*)?(?:yo|y/o|y\.o)\b|"
+               rf"\bage\s*:?\s*{UNDER_18}(?![\w'\"%$]|[.,]\d|\s*(?:-\s*)?{_QUANTITY_UNIT}\b)", re.I),
 )
 # Sibling/child step terms + teen words (step-PARENT roleplay is adult; the engine's banned set is broader by design).
 # Never exempt: "my stepsister got a job" is held for a human (G05).

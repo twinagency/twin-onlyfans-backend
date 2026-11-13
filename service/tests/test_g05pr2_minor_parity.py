@@ -14,6 +14,8 @@ from native_pilot import safety_detect as sd
 FLAGGED = [
     # numeric ages under 18 (engine had no numeric path)
     "im 16 tbh", "im 16", "i'm 17 yo", "i am 16 years old", "I'm 15", "im only 16", "i just turned 16", "my age is 16",
+    # explicit age suffix / label with no first-person subject (Codex G05-PR2 major 1)
+    "16yo", "16 y/o", "15 y.o", "16yo here", "she is 16yo", "age 16", "age:16", "Age: 15",
     # step-sibling spellings (engine missed hyphen / plural)
     "be my step-sis", "my stepbros are home", "my step-brother", "pretend you're my stepsisters",
     # minor self-assertions (native missed "a kid")
@@ -26,6 +28,7 @@ CLEAR = [
     # 18+ ages, prices, counts, units (must stay clear)
     "im 18", "i'm 19 yo", "im 25", "i am 30 years old", "16 pics", "send me 16 pics", "$16", "it's $16 for the set",
     "I'm 15 minutes away", "my car is 15 years old", "I'm 16 days sober", "I'm 5'10",
+    "age 16 days in the cellar", "page 16", "image 15", "average 16 pics", "im 18yo", "age 21",
     # ordinary mentions without sensitive context
     "i have two kids and a busy week", "my kids are asleep", "my son just turned 16.", "a minor issue with the link", "hey cutie",
 ]

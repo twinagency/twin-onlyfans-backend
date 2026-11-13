@@ -709,9 +709,13 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
                 raise Refused('pilot delivery policy unavailable')
             stop_runtime_in_session(s, runtime, command_key=command_key, actor=actor,
                                     request_hash=request_hash, now=utcnow())
+            # A stop only ever tightens: clamp a stored policy wider than the scope (drift) so the send-side
+            # scope check in the shared writer can never refuse, and roll back, the stop.
+            limits = config['limits']
             TextAuthority(store)._configure_in_session(s, runtime,
-                expected_revision=policy.revision, enabled=False, limit_units=policy.limit_units,
-                throttle_seconds=policy.throttle_seconds, media_enabled=False,
+                expected_revision=policy.revision, enabled=False,
+                limit_units=min(policy.limit_units, limits['send_units']),
+                throttle_seconds=max(policy.throttle_seconds, limits['throttle_seconds']), media_enabled=False,
                 actor=actor, reason=reason)
         before = {'revision':row.revision, 'status':row.status, 'fingerprint':row.fingerprint}
         if activation_evidence is not None:

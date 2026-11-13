@@ -33,7 +33,8 @@ def test_crash_recovered_unknown_call_is_handed_to_an_operator_case(supervised, 
         row = s.scalar(select(OfEngineModelCall))
         assert row.status == 'calling'
         row.lease_expires_at = utcnow() - timedelta(seconds=1)
-        request_id = row.request_id
+        request_id, reserved = row.request_id, row.reserved_microusd
+        assert reserved > 0
         if reactivated:  # a later activation; the scope guard only allows that via stop/activate, so bypass it here
             s.execute(text('SET LOCAL session_replication_role = replica'))
             s.scalar(select(OfEnginePilotScope)).active_since = utcnow() + timedelta(seconds=1)
@@ -42,7 +43,8 @@ def test_crash_recovered_unknown_call_is_handed_to_an_operator_case(supervised, 
     assert not seen and not world.fans.posts  # never re-asked, never sent
     with Session(world.database[1]) as s:
         [call] = s.scalars(select(OfEngineModelCall)).all()
-        assert (call.status, call.usage_known, call.actual_microusd) == ('unknown', False, None)  # reservation kept
+        assert (call.status, call.usage_known, call.actual_microusd) == ('unknown', False, None)
+        assert call.reserved_microusd == reserved  # reservation kept, still counted against the day
         request = s.get(OfEngineRequest, (call.account_id, request_id))
         assert request.status == 'handover_pending', 'crash-recovered unknown call must reach a human'
         cases = s.scalars(select(OfOperatorCase).where(OfOperatorCase.category == 'model_handover')).all()

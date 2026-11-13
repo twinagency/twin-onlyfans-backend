@@ -303,7 +303,7 @@ def test_timeout_is_unknown_usage_and_keeps_its_full_reservation_until_reconcile
     store, authority, engine, runtime, client, _ = with_model(database, [ModelOutcomeUnknown('timeout'), ok('second try')])
     incoming(store, 1, 'hello')
     with pytest.raises(Refused, match='outcome is unknown; request handed to a human'):
-        engine.plan(TENANT, ACCOUNT, FAN, 1)  # handover proof: test_w3_trace_ledger_pg; here: the ledger bound + reconcile
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # handover proof: test_w3_trace_ledger_pg; here: the ledger bound + provider-evidence settle
     [first] = rows(database)
     assert (first.status, first.outcome, first.actual_microusd) == ('unknown', 'timeout', None)
     assert runtime.ledger.committed(day=first.cost_day) == BOUND  # the whole upper bound stays counted

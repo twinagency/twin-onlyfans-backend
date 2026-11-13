@@ -167,12 +167,20 @@ class PackPlan:
         return list(self.media) + [m for m in self.previews if m not in self.media]
 
 
+async def _live_previews(account_id: str, tease: list[int], media: list[int]) -> list[int]:
+    """The free teaser frames: tease-rung ids the sale would sell, not already paid, rank order.
+    A preview rides inside the priced send, so a dead one fails it like a dead paid id; dropped
+    here it costs one frame, never the send."""
+    live = await content_resolver.sellable(account_id, tease)
+    return [m for m in tease if m in live and m not in media][:PREVIEW_MAX]
+
+
 async def _live_of_kind(account_id: str, media: list[int],
                         kind: str | None) -> list[int]:
-    """The ids still in her vault, narrowed to the promised KIND. ONE read.
+    """The ids the sale would sell (`content_resolver.sellable`), narrowed to the promised KIND.
 
-    Both facts are columns of the SAME mirror row, so asking for them separately
-    buys a second round-trip over the same id set on every priced send.
+    Sellable = `media_delivery.refusals` finds nothing: not removed, a photo/video kind, provider
+    metadata ready and not hidden/errored, inside the FansAPI selection.
 
     KIND is a promise: "send me a video" is not satisfied by a photo.
 
@@ -194,20 +202,15 @@ async def _live_of_kind(account_id: str, media: list[int],
     """
     if not media:
         return media
-    async with get_session() as s:
-        rows = (await s.execute(
-            select(VaultItem.media_id, VaultItem.kind).where(
-                VaultItem.account_id == str(account_id),
-                VaultItem.media_id.in_(media),
-                VaultItem.removed_at.is_(None))
-        )).all()
-    live = {int(m): str(k or "") for m, k in rows}
+    # Live = what the sale would sell (`content_resolver.sellable`), not merely un-removed:
+    # a not-ready / hidden / errored item is as undeliverable as a deleted one.
+    live = await content_resolver.sellable(account_id, media)
     # Only "photo"/"video" are real promises; anything else (None included) is
     # "he named no kind", which every kind satisfies.
     want = kind if kind in ("photo", "video") else None
     kept, dead = [], []
     for m in media:
-        k = live.get(m)                       # None = no live row, "" = no kind
+        k = live.get(m)                       # None = no sellable row
         if k is None:
             dead.append(m)
         elif want is None or k == want:
@@ -512,8 +515,8 @@ async def plan_pack(account_id: str, fan_id: int, category: str, rung: str, *,
     if priced.refusal is not None:
         return priced.refusal
 
-    tease = await shelf_media(account_id, category, "tease")
-    previews = [m for m in tease if m not in priced.media][:PREVIEW_MAX]
+    previews = await _live_previews(account_id, await shelf_media(account_id, category, "tease"),
+                                    priced.media)
     # Previews ride FREE inside the send and are never stamped owned, so they may
     # repeat across sends. `previews ⊆ media` is what the audit's rule 1 wants, so
     # they join the attached set while staying out of the paid count.

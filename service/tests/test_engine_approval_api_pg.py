@@ -574,7 +574,7 @@ def test_dashboard_does_not_label_unknown_send_as_a_receipt(api):
     assert any(item['kind'] == 'unknown_send' for item in get(api, 'unresolved').json()['items'])
 
 
-def test_unresolved_displays_unknown_model_cost_and_open_request(api):
+def test_unresolved_displays_unknown_model_cost_and_handover_request(api):
     from conversation_engine.model_client import FixtureChatClient, ModelOutcomeUnknown
     from conversation_engine.model_runtime import ModelRuntime
     from conversation_engine.writer_context import StaticCreatorProfiles, active_profile
@@ -586,7 +586,7 @@ def test_unresolved_displays_unknown_model_cost_and_open_request(api):
     assert result['outcome'] == 'refused' and len(client.requests) == 1 and api.fans.posts == []
     items = get(api, 'unresolved').json()['items']
     [call] = [item for item in items if item['kind'] == 'model_call']
-    [request] = [item for item in items if item['kind'] == 'open_request']
+    [request] = [item for item in items if item['kind'] == 'handover_request']  # unknown outcome: a human, now
     assert call['owner'] == 'operator' and call['nextStep'] == 'review_model_usage'
     assert 'do not assume it was free' in call['summary'].lower()
     assert request['owner'] and request['nextStep'] and request['conversationId'] == conv()

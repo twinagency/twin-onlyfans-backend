@@ -124,3 +124,10 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - Worker: 8ab70d0e, 9 files +159/-10, red→green 5 cases (measured). check.sh fast RED: 900s budget hit under 3-stream contention (38 PASS, promoted tests never reached).
 - Pre-existing base reds found (measured at 96609e23 by worker): test_contextual_release_pg::test_mode_save_preserves_scope_and_populated_rollback_retains_unknown, test_engine_defects_pg::test_r1_paused_plain_replies_cannot_pitch_price_or_claim_purchase, test_history_capacity_turns.py (3 errors); test_onlyfans_native_connector_pg 31/31 Errno 42 loopback (macOS env).
 - Timing run with CHECK_BUDGET_S=3600 started (measurement, not gate). rwl r1: Opus reviewer + Flash.
+
+## 2026-11-13 01:3xZ: lanes
+- F4 r2 e77ad4a1 (15 files +270/−29, migration 0134 skipped_input_id): rwl r2 running (Opus + Flash).
+- G01 60b7e89d (W3FA-03 webhook _resolve scoped per account; W2S-02 unreadable ownership evidence → Refused; 6 files +135/−8; gate GREEN 780s at 29f28729, with 2 env known-reds: commerce PG_BIN, media SO_ACCEPTCONN): rwl r1 running (tenancy/money = full rwl).
+- F4 timing run (CHECK_BUDGET_S=3600, little contention): >28 min and still in m* files at 01:30 (m). The cause is suite size (touched-area of store.py), not contention (i) → F0d worker: parallel per-file runner (CHECK_JOBS), or a fast/wide split; also known-reds the 4 a1151b1f base reds.
+- G02 (W2SC-02 pilot stop refused → rollback, LIVE stop) worker started, disjoint from F4/G01/F0d.
+- Workers: F0d, G02 (2/2).

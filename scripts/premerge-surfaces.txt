@@ -1,0 +1,48 @@
+# premerge (c2) surface groups: `<group> <service/path.py>` = a change to any member runs the tests that mention ANY member
+# (never deferred). `!<group> <path>  # why` = importer vetted as outside the group (no selection). Rot guard:
+# service/tests/test_check_harness.py fails until every service/ module importing a member is listed one way or the other.
+# safety: the reply-safety decision layer (detectors, judges, journey/hold policy). Hubs that only call it are excluded:
+# their own tests are large (engine +20, text_delivery +102, native_pilot/service +20) and run in check.sh wide.
+safety service/native_pilot/safety_detect.py
+safety service/conversation_engine/safety_context.py
+safety service/vision.py
+safety service/conversation_engine/journey.py
+safety service/conversation_engine/model_output.py
+safety service/onlyfans_runtime/conversation_policy.py
+safety service/onlyfans_runtime/operator_cases.py  # safety_detect.assess -> holds/cases on every sender
+safety service/conversation_engine/approval.py  # judge + enforce_journey on operator edits
+safety service/conversation_engine/model_runtime.py  # judge verdict gates model replies
+safety service/conversation_engine/writer_examples.py  # model_output rule/refusal regexes
+safety service/inbound_describe.py  # vision refusal on inbound fan media (reply context)
+# vetted importers: hubs/callers of the layer (not deciders), or unrelated to replies
+!safety service/conversation_engine/engine.py  # hub: journey hook + case caller
+!safety service/conversation_engine/real_worker.py  # worker: journey config/backfill
+!safety service/conversation_engine/commerce.py  # journey purchase scope only
+!safety service/conversation_engine/delivery.py  # approval token consume/invalidate
+!safety service/conversation_engine/operator.py  # approval invalidate
+!safety service/conversation_engine/operator_v2.py  # approval token store
+!safety service/conversation_engine/pilot_scope.py  # builds ModelRuntime
+!safety service/model_transport/__init__.py  # builds ModelRuntime
+!safety service/model_transport/wiring.py  # wiring: ModelRuntime + JsonlExamples
+!safety service/model_transport/pilot_draft.py  # journey_config only
+!safety service/model_transport/pilot_supervised.py  # journey_config only
+!safety service/tools/plan_c_sim.py  # offline sim tool
+!safety service/onlyfans_runtime/text_delivery.py  # hub: hold policy caller
+!safety service/native_pilot/service.py  # hub: hold policy caller
+!safety service/onlyfans_runtime/campaigns.py  # outbound campaigns: hold policy caller
+!safety service/onlyfans_runtime/native_worker.py  # operator_cases caller
+!safety service/onlyfans_runtime/handover.py  # operator_cases caller
+!safety service/onlyfans_runtime/operator_case_port.py  # open_case caller
+!safety service/onlyfans_runtime/quote.py  # open_case caller
+!safety service/onlyfans_runtime/store.py  # operator_cases caller
+!safety service/automations/sales_turn.py  # open_case caller
+!safety service/moxy_replacement/controls.py  # operator_cases caller
+!safety service/moxy_replacement/customs.py  # open_case caller
+!safety service/moxy_replacement/runtime.py  # open_case/policy_facts caller
+!safety service/onlyfans_commands/api.py  # operator_cases read API
+!safety service/onlyfans_read/api.py  # operator_cases read API
+!safety service/messages.py  # redescribe_inbound caller
+!safety service/webhook_dispatch.py  # describe_inbound_message caller
+!safety service/native_pilot/photo_vision.py  # describe_inbound_message caller
+!safety service/vault_frames.py  # vault frame extraction, not replies
+!safety service/vault_ai_api.py  # vault captioning, not replies

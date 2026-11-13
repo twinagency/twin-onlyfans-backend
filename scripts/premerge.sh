@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # FIX-MODE pipeline gate (added in the first fix PR; CI is billing-locked): every fix PR runs it.
 #   scripts/premerge.sh [extra test files...]   env: BASE PY ONLYFANS_TEST_PG_URL ALLOW_SKIP=1 CHECK_JOBS CHECK_FILE_TIMEOUT_S
+#                                                    PREMERGE_LIST=1 (print the target list by section, run nothing, exit 3)
 #                                                    PREMERGE_DEFER_AFTER_S PREMERGE_STOP_AT_S (both set by check.sh fast)
 # (a) lint python changed since merge-base($BASE) (syntax + undefined names)
 # (b) pytest: changed service/tests/**/test_*.py + extra args        (c) scripts/premerge-promoted.txt (path[::test]/line)
+# (c2) surface: a changed module listed in scripts/premerge-surfaces.txt (`<group> <path>`) pulls the tests that mention
+#     ANY module of its group (mention is not transitive; `!<group> <path>` = vetted importer, no selection)
 # (d) touched-area: tests that mention a changed module. (d) targets not started by PREMERGE_DEFER_AFTER_S, or cut at
-#     PREMERGE_STOP_AT_S (s since start; only when that cut fired), print "DEFERRED to wide: <t>"; (b)+(c) are never
+#     PREMERGE_STOP_AT_S (s since start; only when that cut fired), print "DEFERRED to wide: <t>"; (b)+(c)+(c2) are never
 #     deferred. Targets (deduped, first section wins) run CHECK_JOBS (3) at a time, each its own process, output printed
 #     in list order; files in scripts/premerge-serial.txt (contention-flaky) run alone. TERM/INT reaps running targets.
 # Exit 0 = OK, 1 = FAILED, 2 = INCOMPLETE (something skipped, ALLOW_SKIP=1 accepts; or no timeout binary). Pre-existing
@@ -19,11 +22,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 BASE="${BASE:-origin/claude/commercial-r0-r3-20261111}"
 PY="${PY:-$( [ -x .venv/bin/python ] && echo "$ROOT/.venv/bin/python" || echo "$ROOT/venv/bin/python" )}"
-PROMOTED=scripts/premerge-promoted.txt KNOWN=scripts/premerge-known-red.txt
+PROMOTED=scripts/premerge-promoted.txt KNOWN=scripts/premerge-known-red.txt SURF=scripts/premerge-surfaces.txt
 export PYTHONPATH="$ROOT:$ROOT/service:$ROOT/service/tests:$ROOT/ops/plan-c-supervision${PYTHONPATH:+:$PYTHONPATH}"
 export HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 NO_PROXY= no_proxy=
 git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || { echo "premerge: FAILED (unknown BASE $BASE)"; exit 1; }
-[ -f "$PROMOTED" ] || { echo "premerge: FAILED (missing $PROMOTED)"; exit 1; }
+for f in "$PROMOTED" "$SURF"; do [ -f "$f" ] || { echo "premerge: FAILED (missing $f)"; exit 1; }; done
 MB="$(git merge-base "$BASE" HEAD)"
 JOBS="${CHECK_JOBS:-3}"; [[ $JOBS =~ ^[1-9][0-9]?$ ]] || { echo "premerge: FAILED (CHECK_JOBS=$JOBS not 1..99)"; exit 1; }
 FTO="${CHECK_FILE_TIMEOUT_S:-600}"; [[ $FTO =~ ^[1-9][0-9]{0,4}$ ]] || { echo "premerge: FAILED (CHECK_FILE_TIMEOUT_S=$FTO)"; exit 1; }
@@ -35,6 +38,7 @@ reap() { local p; for p in "$out"/*.pid; do [ -f "$p" ] && kill -TERM -- "-$(cat
 trap 'reap; rm -rf "$list" "$out"' EXIT; trap 'exit 143' TERM HUP; trap 'exit 130' INT  # inner timeouts lead own pgroups
 git diff --name-only --diff-filter=d "$MB" >"$list"; git ls-files --others --exclude-standard >>"$list"
 changed=(); while IFS= read -r f; do changed+=("$f"); done < <(sort -u "$list" | grep '\.py$' || true)
+gone=(); while IFS= read -r f; do gone+=("$f"); done < <(git diff --name-only --diff-filter=D "$MB" | grep '^service/.*\.py$' || true)
 fail=0 skip=0 kr=0
 
 echo "== (a) lint (${#changed[@]} changed .py vs ${MB:0:8})"
@@ -44,19 +48,28 @@ if [ "${#changed[@]}" -gt 0 ]; then
   else "$PY" -m py_compile "${changed[@]}" || fail=1; echo "SKIP undefined-name lint (no ruff/pyflakes; py_compile only)"; skip=$((skip+1)); fi
 fi
 
-tests=() area=()
+mentions() {  # tests that import service/<path>.py by its dotted path (or name it in a string, e.g. monkeypatch);
+  # a bare word match pulled in prose and stdlib (`from http.server import`) for server.py
+  local dot mod parent dq re; dot="${1#service/}"; dot="${dot%.py}"; dot="${dot//\//.}"; mod="${dot##*.}"; parent="${dot%.*}"; dq="${dot//./\\.}"
+  re="^[[:space:]]*(import|from)[[:space:]]+(service\\.)?$dq([[:space:]]|\\.|,|\$)|[\"'](service\\.)?$dq[.\"']"
+  [ "$parent" != "$dot" ] && re="$re|^[[:space:]]*from[[:space:]]+(service\\.)?${parent//./\\.}[[:space:]]+import[[:space:]].*\\b$mod\\b"
+  grep -rlE --include='test_*.py' "$re" service/tests || true
+}
+tests=() area=() surf=() groups=""
+surface() {  # (c2): every group listing $1 (here or at the merge-base) pulls the tests that mention any of its members
+  local g m t; for g in $( { cat "$SURF"; git show "$MB:$SURF" 2>/dev/null || true; } | awk -v f="$1" '$1 !~ /^[#!]/ && $2 == f {print $1}' | sort -u); do
+    [[ "$groups " == *" $g "* ]] && continue; groups+=" $g"
+    for m in $(awk -v g="$g" '$1 == g {print $2}' "$SURF"); do while IFS= read -r t; do surf+=("$t"); done < <(mentions "$m"); done
+  done
+}
 for f in "${changed[@]+"${changed[@]}"}"; do
   case "$f" in
     service/tests/*) case "$(basename "$f")" in test_*.py) tests+=("$f");; esac;;
     service/*) [ "$(basename "$f")" = __init__.py ] && continue
-      # tests that import the module by its dotted path (or name it in a string, e.g. monkeypatch);
-      # a bare word match pulled in prose and stdlib (`from http.server import`) for server.py
-      dot="${f#service/}"; dot="${dot%.py}"; dot="${dot//\//.}"; mod="${dot##*.}"; parent="${dot%.*}"; dq="${dot//./\\.}"
-      re="^[[:space:]]*(import|from)[[:space:]]+(service\\.)?$dq([[:space:]]|\\.|,|\$)|[\"'](service\\.)?$dq[.\"']"
-      [ "$parent" != "$dot" ] && re="$re|^[[:space:]]*from[[:space:]]+(service\\.)?${parent//./\\.}[[:space:]]+import[[:space:]].*\\b$mod\\b"
-      while IFS= read -r t; do area+=("$t"); done < <(grep -rlE --include='test_*.py' "$re" service/tests || true);;
+      while IFS= read -r t; do area+=("$t"); done < <(mentions "$f"); surface "$f";;
   esac
 done
+for f in "${gone[@]+"${gone[@]}"}"; do surface "$f"; done  # a deleted member (base's list: it may be unlisted now)
 promoted=(); while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) promoted+=("$l");; esac; done <"$PROMOTED"
 serial=" $(grep -hv '^#' scripts/premerge-serial.txt 2>/dev/null | tr '\n' ' ' || true)"
 known=(); [ -f "$KNOWN" ] && while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) known+=("$l");; esac; done <"$KNOWN"
@@ -97,13 +110,16 @@ run() {  # one process per target, like run-service-tests.py isolation
 targets=() seen=$'\n'  # deduped across sections: first occurrence wins
 add() { local t; while IFS= read -r t; do [ -z "$t" ] || [[ $seen == *$'\n'"$t"$'\n'* ]] || { targets+=("$t"); seen+="$t"$'\n'; }; done; }
 add < <(printf '%s\n' "${tests[@]+"${tests[@]}"}" "$@" | sort -u); nc=${#targets[@]}
-add < <(printf '%s\n' "${promoted[@]+"${promoted[@]}"}"); nd=${#targets[@]}
+add < <(printf '%s\n' "${promoted[@]+"${promoted[@]}"}"); np=${#targets[@]}
+add < <(printf '%s\n' "${surf[@]+"${surf[@]}"}" | sort -u); nd=${#targets[@]}
 add < <(printf '%s\n' "${area[@]+"${area[@]}"}" | sort -u)
 n=0 total=${#targets[@]} deferred=0 defer_at="${PREMERGE_DEFER_AFTER_S:-}" stop_at="${PREMERGE_STOP_AT_S:-}"
-hdr() { [ "$1" = 0 ] && echo "== (b) changed tests ($nc)"; [ "$1" = "$nc" ] && echo "== (c) promoted tests ($((nd - nc)))"
+hdr() { [ "$1" = 0 ] && echo "== (b) changed tests ($nc)"; [ "$1" = "$nc" ] && echo "== (c) promoted tests ($((np - nc)))"
+  [ "$1" = "$np" ] && echo "== (c2) surface tests ($((nd - np)), groups:${groups:- none})"
   [ "$1" = "$nd" ] && echo "== (d) touched-area tests ($((total - nd)), CHECK_JOBS=$JOBS)"; return 0; }
 flush() { local f s k d; while [ "$n" -lt "$1" ] && [ -f "$out/$n.n" ]; do hdr "$n"; cat "$out/$n"; read -r f s k d <"$out/$n.n"
   fail=$((fail | f)) skip=$((skip + s)) kr=$((kr + k)) deferred=$((deferred + d)) n=$((n + 1)); done; }
+[ "${PREMERGE_LIST:-}" = 1 ] && { for ((i = 0; i <= total; i++)); do hdr "$i"; [ "$i" = "$total" ] || echo "${targets[$i]}"; done; exit 3; }  # 3: not a pass
 for ((i = 0; i < total; i++)); do
   lim=$JOBS; [[ $serial == *" ${targets[$i]%%::*} "* ]] && lim=1  # serial lane: drain the pool, run alone
   while [ "$(jobs -rp | wc -l)" -ge "$lim" ]; do sleep 0.2; flush "$i"; done

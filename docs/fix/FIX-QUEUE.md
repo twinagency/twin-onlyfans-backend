@@ -266,3 +266,8 @@ Live confirm after F3 (or F4) and after F6.
 - **NP429 — major, send re-enable gate**: native_pilot/runner.py:259-272 turns a 429 on the POST into NotSent("provider-rate-limited", retry=True) → re-POST (test_native_pilot_service.py:830 asserts 2 posts). Fix: send-time 429 → delivery_unknown + cooldown (D429). Pre-existing, outside W7CS-01 diff.
 - Deferred (W7CS-10/W3RD-07 group): 401 after POST → not_accepted; may be delivered. Switch W7CS-01 cooldown to apply_provider_pacing when c9ff2c98 lands.
 - W7CS-01 minors 2-4 fixed in a274e497 (native 429 cooldown, unconfirmed-hold operator case, test rename).
+
+## G-DS follow-ups (worker 5c5e9a45, 2026-11-13)
+- **GDS-2 — major, send gate**: engine sends with no pilot ignore send_blocked (pilot_scope.py:365-377 early return); plain configure re-enable → enabled=True + send_blocked=True. Fix: send_blocked checked regardless of pilot / configure refuses enable while blocked.
+- GDS-3 minor (auth): send_stop_failed hold only surfaced with active pilot scope + 3 reasons; not in _REPROJECTABLE_DETAILS (never re-driven).
+- W3CEA-07: pending unlinked transaction freeze vs test_fans_intake_pg design (unlinked money does not freeze) → OWNER Q; worker xfail(strict) for that case.

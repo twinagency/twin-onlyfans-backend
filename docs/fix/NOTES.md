@@ -161,3 +161,4 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - Gates restarted on new harness (default 900s budget, CHECK_JOBS=2 each): G01b rebased 843485e0 (known-red union + dedupe), G02 rebased. Old gates stopped.
 - Stack restart: 2 merges since a1151b1f; due after G01b (3).
 - G02 gate GREEN (11 deferred) 623s (m); deferred run by hand. G01b gate INFRA 687s: 6 opt-in transcript skips (m) → rerun ALLOW_SKIP=1 + 8 deferred by hand. F0e queued.
+- 2026-11-13: G02 merged #94 e5903d1b (fast GREEN 11 deferred 623s; deferred 10 pass, u3_readiness 6 red = base, /proc boot_id macOS). Local target ff'd. G01b deferred: commerce_pg `test_encrypted_restore_...` red at base e5903d1b too (KeyError ONLYFANS_TEST_PG_BIN, env); media_pg = known-red SO_ACCEPTCONN. Merges since stack a1151b1f: 3 (G01a, F0d, G02) → restart due.

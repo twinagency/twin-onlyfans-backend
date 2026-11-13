@@ -319,3 +319,4 @@ Live confirm after F3 (or F4) and after F6.
 - G09 worker done: 12f468a5 (+75/-9), F3 red 4/4 → green, 318 related PG tests pass (measured). Flash + Opus DA running. G05-G worker dispatched (fix/G05-G-minor-signal-coverage).
 - W3RCB-01b Opus DA: APPROVE. Minor (DA I2 smaller rule): also skip a creator markup row on archive pages (before_id set) so offer import never goes permanently unresolved → apply after Flash.
 - OQ-3R Opus DA: REQUEST CHANGES (major, measured): red on the merged tree, 2 G06g [fansapi] cases. Fixed 2ea156f8 (me, target 408ce701 merged): G06* sale-gate suites 95/95. **Conflict watch:** G06g-b also edits test_g06g (preview case [1,5]/[5]); reconcile on whichever merges second.
+- Batch5 rwl complete: Opus correctness (F1→G06g-b, F2→W3RCB-01b), Opus DA (D1→G06i, D2≡F2), Flash 8bd29f3d (1 maj ≡ GDS-6, queued; adds: every send must consult the link stop, not only engine actions).

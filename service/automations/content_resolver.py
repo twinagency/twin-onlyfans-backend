@@ -117,6 +117,30 @@ async def sellable(account_id: str, media, session=None) -> dict[int, str]:
     return {int(r.media_id): str(r.kind or "") for r in rows if r.media_id not in refused}
 
 
+_SCAN_MAX = 5000          # rows one sellable window may page through (bounds a mostly-refused vault)
+
+
+async def sellable_window(account_id: str, q, limit: int, session=None) -> list:
+    """First ``limit`` rows of ordered select ``q`` that `sellable` keeps (G06h).
+
+    A fixed LIMIT then the gate let refused rows fill the window and hide sellable ones deeper in the
+    table. This pages ``q`` by ``limit`` past refused rows until the window is full, the table ends, or
+    ``_SCAN_MAX`` rows are scanned. ``q`` is ``select(VaultItem)`` (entities back) or columns led by
+    the media id (rows back); its order must be total (end on a unique key) so pages never skip or repeat."""
+    entity = q.column_descriptions[0]["expr"] is VaultItem
+    out: list = []
+    for offset in range(0, _SCAN_MAX, limit):
+        async with (session or get_session)() as s:
+            res = await s.execute(q.offset(offset).limit(limit))
+            page = res.scalars().all() if entity else res.all()
+        ids = [r.media_id if entity else r[0] for r in page]
+        keep = await sellable(account_id, ids, session=session)
+        out += [r for r, m in zip(page, ids) if int(m) in keep]
+        if len(out) >= limit or len(page) < limit:
+            break
+    return out[:limit]
+
+
 async def _curated_pool(account_id: str, category: str, rung: str | None,
                         seen: set[int]) -> list[tuple[int, str]]:
     """Unseen items from the OPERATOR-CURATED shelf for a category.
@@ -195,58 +219,55 @@ async def _described_pool(account_id: str, seen: set[int],
     precision. Nothing may ship from here without passing it.
     """
     terms = [t for t in (terms or []) if t]
-    async with get_session() as s:
-        q = select(VaultItem.media_id, VaultItem.kind, VaultItem.search_text,
-                   VaultItem.description, VaultItem.video_description).where(
+    q = select(VaultItem.media_id, VaultItem.kind, VaultItem.search_text,
+               VaultItem.description, VaultItem.video_description).where(
+        VaultItem.account_id == str(account_id),
+        VaultItem.removed_at.is_(None),
+    )
+    if media_kind in MEDIA_KINDS:
+        q = q.where(VaultItem.kind == media_kind)
+    if terms:
+        blob = func.lower(
+            func.coalesce(VaultItem.search_text, "")
+            + " " + func.coalesce(VaultItem.description, "")
+            + " " + func.coalesce(VaultItem.video_description, "")
+            + " " + func.coalesce(VaultItem.ai_fields_json, ""))
+        q = q.where(or_(*[blob.like(f"%{t}%") for t in terms]))
+    # 🚨 RANK IN SQL, so the LIMIT keeps the most RELEVANT rows.
+    #
+    # This used to order by `created_at` and limit to 600, then rank by hit
+    # count in Python — which ranks only what the recency window happened to
+    # let through. That is the same bug the docstring above warns about, one
+    # level down: with a broad term set, 600-newest is a recency window
+    # wearing a relevance costume.
+    #
+    # It also cost a whole mechanism. A `drop_useless_terms()` guard was
+    # added to stop broad terms dragging the vault into that window, and it
+    # deleted `breasts` (61% of this vault) — the exact word the lexicon
+    # exists to produce. Ordering by score removes the need for the guard
+    # entirely: a broad term contributes 1 to many rows and simply sorts
+    # below `feet+soles+toes`, which is what a score is for.
+    score = (
+        sum((case((blob.like(f"%{t}%"), 1), else_=0) for t in terms),
+            literal(0))
+        if terms else literal(0))
+    # The gate runs INSIDE the window (G06h): a refused row never takes a sellable one's slot.
+    rows = await sellable_window(account_id, q.order_by(
+        score.desc(), VaultItem.created_at.desc(), VaultItem.media_id.desc()), _CANDIDATES_MAX * 4)
+    if not rows and terms:
+        # Nothing sellable matched. That is a vocabulary miss, NOT "he has seen
+        # everything" — degrade to a broad pool and let the matcher judge,
+        # rather than refusing a fan who genuinely asked for something.
+        log.info("retrieval miss account=%s terms=%s — broad fallback",
+                 account_id, terms[:6])
+        broad = select(VaultItem.media_id, VaultItem.kind, VaultItem.search_text,
+                       VaultItem.description, VaultItem.video_description).where(
             VaultItem.account_id == str(account_id),
-            VaultItem.removed_at.is_(None),
-        )
+            VaultItem.removed_at.is_(None))
         if media_kind in MEDIA_KINDS:
-            q = q.where(VaultItem.kind == media_kind)
-        if terms:
-            blob = func.lower(
-                func.coalesce(VaultItem.search_text, "")
-                + " " + func.coalesce(VaultItem.description, "")
-                + " " + func.coalesce(VaultItem.video_description, "")
-                + " " + func.coalesce(VaultItem.ai_fields_json, ""))
-            q = q.where(or_(*[blob.like(f"%{t}%") for t in terms]))
-        # 🚨 RANK IN SQL, so the LIMIT keeps the most RELEVANT rows.
-        #
-        # This used to order by `created_at` and limit to 600, then rank by hit
-        # count in Python — which ranks only what the recency window happened to
-        # let through. That is the same bug the docstring above warns about, one
-        # level down: with a broad term set, 600-newest is a recency window
-        # wearing a relevance costume.
-        #
-        # It also cost a whole mechanism. A `drop_useless_terms()` guard was
-        # added to stop broad terms dragging the vault into that window, and it
-        # deleted `breasts` (61% of this vault) — the exact word the lexicon
-        # exists to produce. Ordering by score removes the need for the guard
-        # entirely: a broad term contributes 1 to many rows and simply sorts
-        # below `feet+soles+toes`, which is what a score is for.
-        score = (
-            sum((case((blob.like(f"%{t}%"), 1), else_=0) for t in terms),
-                literal(0))
-            if terms else literal(0))
-        rows = (await s.execute(
-            q.order_by(score.desc(), VaultItem.created_at.desc())
-             .limit(_CANDIDATES_MAX * 4)
-        )).all()
-        if not rows and terms:
-            # The scan found nothing. That is a vocabulary miss, NOT "he has seen
-            # everything" — degrade to a broad pool and let the matcher judge,
-            # rather than refusing a fan who genuinely asked for something.
-            log.info("retrieval miss account=%s terms=%s — broad fallback",
-                     account_id, terms[:6])
-            broad = select(VaultItem.media_id, VaultItem.kind, VaultItem.search_text,
-                           VaultItem.description, VaultItem.video_description).where(
-                VaultItem.account_id == str(account_id),
-                VaultItem.removed_at.is_(None))
-            if media_kind in MEDIA_KINDS:
-                broad = broad.where(VaultItem.kind == media_kind)
-            rows = (await s.execute(
-                broad.order_by(VaultItem.created_at.desc()).limit(_CANDIDATES_MAX * 2)
-            )).all()
+            broad = broad.where(VaultItem.kind == media_kind)
+        rows = await sellable_window(account_id, broad.order_by(
+            VaultItem.created_at.desc(), VaultItem.media_id.desc()), _CANDIDATES_MAX * 2)
 
     # 🚨 SQL order is the ONLY order. There used to be a second scoring here — a
     # Python re-sort by term hits — and the two disagreed about what they were
@@ -259,10 +280,9 @@ async def _described_pool(account_id: str, seen: set[int],
     # One scoring, over the widest text, in the place that also applies the
     # LIMIT. `seen` is still filtered here because it is a per-fan set, not a
     # property of the corpus.
-    keep = await sellable(account_id, [m for m, *_ in rows])
     out: list[tuple[int, str]] = []
     for mid, _kind, search_text, desc, vdesc in rows:
-        if int(mid) in seen or int(mid) not in keep:
+        if int(mid) in seen:
             continue
         # Product readiness owns what counts as a description: a bare kind word ("photo", "audio", "gif")
         # is a placeholder, and a real description is used even when search_text holds the placeholder.

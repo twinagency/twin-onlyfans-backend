@@ -18,7 +18,7 @@ TO="$(command -v timeout || command -v gtimeout || true)"
 EV="${CHECK_EVIDENCE_ROOT:-$ROOT/.check-evidence}/$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 mkdir -p "$EV" || { echo "check $mode: INFRA (evidence dir not writable: $EV)" >&2; exit 2; }; T0=$SECONDS; red=0 infra=0 notes=()
 echo "check $mode: evidence $EV"; ndef=0
-trap 'p=$(cat "$EV/.pid" 2>/dev/null) && { kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p"; }; exit 130' INT TERM
+trap 'p=$(cat "$EV/.pid" 2>/dev/null) && { kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p"; }; exit 130' INT TERM HUP
 
 # step NAME LIMIT_S CMD: tee to $EV/NAME.log; LIMIT_S>0 = timeout -k cap (rc 124). Its pid goes to $EV/.pid for the trap.
 step() { local name=$1 lim=$2 s=$SECONDS rc; shift 2

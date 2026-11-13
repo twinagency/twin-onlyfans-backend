@@ -139,7 +139,7 @@ def _pm_repo(tmp_path, files, known="", promoted="# none\n", serial="# none\n"):
     for n, s in {"promoted": promoted, "known-red": known, "serial": serial}.items():
         (repo / f"scripts/premerge-{n}.txt").write_text(s)
     (repo / "service/m.py").write_text("X = 1\n")
-    (t / "test_uses_m.py").write_text("import m, os, time\ndef test_m():\n    os.environ.get('ZZ_KILL') and os.kill(os.getpid(), 9)"
+    (t / "test_uses_m.py").write_text("import m, os, time\ndef test_m():\n    os.environ.get('ZZ_KILL') and os.kill(os.getpid(), 9); os.environ.get('ZZ_124') and os._exit(124)"
                                       "\n    time.sleep(float(os.environ.get('ZZ_SLEEP', 0)))\n")
     _git(repo, "init", "-q"), _git(repo, "add", "."), _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b")
     (repo / "service/m.py").write_text("X = 2\n")
@@ -172,8 +172,8 @@ def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure
     assert "premerge: OK (0 skipped, 3 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
     r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S="3", ZZ_SLEEP="60")  # (d) still running at the stop time: cut, deferred
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py (cut at the fast budget)" in r.stdout, r.stdout
-    for stop in ("60", "600"):  # killed before the stop time (OOM, self-kill), or cap == per-file timeout: FAIL, not deferred
-        r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S=stop, ZZ_KILL="1")
+    for stop, how in [(s, h) for s in ("60", "600") for h in ("ZZ_KILL", "ZZ_124")]:  # killed / exit 124 before the cap
+        r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S=stop, **{how: "1"})  # (OOM, self-kill, a test's own 124): FAIL, not deferred
         assert r.returncode == 1 and "FAIL service/tests/test_uses_m.py" in r.stdout and "DEFERRED" not in r.stdout, r.stdout
 
 def test_premerge_per_file_timeout_fails_and_a_killed_run_reaps_inner_tests(tmp_path):
@@ -200,14 +200,15 @@ def _assert_dies(pid):
     finally:
         subprocess.run(["kill", "-9", str(pid)], capture_output=True)
 
-def test_check_interrupt_reaps_the_capped_step(tmp_path):
+@pytest.mark.parametrize('sig', [signal.SIGINT, signal.SIGHUP])
+def test_check_interrupt_reaps_the_capped_step(tmp_path, sig):
     pid_file = tmp_path / "pid"
     p = subprocess.Popen(["bash", str(tmp_path / "scripts/check.sh"), "fast"], cwd=_fake_repo(tmp_path, 'echo $$ >"$ZZ_PID"; exec sleep 60'),
                          env=_env(tmp_path, CHECK_BUDGET_S="120", ZZ_PID=str(pid_file)), start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,  # as from a shell: premerge's pool ignores INT
                          preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
     _wait(lambda: pid_file.exists() and pid_file.read_text(), 30)
-    os.killpg(p.pid, signal.SIGINT), p.wait(30)  # Ctrl-C reaches check.sh's group; timeout leads its own
+    os.killpg(p.pid, sig), p.wait(30)  # Ctrl-C reaches check.sh's group; timeout leads its own
     _assert_dies(int(pid_file.read_text()))
 
 def test_premerge_pool_limit_serial_lane_dedupe_pyflakes_lint_and_no_timeout(tmp_path):

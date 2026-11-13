@@ -73,7 +73,7 @@ run() {  # one process per target, like run-service-tests.py isolation
   [ "$t" = "$file" ] && is_script "$file" && cmd=("$file")
   "$TO" -k 5 "$cap" "$PY" "${cmd[@]}" >"$out/$i.o" 2>&1 & echo $! >"$out/$i.pid"
   wait $! && rc=0 || rc=$?; rm -f "$out/$i.pid"; res="$(cat "$out/$i.o")"; last="$(tail -1 <<<"$res")"
-  { [ "$rc" = 124 ] || { [ "$rc" = 137 ] && [ $((SECONDS - s)) -ge "$cap" ]; }; } && tmo=1  # the cap fired, not a kill
+  { [ "$rc" = 124 ] || [ "$rc" = 137 ]; } && [ $((SECONDS - s)) -ge "$cap" ] && tmo=1  # the cap fired, not a kill/own 124
   if [ "$rc" = 0 ]; then
     # pytest exits 0 on in-test skips/xfails: those cases did not run, so they are not a PASS.
     if [ "${cmd[0]}" = -m ] && tail -1 <<<"$res" | grep -qE '[0-9]+ (skipped|xfailed)'; then

@@ -47,7 +47,7 @@ class HeadState:
     def backed_off(self, now=None):
         """Conversations currently waiting out a failed-read backoff."""
         now = time.monotonic() if now is None else now
-        return sum(rec.due > now for rec in self.failed.values())
+        return sum(rec.count > 0 and rec.due > now for rec in self.failed.values())
 
 
 def _enqueue(state, fans, heads, *, priority, now):
@@ -225,10 +225,11 @@ def poll_recent(store, tenant, account, reader, *, connection_revision=None, clo
                 state.pending.popleft()
                 continue
             try:
-                applied += _read(store, tenant, account, revision,
+                count, page = _read(store, tenant, account, revision,
                     lambda: reader.messages(fan_id=fan, before_id=None, limit=PAGE_LIMIT),
-                    lambda page, claim: _commit(store, tenant, account, revision, fan, page, claim,
-                        history_only=connection_revision is not None))
+                    lambda page, claim: (_commit(store, tenant, account, revision, fan, page, claim,
+                        history_only=connection_revision is not None), page))
+                applied += count
             except (ReadDeferred, NativeRateLimitError, NativeAuthenticationError, Refused):
                 raise
             except Exception as exc:
@@ -241,6 +242,11 @@ def poll_recent(store, tenant, account, reader, *, connection_revision=None, clo
                     "attempts": attempts, "retrySeconds": delay}), flush=True)
             else:
                 state.failed.pop(fan, None)
+                head = state.heads.get(fan)
+                # Read from the top down past the head: if it is still missing (e.g. a tip with no
+                # conversation state) re-reading cannot help. Settle it (count 0) until the head changes.
+                if head is not None and (not page.has_more or page.next_before is not None and page.next_before <= head):
+                    state.failed[fan] = Failed(head, 0, clock() + MAX_FAN_BACKOFF_SECONDS)
             state.pending.popleft()
         # Keep catching arrivals below the first page, but bound this queue and
         # do not let a bad archive cursor prevent the next live-head poll.

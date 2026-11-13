@@ -67,8 +67,8 @@ def _recovers(store, account, reader, now, fan, mid):
 
 
 @pytest.mark.parametrize("bad_page", [
-    lambda: MessagePage([_event(GOOD, 300)], False),           # rows of another fan (_commit check)
-    lambda: MessagePage([_event(BAD, 300, "x" * 20001)], False),  # Event.normalized refusal
+    lambda store, account: MessagePage([_event(GOOD, 300)], False),           # rows of another fan (_commit check)
+    lambda store, account: MessagePage([_event(BAD, 300, "x" * 20001)], False),  # Event.normalized refusal
 ], ids=["other-fan-rows", "oversized-body"])
 def test_fan_specific_refusal_does_not_pin_the_inbox(native, monkeypatch, bad_page):
     store, account, reader = native
@@ -78,7 +78,7 @@ def test_fan_specific_refusal_does_not_pin_the_inbox(native, monkeypatch, bad_pa
 
     def messages(fan_id, **kw):
         calls[fan_id] += 1
-        return bad_page() if fan_id == BAD else MessagePage([_event(GOOD, 400)], False)
+        return bad_page(store, account) if fan_id == BAD else MessagePage([_event(GOOD, 400)], False)
 
     monkeypatch.setattr(reader, "messages", messages)
     _run(store, account, reader, now, 120, step=1)  # inbox_worker re-polls the account every second
@@ -188,3 +188,31 @@ def test_connection_fence_is_not_a_fan_failure(native, monkeypatch):
     with pytest.raises(Refused):
         _poll(store, account, reader, now)
     assert store._recent_inbox_states[(TENANT, account, 1)].failures == 0
+
+
+@pytest.mark.parametrize("has_more", [False, True])
+def test_covered_skipped_head_is_read_once_until_it_changes(native, monkeypatch, has_more):
+    """Tip-only head, fan without conversation state: _skipped_input stores nothing, so only memory stops re-reads."""
+    store, account, reader = native
+    now, head, calls = _fake_clock(monkeypatch), [305], [0]
+    monkeypatch.setattr(reader, "chats", lambda **kw: ChatPage([BAD], None, {BAD: head[0]}))
+    monkeypatch.setattr(reader, "messages", lambda **kw: calls.__setitem__(0, calls[0] + 1) or MessagePage(
+        [], has_more, next_before=head[0], skipped_inbound=(head[0],)))
+    _run(store, account, reader, now, 600)
+    assert calls[0] == 1, f"covered tip-only head re-read {calls[0]}x in 10 min"
+    head[0] = 306
+    _run(store, account, reader, now, 60)
+    assert calls[0] == 2, "a new head is read again"
+
+
+@pytest.mark.parametrize("page", [
+    lambda: MessagePage([_event(BAD, 300)], True),  # more below, legacy cursor: 305 not provably covered
+    lambda: MessagePage([], True, next_before=310, skipped_inbound=(310,)),  # cursor above the head
+], ids=["cursor-none", "cursor-above-head"])
+def test_uncovered_head_is_not_settled(native, monkeypatch, page):
+    store, account, reader = native
+    now, calls = _fake_clock(monkeypatch), [0]
+    monkeypatch.setattr(reader, "chats", lambda **kw: ChatPage([BAD], None, {BAD: 305}))
+    monkeypatch.setattr(reader, "messages", lambda **kw: calls.__setitem__(0, calls[0] + 1) or page())
+    _run(store, account, reader, now, 60)
+    assert calls[0] > 1, "uncovered head settled"

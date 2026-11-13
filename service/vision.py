@@ -58,7 +58,8 @@ def shrink_data_url(data_url: str, max_edge: int = MAX_EDGE_DEFAULT) -> str:
 _REFUSAL_OPENINGS = ("i'm sorry", "sorry", "i apologize", "apologies", "i can't", "i cannot", "can't assist", "cannot assist",
                      "can't help", "cannot help", "i'm unable", "i am unable", "unable to", "i'm not able", "i am not able",
                      "not able to", "unfortunately", "i'm afraid", "i must decline", "i won't", "i will not", "against my",
-                     "as an ai")
+                     "as an ai", "i'm not going to", "i am not going to", "i'd rather not", "i would rather not",
+                     "i'm not comfortable", "i am not comfortable", "i don't feel comfortable", "i do not feel comfortable")
 
 
 def is_refusal(text: str) -> bool:

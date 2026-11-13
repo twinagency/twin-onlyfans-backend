@@ -23,3 +23,9 @@ def test_g05_refusal_openings_cover_the_old_markers():
                  "This image violates our content policy, so I can't describe it.", "I must decline this request."):
         assert vision.is_refusal(text), text
     assert not vision.is_refusal("A woman in a red dress smiling at the camera in a sunlit kitchen.")
+
+
+def test_g05_polite_declines_are_refusals():
+    for text in ("I'm not going to describe this image.", "I'd rather not describe that.",
+                 "I am not comfortable describing this image.", "I don't feel comfortable describing this."):
+        assert vision.is_refusal(text), text

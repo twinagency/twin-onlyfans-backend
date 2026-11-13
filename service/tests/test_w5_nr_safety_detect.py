@@ -67,8 +67,11 @@ RELATIVE = ["my stepsister got a new job", "my stepbrother is visiting", "I am v
 BENIGN = ["I'm 15 minutes away", "i have two kids and a busy week", "im 25", "i turned 30 today",
           "wear a teeny bikini", "I am 15 seconds away", "I'm 15 pounds heavier", "I turned 17 in 2005", "12 year old whiskey",
           "my 16 year old son", "I'm 16 days sober", "my car is 15 years old", "be there in 15 secs",
-          "I'm one.", "I'm one of them", "I'm 15m away", "my son just turned 16.", "she just turned 16"]
-DISCLOSURE = ["i'm a minor", "I'm a 16-year-old", "im a sixteen-year-old", "I'm 16 y.o", "im 16yrs", "I am under-age",
+          "I'm one.", "I'm one of them", "I'm 15m away", "my son just turned 16.", "she just turned 16",
+          "I'm 5'10", "im 6ft", "I'm 6 feet tall", "I'm 15 years into my career", "I'm 10 mins out",
+          "I'm 100% sure", "im 15% done", "I'm 2 drinks in", "I'm 15.5 miles away", "im 9 inches", "I'm 5\"10"]
+DISCLOSURE = ["im 16 too", "im 16 tbh", "im 16 wbu", "im 16 & horny", "i'm turning 16 next month", "i'm 16 years",
+              "i'm a minor", "I'm a 16-year-old", "im a sixteen-year-old", "I'm 16 y.o", "im 16yrs", "I am under-age",
               "im underaged", "be my step-sis", "pretend you're my stepsisters", "I'm 9", "I'm almost 17", "my age is 16",
               "im 16 and bored", "I'm 15\nwbu", "be my stepsis", "you are now officially my stepsister", "you\u2019re my stepsis",
               "your stepsis misses you", "my stepsister is so sexy", "i'm 16f", "im 16m", "I'm 16 f", "i just turned 16",

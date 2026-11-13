@@ -147,17 +147,21 @@ _HARDSHIP = (
 )
 
 # Minor / age (W5NR-5): matched on the full text (before quote stripping); explicit disclosures are never exempt.
-# A stated age needs a first-person subject AND a positive terminator (clause end, "and"/"but", a chat filler like
-# "lol"/"rn", a time word "today"/"now", an emoji, "years old" / "yo" / "-year-old", or a sex "16f" / "16 male"), so
-# "I'm 15 minutes away" or "my car is 15 years old" are not ages.
+# A stated age needs a first-person subject; any continuation counts ("im 16 tbh", "16 & horny", "16 next month") unless
+# the number carries a quantity unit or a height mark, so "I'm 15 minutes away", "I'm 16 days sober", "I'm 5'10" and
+# "my car is 15 years old" are not ages. Fail-closed: an unlisted unit holds for a human, never sends.
+_QUANTITY_UNIT = (r"(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|wks?|months?|mos?|years?|yrs?|pounds?|lbs?|kgs?|kilos?|"
+                  r"grams?|miles?|mi|km|kms|kilomet(?:er|re)s?|met(?:er|re)s?|feet|foot|ft|inch(?:es)?|cm|mm|percent|dollars?|"
+                  r"bucks|usd|euros?|quid|cents?|times|blocks?|stops?|exits?|drinks?|beers?|shots?|rounds?|episodes?|games?|"
+                  r"points?|levels?|pages?|chapters?|steps?)")
 _MINOR = (
     re.compile(r"\b(?:under[\s-]?aged?|under\s*(?:18|eighteen)|jailbait|loli|lolita|shota|pedo\w*|school\s?(?:girl|boy)s?|"
                r"(?:i'?m|i\s+am|im)\s+(?:(?:still|only|just)\s+)?a\s+minor)\b", re.I),
     re.compile(rf"\b(?:(?:i'?m|i\s+am|im)\s+(?:turning|about\s+to\s+turn)|i\s+just\s+turned|i'?m|i\s+am|im|my\s+age\s+is|age\s*:)"
                rf"\s+(?:a\s+)?(?:(?:only|just|barely|still|almost)\s+)?{_UNDER_18}"
-               r"(?:\s*(?:-\s*)?(?:(?:years?|yrs?)[\s-]*(?:old|of\s+age)|yrs?|yo|y/o|y\.o|f|m(?!\s+(?:away|out|from|ahead|behind|late))|"
-               r"(?:fe)?male|today|now|this\s+year|last\s+(?:week|month)|tomorrow)\b|"
-               r"(?=\s*(?:[!?;\n]|[.,](?!\d)|$|(?:and|but|lol|haha+|lmao|tho|rn|btw|ok|okay)\b|[^\x00-\x7f])))", re.I),
+               r"(?:\s*(?:-\s*)?(?:(?:years?|yrs?)[\s-]*(?:old|of\s+age)|years?(?!\s*\w)|yrs?|yo|y/o|y\.o|f|m(?!\s+(?:away|out|from|ahead|behind|late))|"
+               r"(?:fe)?male)\b|"
+               rf"(?![\w'\"%$]|[.,]\d|\s*(?:-\s*)?{_QUANTITY_UNIT}\b|\s*m\s+(?:away|out|from|ahead|behind|late)\b))", re.I),
 )
 # Native minor set = sibling/child step terms + teen words (step-PARENT roleplay is adult; the engine's banned set is
 # broader by design). Never exempt, like the engine: "my stepsister got a job" is held for a human (G05).

@@ -138,3 +138,9 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F4 rwl r2: Opus + Flash FIX-THEN-MERGE; r3 list in /tmp/rwl-f4/FINDINGS.md (same-page tip helper after record, migration IF NOT EXISTS, unfiltered ids, tests; W6HR-2b tip-only re-read deferred). Split into PR-a column / PR-b logic if > 300 LOC. Waits for a slot.
 - F4 r1 timing run: RED at the 3600 s budget, 140 files, unfinished (m). test_native_pilot_service.py hung ~45 min (send-check-failed under the dead proxy) → a per-file timeout goes in F0d.
 - More base reds at a1151b1f (m): campaigns_pg 15 (identity None :99), moxy_input_supersession 1, moxy_vault_cross_lineage 1 (env: hardcoded /home/ronan path). multicreator_load passes at base in isolation (58 s); failed at 181 s under load (flake or F4; recheck at r3). → F0d.
+
+## 02:xxZ G01 split
+- G01 r1 fixes (e31e9e57): 14/14 green (m). Gate RED only on base reds (moxy_input_supersession; multicreator_load contention-flaky at base), 1746 s at budget 5400 (m). Total 356 LOC > 300 → split by root cause:
+  - G01a fix/G01a-webhook-scope 43e8ef5a (W3FA-03; 3 files +182/−7; 6/6 green, m)
+  - G01b fix/G01b-ownership-strict d7aeed45 (W2S-02 + Moxy per-fan hold + relay lenient; 6 files +154/−13; 8/8 green, m)
+- rwl r2 on both (Opus + Flash) running. F4 r3 worker started (slot 2; F0d is slot 1). native_pilot_service: base red, 62 s (m).

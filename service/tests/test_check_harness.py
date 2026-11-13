@@ -180,15 +180,20 @@ def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure
         assert r.returncode == 1 and "FAIL service/tests/test_uses_m.py" in r.stdout and "DEFERRED" not in r.stdout, r.stdout
 
 def test_premerge_known_red_script_pins_its_terminal_exception_not_an_earlier_one(tmp_path):
-    ctx = "raise RuntimeError('pinned 7\\n[SQL: CREATE x]\\n(Background on this error at: u)')"  # SQLAlchemy-style trailer
+    sql = lambda msg, stmt: f"raise RuntimeError('{msg}\\n[SQL: \\n{stmt} (\\n\\tx INT\\n)\\n\\n]\\n(Background on this error at: u)')"
+    ctx, log = sql("pinned 7", "CREATE x"), "import sys, traceback\ntry:\n    {}\nexcept RuntimeError:\n    traceback.print_exc({})\n"
     _, _, run = _pm_repo(tmp_path, {
-        "test_x1.py": ctx + "\n",  # terminal exception = the pin, trailer lines after it: KNOWN-RED
+        "test_x1.py": ctx + "\n",  # terminal exception + its statement = the pin, SQLAlchemy footer after it: KNOWN-RED
         "test_x2.py": f"try:\n    {ctx}\nexcept RuntimeError:\n    raise AssertionError\n",  # chained, message-less: FAIL
-        "test_x3.py": f"import traceback\ntry:\n    {ctx}\nexcept RuntimeError:\n    traceback.print_exc()\nraise SystemExit('later')\n"},
-        known="".join(f"service/tests/{k}.py RuntimeError: pinned #\n" for k in ("test_x1", "test_x2", "test_x3")))
+        "test_x3.py": log.format(ctx, "") + "raise SystemExit('later')\n",  # pinned error logged, later exit: FAIL
+        "test_x4.py": log.format(ctx, "file=sys.stdout") + "raise SystemExit('later')\n",  # same via buffered stdout: FAIL
+        "test_x5.py": log.format(ctx, "") + sql("other 7", "CREATE x") + "\n",  # earlier pin, later footer error: FAIL
+        "test_x6.py": sql("pinned 7", "CREATE y") + "\n",  # same error, another statement: FAIL
+        "test_x7.py": "import sys\nprint('(Background on this error at: u)'); sys.exit(1)\n"},  # footer, no exception: FAIL
+        known="".join(f"service/tests/test_x{k}.py RuntimeError: pinned # [SQL: CREATE x (]\n" for k in range(1, 8)))
     r = run()
-    assert "KNOWN-RED service/tests/test_x1.py: RuntimeError: pinned #" in r.stdout, r.stdout
-    assert "FAIL service/tests/test_x2.py" in r.stdout and "FAIL service/tests/test_x3.py" in r.stdout and r.returncode == 1, r.stdout
+    assert "KNOWN-RED service/tests/test_x1.py: RuntimeError: pinned # [SQL: CREATE x (]" in r.stdout, r.stdout
+    assert all(f"FAIL service/tests/test_x{k}.py" in r.stdout for k in range(2, 8)) and r.returncode == 1, r.stdout
 
 def test_premerge_per_file_timeout_fails_and_a_killed_run_reaps_inner_tests(tmp_path):
     hang = "import os, time\ndef test_hang():\n    open(os.environ.get('ZZ_PID', os.devnull), 'w').write(str(os.getpid()))\n    time.sleep(60)\n"

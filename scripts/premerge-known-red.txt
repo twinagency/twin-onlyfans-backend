@@ -1,6 +1,6 @@
 # Pre-existing reds, each measured failing on clean a253c84c. One per line: pytest node id (deselected), or a
 # script test file followed by the exact last output line it must fail with (output ending on SQLAlchemy's
-# "(Background on this error at" footer: its last `Name: msg` exception line), every digit run written as # (volatile
+# "(Background on this error at" footer: its last *Error/*Exception line + " [SQL: <statement's first line>]"), every digit run written as # (volatile
 # timestamps/ids). Script entries only for scripts that abort on their first failure (one failure = one last line);
 # never for multi-test scripts with a summary line. Remove an entry once it is fixed.
 # a253c84c: of_earnings_total DuplicateTable when upgrading from rev 91
@@ -52,4 +52,4 @@ service/tests/test_moxy_multicreator_load_pg.py::test_three_creators_concurrent_
 service/tests/test_w3_rcb_history_page.py::test_newer_valid_inbound_survives_one_bad_older_row[old-unsupported-formatting]
 # 1d2c5f36 (measured, G05/HARN-2): script, sqlite3 unrecognized token ":" creating of_engine_offer_grant (PG-only
 # `::jsonb` CHECK on SQLite); touched-area via conversation_policy, unrelated to G05; team base red, queued
-service/tests/test_commercial_full_path.py sqlalchemy.exc.OperationalError: (sqlite#.OperationalError) unrecognized token: ":"
+service/tests/test_commercial_full_path.py sqlalchemy.exc.OperationalError: (sqlite#.OperationalError) unrecognized token: ":" [SQL: CREATE TABLE of_engine_offer_grant (]

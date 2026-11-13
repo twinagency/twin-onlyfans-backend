@@ -11,7 +11,7 @@
 # Exit 0 = OK, 1 = FAILED, 2 = INCOMPLETE (something skipped, ALLOW_SKIP=1 accepts; or no timeout binary). Pre-existing
 # reds live in scripts/premerge-known-red.txt (proven red at base): pytest ids are deselected (a file whose every test
 # is listed passes only on pytest's exact "N deselected[, M warnings] in Xs", rc 5); a script must end on the listed line (SQLAlchemy
-# "(Background on this error at" footer: its last `Name: msg`/`Name` line), digit runs
+# "(Background on this error at" footer: its last *Error/*Exception line + " [SQL: <first line>]"), digit runs
 # written as # (volatile timestamps/ids) - only for scripts that abort on their first failure. Any other failure, or a
 # listed script that passes, FAILS. Network blocked via dead proxy. Each target is capped at CHECK_FILE_TIMEOUT_S (600):
 # over = FAIL; a killed target (rc 137 before its cap) = FAIL.
@@ -72,10 +72,13 @@ run() {  # one process per target, like run-service-tests.py isolation
     if [[ "$id" == "$t::"* ]]; then cmd+=(--deselect "$id"); echo "KNOWN-RED $id (deselected)"; kr=$((kr+1))
     elif [ "$id" = "$t" ]; then expect="$rest"; fi; done
   [ "$t" = "$file" ] && is_script "$file" && cmd=("$file")
-  "$TO" -k 5 "$cap" "$PY" "${cmd[@]}" >"$out/$i.o" 2>&1 & echo $! >"$out/$i.pid"
+  PYTHONUNBUFFERED=1 "$TO" -k 5 "$cap" "$PY" "${cmd[@]}" >"$out/$i.o" 2>&1 & echo $! >"$out/$i.pid"  # write order = file order
   wait $! && rc=0 || rc=$?; rm -f "$out/$i.pid"; res="$(cat "$out/$i.o")"; last="$(tail -1 <<<"$res")" pin="$last"
-  # SQLAlchemy appends "[SQL: ...]" + "(Background on this error at: ...)" after the message: pin its exception line
-  [[ $last == "(Background on this error at: "* ]] && pin="$(grep -E '^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |$)' <<<"$res" | tail -1)"
+  # SQLAlchemy ends on "[SQL: ...]" + "(Background on this error at: ...)": pin = last *Error/*Exception line + " [SQL: " +
+  # the statement's first line + "]", so another statement failing the same way is not the pin
+  [[ $last == "(Background on this error at: "* ]] && pin="$(awk '/^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |$)/ {e=$0; q=""; w=0; next}
+    e!="" && q=="" && sub(/^\[SQL: */, "") {w=1} w && q=="" && /[^ \t]/ {q=$0; sub(/[ \t]*\]?[ \t]*$/, "", q); w=0}
+    END {if (e!="") print e " [SQL: " q "]"}' <<<"$res")"
   { [ "$rc" = 124 ] || [ "$rc" = 137 ]; } && [ $((SECONDS - s)) -ge "$cap" ] && tmo=1  # the cap fired, not a kill/own 124
   if [ "$rc" = 0 ]; then
     # pytest exits 0 on in-test skips/xfails: those cases did not run, so they are not a PASS.

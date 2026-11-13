@@ -282,12 +282,52 @@ def _provenance(row, observation, job, connection, binding, *, current_revision=
         and observation.raw_hash == digest(row.raw_json))
 
 
+def unusable(raw):
+    """Reason the provider's own item metadata forbids offering an asset, else None.
+
+    The one readiness predicate for FansAPI import (vault_sync.classify), curation
+    (`_ready`) and every sale (`catalog_terms`). A missing isReady key is not judged
+    here (native rows may lack it); `_ready` and classify require isReady true.
+    """
+    if type(raw) is not dict:
+        return "unreadable"
+    if raw.get("isDeleted") is True or raw.get("isHidden") is True:
+        return "removed"
+    if raw.get("isReady") is False or raw.get("isProcessing") is True:
+        return "not_ready"
+    if raw.get("canView") is False:
+        return "cannot_view"
+    if raw.get("hasError"):
+        return "error"
+    return None
+
+
+def https_url(files, name):
+    node = files.get(name) if type(files) is dict else None
+    url = node.get("url") if type(node) is dict else None
+    return url if type(url) is str and url.startswith("https://") and len(url) <= 8192 else None
+
+
+def protected_source(raw):
+    files = raw.get("files")
+    return bool(raw.get("drm") or isinstance(files, dict) and files.get("drm"))
+
+
+def fansapi_drm(kind, raw):
+    """FansAPI video with a DRM marker or no progressive https full URL (files
+    missing included). FansAPI never offers it (OQ-3); native DRM stays offerable.
+    Curation keys "FansAPI" on the row's sync job; sale (media_delivery) on the
+    account's current delivery policy."""
+    return kind == "video" and (https_url(raw.get("files"), "full") is None or protected_source(raw))
+
+
 def _ready(row, observation, job, connection, binding):
     """Whether a verified native vault identity may be curated for an offer.
 
     The native message body contains vault media IDs, never CDN source URLs.
-    Protected videos legitimately have no progressive full-file URL. Playback
-    has its own source/cache checks in vault_video; it grants no offer rights.
+    Native protected videos legitimately have no progressive full-file URL.
+    FansAPI imports never offer DRM videos (OQ-3). Playback has its own
+    source/cache checks in vault_video; it grants no offer rights.
     """
     if row.removed_at is not None:
         return False, "removed"
@@ -304,14 +344,19 @@ def _ready(row, observation, job, connection, binding):
         raw = json.loads(row.raw_json)
     except (ValueError, TypeError):
         return False, "readiness_unknown"
+    if type(raw) is not dict:
+        return False, "readiness_unknown"
     if raw.get("id") != row.media_id or raw.get("type") != row.kind:
         return False, "unverified_owner"
-    if raw.get("isDeleted") is True or raw.get("isHidden") is True:
-        return False, "removed"
+    reason = unusable(raw)
+    if reason == "removed":
+        return False, reason
     if "isReady" not in raw:
         return False, "readiness_unknown"
-    if raw.get("isReady") is not True or raw.get("isProcessing") is True or raw.get("canView") is False or raw.get("hasError") is True:
+    if reason or raw.get("isReady") is not True:
         return False, "not_ready"
+    if fansapi and fansapi_drm(row.kind, raw):
+        return False, "drm"
     return True, None
 
 

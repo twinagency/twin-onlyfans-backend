@@ -23,7 +23,7 @@ import vault_still_store as images
 from vault_media_limits import MAX_BYTES, MIN_FREE_BYTES
 from .native_context import canonical
 from .store import Refused, utcnow
-from .vault_management import _connection, _identity
+from .vault_management import _connection, _identity, protected_source
 from .vault_previews import asset_scope, _paths
 
 SCHEMA = "vault-video.v1"
@@ -31,11 +31,6 @@ SCHEMA = "vault-video.v1"
 
 class ProtectedVideoUnavailable(Refused):
     """The owner may use a vault identity without a progressive playback URL."""
-
-
-def protected_source(raw):
-    files = raw.get("files")
-    return bool(raw.get("drm") or isinstance(files, dict) and files.get("drm"))
 
 
 def video_type(data):

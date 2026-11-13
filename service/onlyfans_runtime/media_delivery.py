@@ -27,6 +27,26 @@ def media_ids(raw):
     return ids
 
 
+def _unusable(row, fansapi):
+    """Provider metadata forbids the sale: vault_management.unusable, or on a FansAPI
+    account an item not isReady true (classify's rule; sync stores unready items too)
+    or a DRM video (OQ-3; native DRM stays offerable). Rows with no imported metadata
+    (legacy/synthetic; sync always writes it) carry no evidence; unreadable or
+    non-object metadata refuses."""
+    if row.raw_json is None:
+        return None
+    from .vault_management import fansapi_drm, unusable
+    try:
+        raw = json.loads(row.raw_json)
+    except (ValueError, TypeError):
+        return "unreadable"
+    reason = unusable(raw)
+    if reason or not fansapi:
+        return reason
+    return ("not_ready" if raw.get("isReady") is not True
+            else "drm" if fansapi_drm(row.kind, raw) else None)
+
+
 def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     """Bounded terms; send paths lock, readiness uses its read-only snapshot."""
     _id(item_id)
@@ -66,7 +86,10 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     media_query = select(VaultItem).where(VaultItem.account_id == account_id,
         VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)
     rows = session.scalars(media_query.with_for_update(read=True) if lock else media_query).all()
-    if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"} for r in rows):
+    from .provider_read_budget import native_family_clause
+    fansapi = not session.scalar(select(native_family_clause(account_id)))
+    if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"}
+                                    or _unusable(r, fansapi) for r in rows):
         raise Refused("catalogue media unavailable")
     snapshot = {"item": {key: getattr(item, key) for key in (
         "id", "account_id", "script_id", "enabled", "kind", "label", "description_for_ai",

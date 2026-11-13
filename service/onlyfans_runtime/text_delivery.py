@@ -1463,21 +1463,27 @@ class TextAuthority:
                            or getattr(exc, "status_code", None) == 401
                            or type(exc).__name__ == "NativeAuthenticationError")
             throttled = (isinstance(exc, ProviderThrottled)
-                         or getattr(exc, "status_code", None) == 429)
-            if auth_failed or throttled:
-                retry_after = getattr(exc, "retry_after", None)
+                         or getattr(exc, "status_code", None) == 429
+                         or type(exc).__name__ == "NativeRateLimitError")
+            if throttled and not auth_failed:
+                # D429 (same policy as the Fans API path): the POST already left, so a 429 is pacing evidence
+                # only, never proof of non-delivery. Cool down, then fall through to UNKNOWN (held, never replayed).
                 try:
-                    self._account_cooldown(
-                        tenant_id, account_id,
-                        seconds=300 if auth_failed else (retry_after if retry_after is not None else 10))
+                    retry_after = getattr(exc, "retry_after", None)
+                    self._account_cooldown(tenant_id, account_id,
+                                           seconds=retry_after if retry_after is not None else 10)
+                except Exception:  # noqa: BLE001 - a failed cooldown write must not change the uncertain outcome
+                    pass
+            elif auth_failed:
+                try:
+                    self._account_cooldown(tenant_id, account_id, seconds=300)
                 except Exception:
                     pass
                 rejection = NotAccepted(
                     account_id=grant.account_id, fan_id=grant.fan_id, intent_id=grant.intent_id,
                     attempt_id=grant.attempt_id, payload_hash=grant.payload_hash,
                     occurred_at=datetime.now(timezone.utc).isoformat(),
-                    evidence_ref=("fastt-auth-failed:" if auth_failed else "fastt-rate-limited:")
-                    + grant.attempt_id)
+                    evidence_ref="fastt-auth-failed:" + grant.attempt_id)
                 try:
                     return self.record_not_accepted(
                         tenant_id, account_id, intent_id, grant.token, rejection)

@@ -11,7 +11,8 @@ from db.onlyfans_delivery_models import OfTextIntent
 from db.onlyfans_moxy_models import MoxyEvent
 from onlyfans_runtime.campaigns import CampaignService
 from onlyfans_runtime.store import utcnow
-from onlyfans_runtime.text_delivery import SyntheticTextTransport, ProviderThrottled
+from onlyfans_runtime.text_delivery import SyntheticTextTransport
+from test_moxy_provider_recovery_pg import legacy_rate_limited
 
 
 def test_campaign_provider_rejection_is_owned_visible_and_not_resent(database, monkeypatch):
@@ -21,8 +22,7 @@ def test_campaign_provider_rejection_is_owned_visible_and_not_resent(database, m
     generator = model(decision(text='How has your training been?'))
     service.prepare(TENANT, ACCOUNT, identity, generator)
     intent = service.queue(TENANT, ACCOUNT, identity)
-    def throttled(*args, **kwargs): raise ProviderThrottled(retry_after=30)
-    monkeypatch.setattr(SyntheticTextTransport, 'send', throttled)
+    monkeypatch.setattr(SyntheticTextTransport, 'send', legacy_rate_limited)  # pre-D429 stored rejection
     assert authority.dispatch(TENANT, ACCOUNT, intent, SyntheticTextTransport(ACCOUNT)) == 'not_accepted'
     fresh = model(decision())
     assert service.step(TENANT, ACCOUNT, fresh) == 0

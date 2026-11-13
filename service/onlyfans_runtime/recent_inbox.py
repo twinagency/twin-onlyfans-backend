@@ -14,7 +14,7 @@ import threading
 
 from sqlalchemy.orm import Session
 
-from db.models import Message
+from db.models import Message, OfConversationState
 from db.onlyfans_models import OfIngress, OfRecovery
 from .provider_read_budget import acquire, current, release, ReadDeferred
 from .store import PAGE_LIMIT, MAX_PENDING, Refused, utcnow
@@ -92,9 +92,11 @@ def _missing(store, tenant, account, revision, page, claim):
         apply_profiles(s,runtime,page.fan_ids,getattr(page,"profiles",{}),getattr(page,"creator_profile",None))
         # Last-message identities are hints only. Missing hints cause a bounded
         # message read, never a completeness assertion or an archive reset.
+        # A skipped head (tip) already counted is present, not re-read every poll.
         return [fan for fan in page.fan_ids
                 if page.heads.get(fan) is None
-                or s.get(Message, (account, fan, page.heads[fan])) is None]
+                or s.get(Message, (account, fan, page.heads[fan])) is None
+                and page.heads[fan] > ((state := s.get(OfConversationState, (account, fan))) and state.skipped_input_id or 0)]
 
 
 def _commit(store, tenant, account, revision, fan, page, claim, *, history_only):
@@ -127,6 +129,7 @@ def _commit(store, tenant, account, revision, fan, page, claim, *, history_only)
             if row is not None and row.status == "pending":
                 store._apply(s, runtime, row, history_only=history_only)
                 applied += 1
+        store._skipped_input(s, runtime, fan, page.skipped_inbound, ids, None)
         # Ensure a newly discovered fan still gets archive recovery. An
         # existing unfinished archive retains its exact cursor and generation.
         recovery = s.get(OfRecovery, (account, fan))

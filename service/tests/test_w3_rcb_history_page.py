@@ -86,3 +86,20 @@ def test_visible_text_behind_unsupported_markup_refuses_never_drops(text, tmp_pa
     old = native_message(10, owner=OWNER, text=text)
     with pytest.raises(NativeProtocolError):
         _read_page([newer, old], tmp_path)
+
+
+# Opus-final W3RCB-01 r1 (major): a fan's markup-only row with no newer fan text kept on the page
+# would leave Store._skipped_input re-arming the reply onto an older message: refuse (fail closed).
+def test_newest_fan_markup_only_row_refuses_the_page(tmp_path):
+    newest = native_message(20, owner=OWNER, text='<p><img src="x"></p>')
+    older = native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")
+    with pytest.raises(NativeProtocolError):
+        _read_page([newest, older], tmp_path)
+
+
+def test_creator_markup_only_row_is_skipped_even_when_newest(tmp_path):
+    newest = native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')
+    older = native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")
+    page = _read_page([newest, older], tmp_path)
+    assert [event.message_id for event in page.events] == [10] and page.skipped_inbound == ()
+    assert page.next_before == 10

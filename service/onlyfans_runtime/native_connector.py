@@ -63,9 +63,11 @@ def _skip_reason(row, *, owner_id, fan_id):
     tip and these rows carry no conversation text. A row with no media, no
     price and no visible text whose sole defect is unsupported history markup
     (e.g. a bare inline image tag) is skipped too, so one odd older body never
-    blocks newer inbound. A row whose markup wraps visible text still refuses:
-    the protocol never silently loses fan words. Every other row the strict
-    parser rejects still refuses the whole page.
+    blocks newer inbound; messages() still refuses when such a fan row has no
+    newer fan text on the page. A row whose markup wraps visible text still
+    refuses: the protocol never silently loses fan words. A skipped creator row
+    is not stored (accepted: no text, no media, no price). Every other row the
+    strict parser rejects still refuses the whole page.
     """
     try:
         _id(row["id"])
@@ -224,12 +226,16 @@ class NativeLoopbackConnector:
                 # Only whitelisted, in-scope rows are skipped; any other
                 # unsupported or malformed row still refuses the page.
                 reason = _skip_reason(row, owner_id=self._handle.owner_id, fan_id=fan_id)
-                if reason is None:
+                fan_row = _id(row["fromUser"]["id"]) == fan_id if reason is not None else False
+                # A fan's markup-only row with no newer fan text kept on this page
+                # would leave the engine replying to an older message: refuse.
+                if reason is None or reason == "formatting" and fan_row and not any(
+                        event.direction == "in" for event in events):
                     raise
                 skipped[reason] = skipped.get(reason, 0) + 1
                 indexes.append(index)
                 ids.append(_id(row["id"]))
-                if _id(row["fromUser"]["id"]) == fan_id:
+                if fan_row:
                     inbound.append(_id(row["id"]))
                 continue
             kept.append(row); events.append(event); ids.append(event.message_id)

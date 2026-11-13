@@ -1294,9 +1294,9 @@ async def _refuse_unusable_media(s, account_id: str, clean: list[dict]) -> None:
     mirrored yet) saves and stays refused at the sale."""
     from db.models import VaultItem
     from onlyfans_runtime.media_delivery import refusal
-    stored = set((await s.scalars(select(CatalogItem.media_ids).where(CatalogItem.account_id == account_id,
-        CATALOG_IS_SINGLE, CatalogItem.enabled.is_(True)))).all())
-    ids = {m for it in clean if it["enabled"] and it["media_ids"] not in stored for m in json.loads(it["media_ids"])}
+    stored = {tuple(json.loads(m)) for m in (await s.scalars(select(CatalogItem.media_ids).where(
+        CatalogItem.account_id == account_id, CATALOG_IS_SINGLE, CatalogItem.enabled.is_(True)))).all()}  # decoded: writers differ in spacing
+    ids = {m for it in clean if it["enabled"] and tuple(json.loads(it["media_ids"])) not in stored for m in json.loads(it["media_ids"])}
     if not ids:
         return
     hit = await s.run_sync(lambda ss: refusal(ss, account_id, ss.scalars(select(VaultItem).where(

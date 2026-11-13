@@ -142,6 +142,7 @@ def seed_raw(database, raw):
     store,authority,*_=engine_setup(database)
     with database[1].begin() as c:
         c.execute(text("UPDATE vault_items SET raw_json=:r WHERE account_id=:a AND media_id=22"),{"r":raw,"a":ACCOUNT})
+        c.execute(text("UPDATE catalog_items SET enabled=false WHERE account_id=:a"),{"a":ACCOUNT})  # each save is a new single
     return store,authority
 
 
@@ -178,6 +179,7 @@ def test_put_singles_unchanged_stale_single_does_not_block_an_unrelated_edit(dat
     assert put_singles(database,monkeypatch,[21,22])["status"]=="ok"
     with database[1].begin() as c:
         c.execute(text("UPDATE vault_items SET raw_json='{\"isHidden\": true}' WHERE account_id=:a AND media_id=22"),{"a":ACCOUNT})
+        c.execute(text("UPDATE catalog_items SET media_ids='[21,22]' WHERE account_id=:a"),{"a":ACCOUNT})  # create_catalog_single's form
     assert put_singles(database,monkeypatch,[21,22],extra=[21])=={"status":"ok","items":2}
     with pytest.raises(HTTPException,match=r"media 22 cannot be sold \(removed\)"):
         put_singles(database,monkeypatch,[21,22],extra=[22])   # a new single over it still refuses
@@ -187,6 +189,8 @@ def test_put_singles_unchanged_stale_single_does_not_block_an_unrelated_edit(dat
 def test_put_singles_refuses_media_outside_the_selection(database, monkeypatch):
     from fastapi import HTTPException
     store,_=vanished(database)
+    with database[1].begin() as c:
+        c.execute(text("UPDATE catalog_items SET enabled=false WHERE account_id=:a"),{"a":ACCOUNT})  # a new single, not the seeded one
     with pytest.raises(HTTPException,match=r"media 12 cannot be sold \(outside_selection\)"):
         put_singles(database,monkeypatch,[11,12])
     store.close()

@@ -74,3 +74,4 @@ service/tests/test_g06h_sellable_before_limit.py
 service/tests/test_g06g_arc_post_sale_gate.py
 service/tests/test_g06f_ppv_library_sale_gate.py
 service/tests/test_gds_disable_sends_pg.py
+service/tests/test_w3_tsa_ladder_stop.py

@@ -111,7 +111,7 @@ RATE_LIMIT_BACKOFF_MAX_S = 300.0
 
 # skip_list reasons a human (or OnlyFans) wrote to say "stop automating this fan".
 COOLDOWN_WAIT_MAX_S = 120.0
-STOP_REASONS = ("manual_restrict", "of_restricted", "muted_creator")
+STOP_REASONS = ("manual_restrict", "of_restricted", "muted_creator", "ladder_stop")
 
 
 def _hold_decision(path, account: str, fan: int, strict: bool, action: str, *, own_attempt=None):

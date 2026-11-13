@@ -328,7 +328,7 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
                 purchased.append(key)
             elif offer.status=='open':pending.append(key)
     facts={**verified,'human_owned':not state or state.mode!='automated' or state.takeover_state!='none',
-        'safety_hold':bool(critical or skip in {'of_restricted','manual_restrict','muted_creator'} or any(scope=='all' for _,scope in cases)),
+        'safety_hold':bool(critical or skip in {'of_restricted','manual_restrict','muted_creator','ladder_stop'} or any(scope=='all' for _,scope in cases)),
         'commerce_uncertain':held(s,account,fan),
         'financial_hardship':memo.get('financial_hardship',False) or any(c=='hardship' for c,_ in cases),
         'ordinary_chat_only':memo.get('ordinary_chat_only',False),'sales_refused':memo.get('sales_refused',False),

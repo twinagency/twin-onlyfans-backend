@@ -8,6 +8,7 @@ import re
 from sqlalchemy import select
 from db.models import FanSafetyFlag, SkipList
 from db.onlyfans_case_models import OfOperatorCase
+from onlyfans_runtime.runtime_stop import HARD as SKIP_STOP
 
 
 def reason(s, account_id, fan_id, state, fan, *, unresolved, commercial=False):
@@ -21,7 +22,7 @@ def reason(s, account_id, fan_id, state, fan, *, unresolved, commercial=False):
         return 'owner_changed'
     restriction = s.scalar(select(SkipList.reason).where(SkipList.account_id == account_id,
                                                           SkipList.fan_id == fan_id))
-    if restriction in {'manual_restrict', 'of_restricted', 'muted_creator'}:
+    if restriction in SKIP_STOP:   # incl. ladder_stop: every runtime_stop.STRONGER stop holds
         return 'fan_restricted'
     if unresolved:
         return 'unresolved_delivery'

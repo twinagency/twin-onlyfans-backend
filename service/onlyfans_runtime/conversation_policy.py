@@ -57,10 +57,10 @@ CATEGORY_SCOPE = {
 # Identity keeps its existing resume rules (the human answers and hands back).
 RESUME_BLOCKING = frozenset({"stop_contact", "distress", "consent", "minor"})
 
-# skip_list reasons that mean "no automation for this fan" (service.native_pilot.service.STOP_REASONS plus ladder_stop,
-# which ai_chatter already treats as a hard skip).
-SKIP_STOP = frozenset({"manual_restrict", "of_restricted", "muted_creator"})
+# skip_list reasons that mean "no automation for this fan" (== native_pilot.service.STOP_REASONS == runtime_stop.HARD ==
+# ai_chatter's HARD_SKIP_REASONS). SKIP_STRONG mirrors runtime_stop.STRONGER: every stronger stop is a send stop.
 SKIP_STRONG = frozenset({"of_restricted", "ladder_stop"})
+SKIP_STOP = frozenset({"manual_restrict", "muted_creator"}) | SKIP_STRONG
 
 CHAT, COMMERCIAL, MANUAL = "chat", "commercial", "manual"
 

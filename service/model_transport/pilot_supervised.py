@@ -318,6 +318,23 @@ class SupervisedPilot:
         for request_id, generation in expired_calls:
             self.validate()
             self.worker.engine.model.ledger.sweep(self.account, request_id, generation)
+        # An unresolved call (may be charged, no answer) keeps its request out of the scheduler below, so the runtime
+        # never reaches its own handover. Hand it over here: same decision, reservation kept, never re-asked.
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            stranded = s.execute(select(OfEngineModelCall.request_id, OfEngineModelCall.outcome).join(
+                OfEngineRequest, and_(OfEngineRequest.account_id == OfEngineModelCall.account_id,
+                    OfEngineRequest.request_id == OfEngineModelCall.request_id)).where(
+                OfEngineModelCall.account_id == self.account, OfEngineModelCall.binding_id == runtime.binding_id,
+                OfEngineModelCall.fan_id.in_(self.allowed_fans), OfEngineModelCall.created_at >= active_since,
+                OfEngineModelCall.status == 'unknown', OfEngineModelCall.response_text.is_(None),
+                OfEngineRequest.status == 'open', OfEngineRequest.binding_id == runtime.binding_id)
+                .order_by(OfEngineModelCall.created_at, OfEngineModelCall.call_id).limit(limit)).all()
+        engine = self.worker.engine
+        for request_id, outcome in stranded:
+            self.validate()
+            engine._handover_model(self.tenant, self.account, request_id, engine.model.config.handover_target,
+                                   'model_outcome_unknown', {'outcomes': [str(outcome)[:64]]})
         # Only scope-era inbound messages without a completed draft are eligible
         # for repair. Unknown model calls are retained, never automatically retried.
         with Session(store.engine) as s:

@@ -261,3 +261,8 @@ Live confirm after F3 (or F4) and after F6.
 - **G06g r2 485086da (me):** Codex P1 + P2 = Flash blk + major (same two) fixed; 9 RED→green measured; 23 pre-existing reds in related non-PG files identical before/after. Next: serial gate.
 - **G05-PR2 gate RED = budget kill at 900s (101 PASS / 0 FAIL, load ~9; engine_model_pg 227s) — infra, rerun.** Bottleneck note: gate walls rising with load; machine is shared with 2 workers + reviews.
 - **W3RCB-01 2c722843 (worker done):** `_skip_reason` "formatting" skip for text-only rows; 14/14 RED→green. Flash + Opus-final running. **W7CS-01 dispatched** to the freed slot.
+
+## W7CS-01 follow-ups (Opus final, 2026-11-13)
+- **NP429 — major, send re-enable gate**: native_pilot/runner.py:259-272 turns a 429 on the POST into NotSent("provider-rate-limited", retry=True) → re-POST (test_native_pilot_service.py:830 asserts 2 posts). Fix: send-time 429 → delivery_unknown + cooldown (D429). Pre-existing, outside W7CS-01 diff.
+- Deferred (W7CS-10/W3RD-07 group): 401 after POST → not_accepted; may be delivered. Switch W7CS-01 cooldown to apply_provider_pacing when c9ff2c98 lands.
+- W7CS-01 minors 2-4 fixed in a274e497 (native 429 cooldown, unconfirmed-hold operator case, test rename).

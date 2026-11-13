@@ -157,15 +157,19 @@ def commercial_window():
 
 
 def outside_selection(session,account,media_ids):
-    """Media verified outside the commercial selection: a completed selection exists at the current
-    binding/epoch and lacks them (vanished from the provider listing, or past the newest window).
-    No such selection (session gone, reconnect mid-import) is unknown, not verified: returns none."""
+    """Media verified outside the commercial selection, read once. Absence is evidence only when the latest
+    completed selection at the current binding/epoch is a full listing (0 < selected < 1000; a capped window
+    always holds 1000) and the media was not re-observed after it completed. No selection (session gone,
+    reconnect mid-import: transient until the next one completes), an empty or a capped one is unknown: none."""
     from sqlalchemy import select
-    from db.models import VaultItem
-    if not media_ids or session.scalar(_latest_selection(account)) is None:
+    from db.onlyfans_vault_models import OfVaultObservation,OfVaultSyncJob
+    latest=session.execute(_latest_selection(account).add_columns(OfVaultSyncJob.completed_at)).first() if media_ids else None
+    selected={int(m) for m in json.loads(latest.window_json)["selected"]} if latest else set()
+    if not 0<len(selected)<1000:
         return set()
-    return set(media_ids)-set(session.scalars(select(VaultItem.media_id).where(VaultItem.account_id==account,
-        VaultItem.media_id.in_(media_ids),commercial_window())))
+    return set(media_ids)-selected-set(session.scalars(select(OfVaultObservation.media_id).where(
+        OfVaultObservation.account_id==account,OfVaultObservation.media_id.in_(media_ids),
+        OfVaultObservation.observed_at>latest.completed_at)))
 
 
 def automatic_window():

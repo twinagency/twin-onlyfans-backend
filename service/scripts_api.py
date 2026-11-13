@@ -1287,28 +1287,22 @@ def _validate_item(raw: Any) -> dict:
 
 
 async def _refuse_unusable_media(s, account_id: str, clean: list[dict]) -> None:
-    """Save-time twin of the sale boundary's row rule (media_delivery.catalog_terms):
-    an enabled single over removed media or media whose provider metadata forbids a
-    sale (vault_management.unusable; on FansAPI also not isReady true / DRM video)
-    is a 422, not a silent ok. Only positive evidence refuses: media with no vault
-    row (vault not mirrored yet) saves and stays refused at the sale; the FansAPI
-    commercial selection is checked at the sale only."""
-    from sqlalchemy import inspect
+    """Save-time twin of the sale boundary (media_delivery.refusal): an enabled single whose
+    media is new or changed (or that is newly enabled) over media the sale refuses is a 422,
+    not a silent ok. Unchanged enabled singles stay saveable so one stale single never blocks
+    an unrelated edit (the sale still refuses it). Media with no vault row (vault not
+    mirrored yet) saves and stays refused at the sale."""
     from db.models import VaultItem
-    from onlyfans_runtime.media_delivery import _unusable
-    from onlyfans_runtime.provider_read_budget import native_family_clause
-    ids = {m for it in clean if it["enabled"] for m in json.loads(it["media_ids"])}
+    from onlyfans_runtime.media_delivery import refusal
+    stored = set((await s.scalars(select(CatalogItem.media_ids).where(CatalogItem.account_id == account_id,
+        CATALOG_IS_SINGLE, CatalogItem.enabled.is_(True)))).all())
+    ids = {m for it in clean if it["enabled"] and it["media_ids"] not in stored for m in json.loads(it["media_ids"])}
     if not ids:
         return
-    # A legacy DB without the delivery-policy table is native by definition.
-    policy = await s.run_sync(lambda ss: inspect(ss.connection()).has_table("of_delivery_policy"))
-    fansapi = policy and not await s.scalar(select(native_family_clause(account_id)))
-    for row in (await s.scalars(select(VaultItem).where(VaultItem.account_id == account_id,
-            VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id))).all():
-        why = "removed" if row.removed_at is not None else _unusable(row, fansapi)
-        if why:
-            raise HTTPException(422, f"media {row.media_id} cannot be sold ({why}); "
-                                     "remove it or disable its single")
+    hit = await s.run_sync(lambda ss: refusal(ss, account_id, ss.scalars(select(VaultItem).where(
+        VaultItem.account_id == account_id, VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)).all()))
+    if hit:
+        raise HTTPException(422, f"media {hit[0]} cannot be sold ({hit[1]}); remove it or disable its single")
 
 
 class _ItemsBody(BaseModel):

@@ -154,3 +154,5 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - G02-03 fixed by orchestrator: `_assert_stopped` asserts audit row after = min/max clamp of before (15fc3e89). Throttle drift not parametrized: DB floor 1 == scope limit 1. Green fix / red base (measured, PG 55651).
 - G01b gate FAIL test_moxy_input_supersession_pg::test_explicit_retirement_keeps_old_inputs_in_history_only: red at base 91547788 too (`moxy_event_key_conflict`, measured) → base red, already in F0d known-red; add to G01b known-red, rerun gate.
 - G02-01 (maj send-safety) + G02-02 (minor) queued in FIX-QUEUE.
+- F0d r1 ceb23b6b (worker): F0D-01..09 + FLD-01..06 fixed, own fast GREEN 53s (m), +243/-36. history_capacity_turns dropped from known-red (= team base red; will FAIL any gate touching it). Flash delta re-review launched.
+- Slot 2 → G04 (W3RCB-01 rest, native_protocol history_text) worker via delegate_task Claude3 Opus, PG 55654. Disjoint from F4/G01b/G02 (i).

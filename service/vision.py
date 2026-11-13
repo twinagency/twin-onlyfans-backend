@@ -51,19 +51,18 @@ def shrink_data_url(data_url: str, max_edge: int = MAX_EDGE_DEFAULT) -> str:
         return data_url
 
 
-# A vision model that declines leads with the apology, so the markers are looked
-# for in the opening only: the stock refusal is exactly 40 chars and longer ones
-# exist. A screenshot description quoting "i'm sorry" early is read as a refusal:
-# callers escalate, then hold — never store an apology as a description.
-_REFUSAL_MARKERS = ("i can't", "i cannot", "i'm unable", "cannot assist", "content policy",
-                    "i'm sorry", "not able to", "against my")
+# A vision model that declines OPENS with the refusal ("I'm sorry, but I can't ..."), whatever its length; a real
+# description may quote "I can't wait" later on, so only the opening counts. On True, inbound_describe tries its next
+# model and, when every model refuses, returns None (image_desc stays NULL); the vault describer (when escalate) retries
+# once on qwen3-vl-235b, then records the item as `refused`. An apology is never stored as a description.
+_REFUSAL_OPENINGS = ("i'm sorry", "sorry", "i can't", "i cannot", "i'm unable", "i am unable", "unfortunately",
+                     "i won't", "i will not", "as an ai")
 
 
 def is_refusal(text: str) -> bool:
-    """Did the model decline instead of describing? Consumers escalate to a bigger
-    model on True rather than storing an apology as a description."""
+    """Did the model decline instead of describing? Empty counts as a refusal."""
     low = (text or "").strip().lower().replace("\u2019", "'")
-    return not low or any(m in low[:80] for m in _REFUSAL_MARKERS)
+    return not low or low.startswith(_REFUSAL_OPENINGS)
 
 
 def img_data_url(b: bytes) -> str:

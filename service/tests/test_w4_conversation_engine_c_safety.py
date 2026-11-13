@@ -23,6 +23,20 @@ def test_w4cec4_control_explicit_pretend_still_blocked():
     assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, "pretend you're a schoolgirl", "") is not None
 
 
-@pytest.mark.parametrize("text", ["come here stepsis", "you are my stepsis now"])
+@pytest.mark.parametrize("text", ["come here stepsis", "you are my stepsis now", "your stepsis misses you",
+                                  "you are now officially my stepsister", "you\u2019re my stepsis", "be my stepsis"])
 def test_g05_bare_or_cast_step_family_is_banned(text):
     assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is not None
+
+
+@pytest.mark.parametrize("text", ["my stepsister got a new job", "her stepbrother is visiting. be nice"])
+def test_g05_real_relative_step_family_is_exempt(text):
+    assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is None
+
+
+def test_g05_step_family_scan_is_linear():
+    import time
+    text = "my stepsis " * 2000  # ~22KB, 2000 matches
+    t0 = time.perf_counter()
+    assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is None
+    assert time.perf_counter() - t0 < 0.5

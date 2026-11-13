@@ -10,7 +10,7 @@
 #     in list order; files in scripts/premerge-serial.txt (contention-flaky) run alone. TERM/INT reaps running targets.
 # Exit 0 = OK, 1 = FAILED, 2 = INCOMPLETE (something skipped, ALLOW_SKIP=1 accepts; or no timeout binary). Pre-existing
 # reds live in scripts/premerge-known-red.txt (proven red at base): pytest ids are deselected (a file whose every test
-# is listed passes only on pytest's exact "N deselected in Xs", rc 5); a script must end on the listed line, digit runs
+# is listed passes only on pytest's exact "N deselected in Xs", rc 5); a script must end on (or raise as its final `Name: msg` line) the listed line, digit runs
 # written as # (volatile timestamps/ids) - only for scripts that abort on their first failure. Any other failure, or a
 # listed script that passes, FAILS. Network blocked via dead proxy. Each target is capped at CHECK_FILE_TIMEOUT_S (600):
 # over = FAIL; a killed target (rc 137 before its cap) = FAIL.
@@ -81,7 +81,8 @@ run() {  # one process per target, like run-service-tests.py isolation
     if [ -z "$expect" ]; then echo "PASS $t: $(tail -1 <<<"$res")"; else echo "FAIL $t: known-red but passed; drop it from $KNOWN"; fail=1; fi
   elif [ "$tmo" = 1 ] && [ "$cut" = 1 ]; then echo "DEFERRED to wide: $t (cut at the fast budget)"; def=1
   elif [ "$tmo" = 1 ]; then echo "FAIL $t: per-file timeout ${FTO}s (CHECK_FILE_TIMEOUT_S)"; tail -30 <<<"$res"; fail=1
-  elif [ -n "$expect" ] && [ "$(sed -E 's/[0-9]+/#/g' <<<"$last")" = "$expect" ]; then
+  elif [ -n "$expect" ] && { [ "$(sed -E 's/[0-9]+/#/g' <<<"$last")" = "$expect" ] ||  # or its final `Name: msg` exception line
+       [ "$(grep -E '^[A-Za-z_][A-Za-z0-9_.]*: ' <<<"$res" | tail -1 | sed -E 's/[0-9]+/#/g')" = "$expect" ]; }; then
     echo "KNOWN-RED $t: $expect"; kr=$((kr+1))
   elif [ "$rc" = 5 ] && [ "${cmd[0]}" = -m ] && [[ " ${cmd[*]} " == *" --deselect "* ]] && [[ $last =~ ^[0-9]+\ deselected\ in\ [0-9.]+s$ ]]; then
     echo "KNOWN-RED $t: every test in it is known-red (deselected)"  # pytest rc 5: nothing left to run

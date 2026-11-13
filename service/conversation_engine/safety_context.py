@@ -9,10 +9,9 @@ import re
 # ("my stepsister got a job"), never when cast as a role ("be my stepsis") or used bare ("come here stepsis").
 _CONTEXTUAL_MENTION = re.compile(
     r"(?:minors?|(?:little|young) (?:girl|boy)|kiddo|child(?:ren)?|kids?|(?:my|your) (?:daughter|son|niece|nephew))\Z", re.I)
-_STEP_FAMILY = re.compile(r"step ?(?:sis|sister|bro|brother|daughter|son|mom|mum|mother|dad|father)\Z", re.I)
-_POSSESSIVE_BEFORE = re.compile(r"\b(?:my|your|his|her|our|their)\s+\Z", re.I)
-_ROLE_FRAME = re.compile(r"\b(?:be|being|play|playing|as|like|call (?:me|you|u)|you(?:'re| are)|ur|i(?:'m| am)|im|i'll be|i will be)"
-                         r"\s+(?:\S+\s+){0,2}\Z", re.I)
+_STEP_FAMILY = re.compile(r"step[ -]?(?:sis|sister|bro|brother|daughter|son|mom|mum|mother|dad|father)s?\Z", re.I)
+_POSSESSIVE_BEFORE = re.compile(r"\b(?:my|his|her|our|their)\s+\Z", re.I)
+_ROLE_FRAME = re.compile(r"\b(?:be|being|play|playing|as|like|call (?:me|you|u)|you(?:'re| are)|ur|i(?:'m| am)|im|i'll be|i will be)\b", re.I)
 _SENSITIVE_CONTEXT = re.compile(
     r"\b(?:pretend|role[ -]?play|fantas(?:y|ies|ise|ize|ising|izing)|incest|sexual(?:ly)?|sex|sexy|"
     r"horny|nudes?|naked|fuck\w*|cocks?|dicks?|pussy|cum\w*|blowjob|orgasm\w*|masturbat\w*|"
@@ -23,6 +22,15 @@ _MINOR_ADJECTIVE = re.compile(r'\s+(?:issue|issues|problem|problems|delay|delays
 _AGE_ASSERTION = re.compile(
     r"\b(?:i(?:'m| am)|you(?:'re| are)|are you|she(?:'s| is)|he(?:'s| is)|is (?:she|he))\s+"
     r"(?:an? |the )?(?:minor|teen(?:ager)?|school ?girl|school ?boy|child|kid)\b", re.I)
+
+
+def relative_mention(text, match):
+    """True only for a step-family noun that names someone's real relative ("my stepsister got a job"): an owner
+    possessive (not "your") right before it, and no role frame anywhere earlier in its clause (capped at 160 chars)."""
+    if not _STEP_FAMILY.fullmatch(match.group(0)):
+        return False
+    clause = re.split(r"[.!?\n]", text[max(0, match.start() - 160):match.start()].replace("\u2019", "'"))[-1]
+    return bool(_POSSESSIVE_BEFORE.search(clause)) and not _ROLE_FRAME.search(clause)
 
 
 def sensitive_match(pattern, text, *related):
@@ -40,9 +48,7 @@ def sensitive_match(pattern, text, *related):
             return match
         if _CONTEXTUAL_MENTION.fullmatch(word) and not sensitive:
             continue
-        before = text[:match.start()]
-        if (_STEP_FAMILY.fullmatch(word) and not sensitive and _POSSESSIVE_BEFORE.search(before)
-                and not _ROLE_FRAME.search(before)):
+        if not sensitive and relative_mention(text, match):
             continue
         return match
     return None

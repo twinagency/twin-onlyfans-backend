@@ -39,6 +39,9 @@ async def ready_shelf(lane, fan_id: int, session=None) -> set[int]:
             VaultItem.account_id == lane.account_id, VaultItem.removed_at.is_(None),
             VaultItem.search_text.is_not(None), VaultItem.search_text != "")
             .order_by(VaultItem.created_at.desc()).limit(400))).scalars().all()
+    from .content_resolver import sellable
+    keep = await sellable(lane.account_id, [r.media_id for r in rows], session=session)
+    rows = [r for r in rows if r.media_id in keep]
     return ready_ids(rows, account_id=str(lane.account_id), cfg=lane.cfg,
                      bought=await pack_sender._bought_media(lane.account_id, fan_id),
                      offered=set(await pack_sender.offered_media(lane.account_id, fan_id)),

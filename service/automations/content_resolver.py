@@ -101,6 +101,22 @@ _VERIFY_MAX = 24          # never verify more than this many in one call
 
 # ── Candidate pools ─────────────────────────────────────────────────
 
+async def sellable(account_id: str, media, session=None) -> dict[int, str]:
+    """{media_id: kind} of these ids the sale would sell. ONE predicate: `media_delivery.refusals`
+    (removed, kind, provider metadata such as not ready / hidden / error, FansAPI selection;
+    DRM sells, OQ-3), applied per row so an unusable id costs one pick, never the whole send.
+    An id with no mirror row is absent. ``session`` overrides the session factory."""
+    ids = sorted({int(m) for m in media})
+    if not ids:
+        return {}
+    from onlyfans_runtime.media_delivery import refusals
+    async with (session or get_session)() as s:
+        rows = (await s.execute(select(VaultItem).where(
+            VaultItem.account_id == str(account_id), VaultItem.media_id.in_(ids)))).scalars().all()
+        refused = {m for m, _ in await s.run_sync(lambda ss: list(refusals(ss, str(account_id), rows)))}
+    return {int(r.media_id): str(r.kind or "") for r in rows if r.media_id not in refused}
+
+
 async def _curated_pool(account_id: str, category: str, rung: str | None,
                         seen: set[int]) -> list[tuple[int, str]]:
     """Unseen items from the OPERATOR-CURATED shelf for a category.
@@ -146,7 +162,8 @@ async def _curated_pool(account_id: str, category: str, rung: str | None,
             .where(VaultItem.account_id == str(account_id),
                    VaultItem.media_id.in_(fresh))
         )).all()
-    by_id = {int(r[0]): r for r in rows}
+    keep = await sellable(account_id, fresh)
+    by_id = {int(r[0]): r for r in rows if int(r[0]) in keep}
     out: list[tuple[int, str]] = []
     for mid in fresh:                       # preserve the operator's rank order
         row = by_id.get(mid)
@@ -242,9 +259,10 @@ async def _described_pool(account_id: str, seen: set[int],
     # One scoring, over the widest text, in the place that also applies the
     # LIMIT. `seen` is still filtered here because it is a per-fan set, not a
     # property of the corpus.
+    keep = await sellable(account_id, [m for m, *_ in rows])
     out: list[tuple[int, str]] = []
     for mid, _kind, search_text, desc, vdesc in rows:
-        if int(mid) in seen:
+        if int(mid) in seen or int(mid) not in keep:
             continue
         # Product readiness owns what counts as a description: a bare kind word ("photo", "audio", "gif")
         # is a placeholder, and a real description is used even when search_text holds the placeholder.

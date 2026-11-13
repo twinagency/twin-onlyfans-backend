@@ -293,7 +293,8 @@ def test_off_shadow_and_live_action_boundaries(current_mode):
     async def session():
         items=[SimpleNamespace(media_id=101,account_id=ACCOUNT,removed_at=None,content_hash="v1",kind="photo",
                                description="gym mirror selfie",default_price_cents=1500)]
-        yield SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(first=lambda:(101,),scalars=lambda:SimpleNamespace(all=lambda:items))))
+        yield SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(first=lambda:(101,),scalars=lambda:SimpleNamespace(all=lambda:items))),
+                              run_sync=AsyncMock(return_value=[]))  # media_delivery.refusals: nothing refused
     with patch("automations.contextual_offers.get_session",session), \
          patch("automations.sales_turn.prepare",AsyncMock(return_value=None)), \
          patch("automations.sales_turn.progress_decision",AsyncMock(return_value=None)), \

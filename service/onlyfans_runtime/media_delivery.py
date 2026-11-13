@@ -29,13 +29,14 @@ def media_ids(raw):
 
 def _unusable(row, fansapi):
     """Provider metadata forbids the sale: vault_management.unusable, or on a FansAPI
-    account an item not isReady true (classify's rule; sync stores unready items too)
-    or a DRM video (OQ-3; native DRM stays offerable). Rows with no imported metadata
+    account an item not isReady true (classify's rule; sync stores unready items too).
+    DRM media sells on both transports (OQ-3, owner 2026-11-13: sent by vault media
+    id, no file URL needed). Rows with no imported metadata
     (legacy/synthetic; sync always writes it) carry no evidence; unreadable or
     non-object metadata refuses."""
     if row.raw_json is None:
         return None
-    from .vault_management import fansapi_drm, unusable
+    from .vault_management import unusable
     try:
         raw = json.loads(row.raw_json)
     except (ValueError, TypeError):
@@ -43,8 +44,7 @@ def _unusable(row, fansapi):
     reason = unusable(raw)
     if reason or not fansapi:
         return reason
-    return ("not_ready" if raw.get("isReady") is not True
-            else "drm" if fansapi_drm(row.kind, raw) else None)
+    return "not_ready" if raw.get("isReady") is not True else None
 
 
 def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):

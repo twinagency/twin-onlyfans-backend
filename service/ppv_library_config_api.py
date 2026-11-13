@@ -804,6 +804,8 @@ async def preview_ppv_to_feed(body: _PreviewPostBody = Body(...)) -> dict[str, A
     _fp_v = await load_voice_blocks(body.account_id)
     caption, used_feed_caption = pick_feed_caption(
         chosen, base_cents, _fp_lang, _fp_v.voice)
+    from automations import content_resolver
+    sellable = await content_resolver.sellable(body.account_id, media_ids)
 
     return {
         "account_id": body.account_id,
@@ -821,4 +823,7 @@ async def preview_ppv_to_feed(body: _PreviewPostBody = Body(...)) -> dict[str, A
         # reorder/reselect before confirming. previews is always ⊆ media_ids.
         "media_ids": media_ids,
         "previews": previews,
+        # Ids the sale gate refuses now (G06f): `/post-now` refuses the post while any selected
+        # id is in here, so the operator deselects them (or fixes the vault) before confirming.
+        "not_sellable_media_ids": [m for m in media_ids if m not in sellable],
     }

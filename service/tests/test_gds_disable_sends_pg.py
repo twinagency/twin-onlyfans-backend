@@ -47,6 +47,7 @@ def test_concurrent_policy_writer_cannot_make_the_stop_give_up(supervised, monke
     with Session(engine) as s:
         assert s.query(OfFansLink).one().send_blocked is True
         assert s.get(OfDeliveryPolicy, ACCOUNT).enabled is False, f'stop lost after {len(bumps)} concurrent edits'
+    assert bumps == [], 'the policy row lock must block the competing writer'
 
 
 def test_stop_that_cannot_apply_raises_and_holds_the_projection(supervised, monkeypatch):

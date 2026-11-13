@@ -478,7 +478,7 @@ class FansEventIntake:
     def _disable_sends(self, tenant, account, reason, epoch, event_key):
         """The provider safety stop. Under the runtime and policy row locks no writer can move the revision, so it
         never loses a race; if it still cannot apply, the projection is held for an operator and SendStopFailed
-        is raised. It is never dropped silently."""
+        is raised. Known gap: a crash after the projection commits but before this runs is not re-driven."""
         from onlyfans_runtime.text_delivery import TextAuthority
         try:
             with Session(self.engine) as s, s.begin():
@@ -495,7 +495,9 @@ class FansEventIntake:
                 row = s.get(OfFansProjection, (account, epoch, event_key), with_for_update=True)
                 if row is not None:
                     row.status, row.detail, row.updated_at = 'held', 'send_stop_failed', utcnow()
-            raise SendStopFailed('provider safety stop did not apply: ' + str(exc)[:200]) from exc
+            # DB errors can carry SQL text and parameters: only a Refused message is safe to surface.
+            detail = str(exc)[:200] if isinstance(exc, Refused) else type(exc).__name__
+            raise SendStopFailed('provider safety stop did not apply: ' + detail) from exc
 
     def release_send_block(self, tenant, account, creator_id, *, actor, reason):
         """Operator re-enables sending after a reconnect. Never automatic."""

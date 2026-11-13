@@ -24,7 +24,7 @@ from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfEnginePilotWebhookDigest, OfEnginePilotReconnectReceipt
 from db.onlyfans_fans_intake_models import OfFansProjection
 from db.onlyfans_models import OfIngress
-from fans_api_adapter.events import FansEventIntake, _parse as parse_event
+from fans_api_adapter.events import FansEventIntake, SendStopFailed, _parse as parse_event
 from fans_api_adapter.real_transport import build_real_transport, load_real_config, real_transport_enabled
 from fans_api_adapter.webhooks import verify_signature
 from onlyfans_runtime.store import Refused, utcnow
@@ -276,6 +276,8 @@ class SupervisedPilot:
                 if fan is None or fan in self.allowed_fans:
                     intake._project(self.account, epoch, key)
                     projected += 1
+            except SendStopFailed:
+                raise  # the safety stop did not apply: loud, never re-projected as ordinary malformed input
             except Refused:
                 # Authenticated but malformed input is held by the intake, never projected into another fan.
                 intake._project(self.account, epoch, key)

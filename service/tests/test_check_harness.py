@@ -1,5 +1,5 @@
 """F0 scripts/check.sh: loopback/GET-only/no-redirect/no-proxy guards, bearer never echoed, verdict -> exit codes."""
-import http.server, importlib.util, os, pathlib, shutil, subprocess, sys, threading, types, pytest, sqlalchemy
+import http.server, importlib.util, os, pathlib, shutil, signal, subprocess, sys, threading, time, types, pytest, sqlalchemy
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("check_live", ROOT / "scripts" / "check_live.py")
@@ -67,10 +67,12 @@ def test_fast_verdict_and_exit_code(tmp_path, cmd, code, verdict):
 def test_fast_bad_budget_no_timeout_or_evidence_is_infra_nothing_run(tmp_path, budget, why):
     (tmp_path / "bin").mkdir()  # the run's whole PATH: no timeout/gtimeout
     (tmp_path / "ev").mkdir(mode=0o500 if why == "not writable" else 0o700)  # evidence root
-    for tool in ("bash", "env", "nice", "dirname", "git", "date", "mkdir", "tee", "grep", "touch"):
-        os.symlink(shutil.which(tool), tmp_path / "bin" / tool)
-    r = _run("fast", _env(tmp_path, CHECK_BUDGET_S=budget, PATH=str(tmp_path / "bin")), _fake_repo(tmp_path, "touch ran"))
-    assert r.returncode == 2 and why in r.stdout + r.stderr and not (tmp_path / "ran").exists(), r.stdout + r.stderr
+    for tool in ("bash", "env", "nice", "dirname", "git", "date", "mkdir", "tee", "grep", "touch") + ("timeout",) * (why != "no timeout"):
+        os.symlink(shutil.which(tool) or shutil.which("gtimeout"), tmp_path / "bin" / tool)
+    repo = _fake_repo(tmp_path, "touch ran")
+    for mode in ("fast", "wide", "live", "full") if why == "no timeout" else ("fast",):
+        r = _run(mode, _env(tmp_path, CHECK_BUDGET_S=budget, PATH=str(tmp_path / "bin")), repo)
+        assert r.returncode == 2 and why in r.stdout + r.stderr and not (tmp_path / "ran").exists(), mode + r.stdout + r.stderr
 
 class _Stub(http.server.BaseHTTPRequestHandler):
     seen, bad = [], False
@@ -117,39 +119,114 @@ def test_live_skip_is_infra_partial_down_is_red_all_down_is_infra(tmp_path):
 
 @pytest.mark.parametrize("mode", ["fast", "wide"])
 def test_deferred_touched_area_is_listed_and_noted_fast_defers_wide_never(tmp_path, mode):
-    stub = 'echo "defer=${PREMERGE_DEFER_AFTER_S:-none}"; echo "DEFERRED to wide: service/tests/test_a.py"'
+    stub = 'echo "defer=${PREMERGE_DEFER_AFTER_S:-none}"; [ -z "${PREMERGE_STOP_AT_S:-}" ] || echo "DEFERRED to wide: service/tests/test_a.py"'
     r = _run(mode, _env(tmp_path, CHECK_BUDGET_S="900"), _fake_repo(tmp_path, stub))
     assert r.returncode == 0 and ("defer=600" if mode == "fast" else "defer=none") in r.stdout, r.stdout + r.stderr
-    assert "deferred to wide: 1 touched-area tests not run" in _verdict(tmp_path)
-    assert next((tmp_path / "ev").iterdir()).joinpath("deferred.txt").read_text() == "DEFERRED to wide: service/tests/test_a.py\n"
+    v, d = _verdict(tmp_path), next((tmp_path / "ev").iterdir()).joinpath("deferred.txt").read_text()
+    if mode == "fast":
+        assert v.splitlines()[0] == "GREEN (1 deferred)" and "deferred to wide: 1 touched-area tests not run" in v, v
+        assert d == "DEFERRED to wide: service/tests/test_a.py\n"
+    else:
+        assert v.splitlines()[0] == "GREEN" and "deferred" not in v and d == "", v
+
 
 def _git(repo, *a): subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
 
-def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure(tmp_path):
+def _pm_repo(tmp_path, files, known="", promoted="# none\n", serial="# none\n"):
+    """Fake repo for premerge.sh: service/m.py touched (-> test_uses_m.py is touched-area (d)); `files` = changed (b)."""
     repo, t = tmp_path / "r", tmp_path / "r/service/tests"
     t.mkdir(parents=True), (repo / "scripts").mkdir(), shutil.copy(ROOT / "scripts/premerge.sh", repo / "scripts")
-    (repo / "scripts/premerge-promoted.txt").write_text("# none\n"), (repo / "service/m.py").write_text("X = 1\n")
-    (repo / "scripts/premerge-known-red.txt").write_text("service/tests/test_z3.py::test_kr\nservice/tests/test_z4.py boom at *\n")
-    (t / "test_uses_m.py").write_text("import m, os, time\ndef test_m(): time.sleep(float(os.environ.get('ZZ_SLEEP', 0)))\n")
+    for n, s in {"promoted": promoted, "known-red": known, "serial": serial}.items():
+        (repo / f"scripts/premerge-{n}.txt").write_text(s)
+    (repo / "service/m.py").write_text("X = 1\n")
+    (t / "test_uses_m.py").write_text("import m, os, time\ndef test_m():\n    os.environ.get('ZZ_KILL') and os.kill(os.getpid(), 9)"
+                                      "\n    time.sleep(float(os.environ.get('ZZ_SLEEP', 0)))\n")
     _git(repo, "init", "-q"), _git(repo, "add", "."), _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b")
-    (repo / "service/m.py").write_text("X = 2\n")  # touched module -> test_uses_m.py is touched-area (d)
-    (t / "test_z1.py").write_text("import time\ndef test_slow(): time.sleep(1.5)\n")  # finishes last, prints first
-    (t / "test_z2.py").write_text("def test_planted(): assert False, 'planted'\n")
-    (t / "test_z3.py").write_text("def test_ok(): pass\ndef test_kr(): assert False\n")
-    (t / "test_z4.py").write_text("import sys, time\nprint('boom at', time.time())\nsys.exit(1)\n")  # script, volatile last line
-    (t / "test_z5.py").write_text("import time\ndef test_hang(): time.sleep(60)\n")
-    env = {**_env(tmp_path), "BASE": "HEAD", "CHECK_JOBS": "3"}
-    run = lambda **kw: subprocess.run(["bash", "scripts/premerge.sh"], cwd=repo, env={**env, **kw}, capture_output=True, text=True, timeout=120)
-    r = run(CHECK_FILE_TIMEOUT_S="4")
-    lines = [l.split(":")[0] for l in r.stdout.splitlines() if l.startswith(("PASS ", "FAIL ", "KNOWN-RED ", "== (b", "== (c", "== (d"))]
-    assert r.returncode == 1 and lines == ["== (b) changed tests (5)", "PASS service/tests/test_z1.py",
+    (repo / "service/m.py").write_text("X = 2\n")
+    [(t / f).write_text(s) for f, s in files.items()]
+    env = {**_env(tmp_path), "BASE": "HEAD"}
+    return t, env, lambda **kw: subprocess.run(["bash", "scripts/premerge.sh"], cwd=repo, env={**env, **kw},
+                                               capture_output=True, text=True, timeout=120)
+_rows = lambda r: [l.split(":")[0] for l in r.stdout.splitlines() if l.startswith(("PASS ", "FAIL ", "KNOWN-RED ", "== (b", "== (c", "== (d"))]
+
+def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure(tmp_path):
+    t, _, run = _pm_repo(tmp_path, {
+        "test_z1.py": "import time\ndef test_slow(): time.sleep(1.5)\n",  # finishes last, prints first
+        "test_z2.py": "def test_planted(): assert False, 'planted'\n",
+        "test_z3.py": "def test_ok(): pass\ndef test_kr(): assert False\n",
+        "test_z4.py": "import sys, time\nprint('boom at', time.time())\nsys.exit(1)\n",  # script, volatile digits
+        "test_z6.py": "import pytest\n@pytest.fixture\ndef boom(): raise RuntimeError('setup')\n"  # "1 deselected, 1 error"
+                      "def test_kr(): assert False\ndef test_err(boom): pass\n",
+        "test_z7.py": "def test_kr(): assert False\n"}, known="".join(f"service/tests/{k}\n" for k in (  # all deselected: rc 5
+        "test_z3.py::test_kr", "test_z4.py boom at #.#", "test_z6.py::test_kr", "test_z7.py::test_kr")))
+    r = run(CHECK_JOBS="3")
+    assert r.returncode == 1 and _rows(r) == ["== (b) changed tests (6)", "PASS service/tests/test_z1.py",
         "FAIL service/tests/test_z2.py", "KNOWN-RED service/tests/test_z3.py", "PASS service/tests/test_z3.py",
-        "KNOWN-RED service/tests/test_z4.py", "FAIL service/tests/test_z5.py",
-        "== (c) promoted tests (0)", "== (d) touched-area tests (1, CHECK_JOBS=3)", "PASS service/tests/test_uses_m.py"], r.stdout
-    assert "FAIL service/tests/test_z5.py: per-file timeout 4s" in r.stdout
-    (t / "test_z2.py").unlink(), (t / "test_z5.py").unlink()
+        "KNOWN-RED service/tests/test_z4.py", "KNOWN-RED service/tests/test_z6.py", "FAIL service/tests/test_z6.py",
+        "KNOWN-RED service/tests/test_z7.py", "KNOWN-RED service/tests/test_z7.py", "== (c) promoted tests (0)",
+        "== (d) touched-area tests (1, CHECK_JOBS=3)", "PASS service/tests/test_uses_m.py"], r.stdout
+    assert "FAIL service/tests/test_z6.py: 1 deselected, 1 error" in r.stdout
+    (t / "test_z2.py").unlink(), (t / "test_z6.py").unlink()
     r = run(PREMERGE_DEFER_AFTER_S="0")
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py" in r.stdout, r.stdout
-    assert "premerge: OK (0 skipped, 2 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
-    r = run(PREMERGE_STOP_AT_S="3", ZZ_SLEEP="60")  # (d) still running at the stop time -> cut, deferred, not FAIL
+    assert "premerge: OK (0 skipped, 3 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
+    r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S="3", ZZ_SLEEP="60")  # (d) still running at the stop time: cut, deferred
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py (cut at the fast budget)" in r.stdout, r.stdout
+    for stop in ("60", "600"):  # killed before the stop time (OOM, self-kill), or cap == per-file timeout: FAIL, not deferred
+        r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S=stop, ZZ_KILL="1")
+        assert r.returncode == 1 and "FAIL service/tests/test_uses_m.py" in r.stdout and "DEFERRED" not in r.stdout, r.stdout
+
+def test_premerge_per_file_timeout_fails_and_a_killed_run_reaps_inner_tests(tmp_path):
+    hang = "import os, time\ndef test_hang():\n    open(os.environ.get('ZZ_PID', os.devnull), 'w').write(str(os.getpid()))\n    time.sleep(60)\n"
+    _, env, run = _pm_repo(tmp_path, {"test_z5.py": hang})
+    r = run(CHECK_FILE_TIMEOUT_S="3", PREMERGE_DEFER_AFTER_S="0")  # only the hang runs under the 3 s cap
+    assert r.returncode == 1 and "FAIL service/tests/test_z5.py: per-file timeout 3s" in r.stdout, r.stdout
+    pid_file = tmp_path / "pid"  # budget kill: check.sh's timeout TERMs premerge's process group, not the inner timeouts'
+    p = subprocess.Popen(["bash", "scripts/premerge.sh"], cwd=tmp_path / "r", env={**env, "ZZ_PID": str(pid_file)},
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _wait(lambda: pid_file.exists() and pid_file.read_text(), 60)
+    os.killpg(p.pid, signal.SIGTERM), p.wait(30)
+    _assert_dies(int(pid_file.read_text()))
+
+def _wait(cond, s):
+    for _ in range(int(s * 10)):
+        if cond(): return
+        time.sleep(0.1)
+    raise AssertionError("timed out waiting")
+
+def _assert_dies(pid):
+    try:
+        _wait(lambda: subprocess.run(["ps", "-p", str(pid)], capture_output=True).returncode, 10)
+    finally:
+        subprocess.run(["kill", "-9", str(pid)], capture_output=True)
+
+def test_check_interrupt_reaps_the_capped_step(tmp_path):
+    pid_file = tmp_path / "pid"
+    p = subprocess.Popen(["bash", str(tmp_path / "scripts/check.sh"), "fast"], cwd=_fake_repo(tmp_path, 'echo $$ >"$ZZ_PID"; exec sleep 60'),
+                         env=_env(tmp_path, CHECK_BUDGET_S="120", ZZ_PID=str(pid_file)), start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,  # as from a shell: premerge's pool ignores INT
+                         preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+    _wait(lambda: pid_file.exists() and pid_file.read_text(), 30)
+    os.killpg(p.pid, signal.SIGINT), p.wait(30)  # Ctrl-C reaches check.sh's group; timeout leads its own
+    _assert_dies(int(pid_file.read_text()))
+
+def test_premerge_pool_limit_serial_lane_dedupe_pyflakes_lint_and_no_timeout(tmp_path):
+    body = "import os, time\ndef test_p():\n    for c in '+-':\n        open(os.environ['ZZ_LOG'], 'a').write(c + '{}\\n')\n" \
+           "        c == '+' and time.sleep(1)\n"
+    _, _, run = _pm_repo(tmp_path, {f"test_p{i}.py": body.format(f"p{i}") for i in range(1, 5)}, serial="service/tests/test_p3.py\n",
+                         promoted="service/tests/test_p1.py\nservice/tests/test_uses_m.py\n")  # p1 is (b), uses_m is (d) too
+    nt, bin_ = tmp_path / "nt", tmp_path / "bin"  # PATH with pyflakes and no ruff; nt also has no timeout
+    for d in (nt, bin_):
+        d.mkdir(), os.symlink(shutil.which("git"), d / "git"), (d / "pyflakes").write_text("#!/bin/sh\n"), (d / "pyflakes").chmod(0o755)
+    os.symlink(shutil.which("timeout") or shutil.which("gtimeout"), bin_ / "timeout")
+    log = tmp_path / "log"
+    r = run(CHECK_JOBS="2", ZZ_LOG=str(log), PATH=f"{bin_}:/usr/bin:/bin")
+    assert r.returncode == 0 and _rows(r) == ["== (b) changed tests (4)"] + [f"PASS service/tests/test_p{i}.py" for i in range(1, 5)] + [
+        "== (c) promoted tests (1)", "PASS service/tests/test_uses_m.py", "== (d) touched-area tests (0, CHECK_JOBS=2)"], r.stdout + r.stderr
+    ev, cur, peak = log.read_text().split(), 0, 0
+    for i, e in enumerate(ev):
+        cur += 1 if e[0] == "+" else -1; peak = max(peak, cur)
+        if e == "+p3": assert cur == 1 and ev[i + 1] == "-p3", ev  # serial lane: alone, nothing starts until it ends
+    assert peak <= 2 and len(ev) == 8, ev
+    r = run(PATH=f"{nt}:/usr/bin:/bin")
+    assert r.returncode == 2 and "premerge: INCOMPLETE (no timeout/gtimeout" in r.stdout, r.stdout

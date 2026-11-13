@@ -159,29 +159,99 @@ class UncertainStaysInCategory(unittest.TestCase):
         self.assertNotIn(FILED, fields); self.assertNotIn("_commercial_classification_v1", fields)
         self.assertIn(SELFIES, self.owners())                                # control
 
-    def assert_withdrawn_and_stable(self):
-        leftover = [o for o in self.owners() if o.startswith(OWNER_PREFIX) and o != MISC]
-        self.assertEqual(leftover, [], "pre-commercial filing survived the uncertain pass")
+    def assert_kept_and_stable(self):
+        self.assertIn(MISC, self.owners())
+        self.assertIn(SELFIES, self.owners(), "unevidenced live membership withdrawn (may be an operator add)")
         state = self.snapshot()
         self.assertEqual(assign_sync(self.s, ACCOUNT, MID, commercial=True), {"status": "already_categorised"})
         self.assertEqual(self.snapshot(), state)
 
-    def test_precommercial_item_with_changed_evidence_drops_old_filing(self):
-        """F1: evidence now only Casual; the live Selfies filing must still be withdrawn when uncertain."""
+    def test_precommercial_item_with_evidenced_filing_drops_it(self):
+        """F1: a pre-commercial filing still backed by current evidence is withdrawn when uncertain."""
+        self.precommercial_selfie()
+        self.analyse("A selfie.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        leftover = [o for o in self.owners() if o.startswith(OWNER_PREFIX) and o != MISC]
+        self.assertEqual(leftover, [], "evidenced pre-commercial filing survived the uncertain pass")
+
+    def test_precommercial_item_with_changed_evidence_keeps_unevidenced_membership(self):
+        """G07c: evidence now only Casual; without FILED the live Selfies membership cannot be told apart from
+        an operator addition, so it is kept (never withdrawn)."""
         self.precommercial_selfie()
         self.analyse("A casual photo.", confidence=40)
         self.assertEqual(self.cls()["status"], "uncertain")                 # control
-        self.assert_withdrawn_and_stable()
+        self.assert_kept_and_stable()
 
-    def test_precommercial_item_with_vanished_metadata_drops_old_filing(self):
-        """F1: metadata gone (pending) on the first commercial pass; old filings are withdrawn."""
+    def test_precommercial_item_with_vanished_metadata_keeps_unevidenced_membership(self):
+        """G07c: metadata gone (pending) on the first commercial pass; no evidence says who filed Selfies."""
         self.precommercial_selfie()
         item = self.item()
         fields = self.fields(); fields.pop("description")
         item.ai_fields_json = json.dumps(fields); self.s.flush()
         assign_sync(self.s, ACCOUNT, MID, commercial=True)
         self.assertEqual(self.cls()["reason"], "analysis_pending")          # control
-        self.assert_withdrawn_and_stable()
+        self.assert_kept_and_stable()
+
+    def test_precommercial_operator_added_membership_survives_uncertain(self):
+        """G07c: a pre-commercial item has no FILED record, so a live auto-folder membership outside its
+        current evidence may be an operator addition; the uncertain pass must not withdraw it."""
+        self.precommercial_selfie()
+        fitness = VaultFolder(account_id=ACCOUNT, created_by=FITNESS, name="Fitness")
+        self.s.add(fitness); self.s.flush()
+        self.s.add(VaultFolderItem(account_id=ACCOUNT, folder_id=fitness.id, media_id=MID)); self.s.flush()
+        self.analyse("A selfie.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assertNotIn(SELFIES, self.owners())                            # control: evidenced filing withdrawn
+        self.assertIn(FITNESS, self.owners(), "operator-added membership withdrawn")
+        self.analyse("A selfie.", confidence=95)
+        self.assertIn(FITNESS, self.owners(), "operator-added membership lost after regaining confidence")
+
+
+    def add_fitness(self):
+        fitness = VaultFolder(account_id=ACCOUNT, created_by=FITNESS, name="Fitness")
+        self.s.add(fitness); self.s.flush()
+        self.s.add(VaultFolderItem(account_id=ACCOUNT, folder_id=fitness.id, media_id=MID)); self.s.flush()
+
+    def test_precommercial_kept_membership_removal_is_remembered(self):
+        """M3: a kept (unevidenced) membership the operator later removes is not re-added by a confident pass."""
+        self.precommercial_selfie()
+        self.analyse("A casual photo.", confidence=40)
+        self.assertIn(SELFIES, self.owners())                               # control: kept while uncertain
+        self.unfile(SELFIES)                                                # operator removal
+        self.analyse("A selfie.", confidence=95)
+        self.assertEqual(self.cls()["status"], "proposed")                  # control
+        self.assertNotIn(SELFIES, self.owners(), "operator-removed membership re-added")
+
+    def test_v1_operator_added_membership_survives_uncertain(self):
+        """M1: legacy V1 keys are no-readd memory only; they never widen what an uncertain pass withdraws."""
+        selfies = VaultFolder(account_id=ACCOUNT, created_by=SELFIES, name="Selfies")
+        self.s.add(selfies); self.s.flush()
+        self.s.add(VaultFolderItem(account_id=ACCOUNT, folder_id=selfies.id, media_id=MID))
+        self.item().ai_fields_json = json.dumps({MARKER: True}); self.s.flush()
+        self.add_fitness()                                                  # operator addition
+        self.analyse("A selfie.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assertNotIn(SELFIES, self.owners())                            # control: evidenced filing withdrawn
+        self.assertIn(FITNESS, self.owners(), "operator-added membership withdrawn on a V1 row")
+        self.analyse("A selfie.", confidence=95)
+        self.assertTrue({SELFIES, FITNESS} <= set(self.owners()), self.owners())
+
+    def test_uncertain_evidence_change_withdraws_newly_evidenced_filing(self):
+        """M2: still uncertain, but evidence now backs the kept Selfies membership; the fast return must not mask it."""
+        self.precommercial_selfie()
+        self.analyse("A casual photo.", confidence=40)
+        self.assertIn(SELFIES, self.owners())                               # control
+        self.analyse("A selfie.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assertNotIn(SELFIES, self.owners(), "evidenced filing kept by the unchanged-classification fast return")
+
+    def test_proposed_item_with_changed_evidence_drops_its_filing(self):
+        """Guard: the classifier's own proposed filing is withdrawn even when uncertain evidence no longer backs it."""
+        self.analyse("A selfie.", confidence=99)
+        self.assertIn(SELFIES, self.owners())                               # control
+        self.analyse("A casual photo.", confidence=40)
+        self.assertEqual(self.cls()["status"], "uncertain")                 # control
+        self.assertNotIn(SELFIES, self.owners(), "proposed filing survived the uncertain pass")
 
 
 if __name__ == "__main__":

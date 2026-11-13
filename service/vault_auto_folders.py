@@ -98,8 +98,10 @@ def _auto_memberships(session, account_id, media_id, keys=None):
 
 
 def _withdraw_filings(session, account_id, media_id, filed):
-    """Remove live memberships in auto folders the classifier filed; return their keys. Operator additions,
-    Miscellaneous/Unsorted and archived folders are untouched. Idempotent: a second call finds nothing."""
+    """Remove live memberships in the auto folders of `filed` categories; return their keys. Memberships in
+    other auto folders (operator additions), Miscellaneous/Unsorted and archived folders are untouched. An
+    operator membership in a filed category cannot be told apart from the classifier's and is removed.
+    Idempotent: a second call finds nothing."""
     rows = _auto_memberships(session, account_id, media_id, sorted(filed)) if filed else []
     if rows:
         session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
@@ -168,19 +170,27 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
         elif isinstance(previous, dict):
             filed = set()           # filed as uncertain only; nothing automatic to preserve
         else:
-            # categorised before commercial mode (no FILED): its live auto filings count as filed, so evidence
-            # that changed or vanished cannot strand them; evidenced-but-removed stays not re-added.
-            filed = set(evidenced) | {key for key, _ in _auto_memberships(session, account_id, media_id)}
+            filed = set(evidenced)  # categorised before commercial mode: evidenced-but-removed stays not re-added
+        # `filed` is no-readd MEMORY: every category filed, seen live (an operator may add an item to any auto
+        # folder) or V1-classified, so a later operator removal sticks. It never decides what is withdrawn.
+        filed |= {key for key, _ in _auto_memberships(session, account_id, media_id)}
         if legacy:
             filed |= LEGACY_KEYS
         withdrawn = set()
         if uncertain:
-            # Uncertain is Miscellaneous only. Withdrawn filings are not operator removals: un-file them so
-            # confident evidence re-files them. Runs before the fast return so already-uncertain rows heal.
+            # Uncertain is Miscellaneous only. WITHDRAWAL is current evidence plus the classifier's own last
+            # proposed filing; other live memberships are kept as possible operator additions (an operator
+            # membership in a withdrawn category is indistinguishable and removed). Withdrawn filings are not
+            # operator removals: un-file them so confident evidence re-files them. Runs before the fast return
+            # so already-uncertain rows heal and an evidence change is never masked.
             wanted = ["miscellaneous"]
-            withdrawn = _withdraw_filings(session, account_id, media_id, filed)
+            withdraw = set(evidenced)
+            if isinstance(previous, dict) and previous.get("status") == "proposed" and isinstance(previous.get("categories"), list):
+                withdraw |= {k for k in previous["categories"] if isinstance(k, str)}
+            withdrawn = _withdraw_filings(session, account_id, media_id, withdraw)
             filed -= withdrawn
-        if fields.get(CURRENT_MARKER) is True and previous == classification and not withdrawn:
+        if (fields.get(CURRENT_MARKER) is True and previous == classification and not withdrawn
+                and fields.get(FILED) == sorted(filed)):
             return {"status": "already_categorised"}   # unchanged evidence: no write, no membership churn
         fields["_commercial_classification_v1"]=classification
     if legacy:

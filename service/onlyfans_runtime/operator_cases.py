@@ -31,7 +31,7 @@ SCAN_LIMIT = 10
 EXCERPT = 200
 # Due time from creation. Missing staffing blocks live activation of a handover-dependent account; it does not
 # change these clocks. An overdue open case escalates one level per interval (sweep_overdue).
-SLA_SECONDS = {"distress": 900, "consent": 1800, "identity": 1800, "stop_contact": 3600,
+SLA_SECONDS = {"minor": 900, "distress": 900, "consent": 1800, "identity": 1800, "stop_contact": 3600,
                "complaint": 4 * 3600, "hardship": 24 * 3600, "external_sender": 3600, "other": 24 * 3600}
 ACTOR = "safety-guard"
 EXTERNAL_GRACE_SECONDS = 60       # our own send's projection may lag the provider echo; younger rows are not judged

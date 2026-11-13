@@ -93,6 +93,7 @@ def run_incogniton(profile_id: str | None = None, *,
         nickname=nickname,
         incogniton_profile_id=profile_id,
         make_active=make_active,
+        account_id=account_id,
     )
     return final_path
 
@@ -172,6 +173,7 @@ def run_playwright_proxy(proxy_label: str | None = None, *,
         nickname=nickname,
         incogniton_profile_id=None,  # this mode bypasses Incogniton entirely
         make_active=make_active,
+        account_id=account_id,
     )
     # Auto-bind the proxy to the freshly-captured account. The whole point of
     # this flow is "capture and runtime use the same egress", so leaving the
@@ -191,13 +193,19 @@ def run_playwright_proxy(proxy_label: str | None = None, *,
 def _adopt_into_account(raw_path: Path, *,
                         nickname: str | None,
                         incogniton_profile_id: str | None,
-                        make_active: bool) -> Path:
+                        make_active: bool,
+                        account_id: str | None = None) -> Path:
     """Move a session file (and its chunk) into the per-account dir,
-    update meta.json, and optionally mark the account active."""
+    update meta.json, and optionally mark the account active.
+
+    Refused before any move or registry write unless the capture is one
+    OnlyFans login (user_id == auth_id cookie) and, on a re-capture
+    (`account_id`), that account's own login."""
     data = json.loads(raw_path.read_text())
     uid = str((data.get("headers") or {}).get("user_id") or "")
     if not uid:
         raise RuntimeError("Captured session is missing headers.user_id — cannot route to account")
+    _check_owner(f"of-{account_id or uid}", uid, data.get("cookies") or [])
     adir = account_registry.account_dir(uid)
     adir.mkdir(parents=True, exist_ok=True)
 

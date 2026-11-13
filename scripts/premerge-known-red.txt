@@ -53,3 +53,5 @@ service/tests/test_w3_rcb_history_page.py::test_newer_valid_inbound_survives_one
 # 1d2c5f36 (measured, G05/HARN-2): script, sqlite3 unrecognized token ":" creating of_engine_offer_grant (PG-only
 # `::jsonb` CHECK on SQLite); touched-area via conversation_policy, unrelated to G05; team base red, queued
 service/tests/test_commercial_full_path.py sqlalchemy.exc.OperationalError: (sqlite#.OperationalError) unrecognized token: ":" [SQL: CREATE TABLE of_engine_offer_grant (]
+# 7e817be2 (measured, PG 55652 + 55662): of_earnings_total DuplicateTable upgrading from rev 94 (same root as the rev-91 entry); team base red, queued
+service/tests/test_onlyfans_fold_pending_pg.py::test_populated_94_upgrade_queues_only_unfolded_or_changed_sources

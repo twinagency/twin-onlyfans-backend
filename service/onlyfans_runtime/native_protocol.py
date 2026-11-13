@@ -122,6 +122,7 @@ _MENTION = re.compile(r'<a href="/[A-Za-z0-9_.-]{1,64}">(@[A-Za-z0-9_.-]{1,64})<
 # visible text hides nothing.
 _AUTOLINK = re.compile(r'<a href="(https?://)([^\s"<>]{1,2048})">((?:\1)?\2)</a>')
 _BREAK = re.compile(r"<br />|<br/>|<br>")
+_PARAGRAPH = re.compile(r"\s*<p(?:\s[^<>]*)?>.*</p>\s*", re.S)
 
 
 def history_text(value):
@@ -136,7 +137,9 @@ def history_text(value):
         bare = _BREAK.sub("\n", _AUTOLINK.sub(r"\3", _MENTION.sub(r"\1", value)))
         if bare != value and "<" not in bare and ">" not in bare:
             return html.unescape(bare)
-        if not value.startswith("<p>") or not value.endswith("</p>"):
+        # Paragraph-wrapped bodies may carry outer whitespace or attributes on
+        # <p> (the parser drops them); anything else still refuses.
+        if not _PARAGRAPH.fullmatch(value):
             raise NativeProtocolError("unsupported native history formatting") from None
     parser = _HistoryText()
     parser.feed(value)

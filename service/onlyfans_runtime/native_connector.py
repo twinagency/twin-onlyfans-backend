@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import html
 import json
 import logging
 import os
@@ -52,15 +53,19 @@ def _synthetic_headers(port, path, owner_id):
     return {**headers, "user-id": str(owner_id)}
 
 
+_TAG = re.compile(r"<[^<>]*>")
+
+
 def _skip_reason(row, *, owner_id, fan_id):
     """Name a well-formed, in-scope row on the skip whitelist, else None.
 
     Explicit tip/unsent/deleted flags are skipped: the history Event has no
-    tip and these rows carry no conversation text. A text-only row (no media,
-    no price) whose sole defect is unsupported history markup is skipped too,
-    so one odd older body never blocks newer inbound; nothing ledger- or
-    offer-relevant is lost. Every other row the strict parser rejects still
-    refuses the whole page.
+    tip and these rows carry no conversation text. A row with no media, no
+    price and no visible text whose sole defect is unsupported history markup
+    (e.g. a bare inline image tag) is skipped too, so one odd older body never
+    blocks newer inbound. A row whose markup wraps visible text still refuses:
+    the protocol never silently loses fan words. Every other row the strict
+    parser rejects still refuses the whole page.
     """
     try:
         _id(row["id"])
@@ -79,8 +84,13 @@ def _skip_reason(row, *, owner_id, fan_id):
     if row.get("isDeleted") is True:
         return "deleted"
     text = row.get("text")
-    if type(text) is not str or len(text.encode()) > 20000:
-        return None
+    try:
+        if type(text) is not str or len(text.encode()) > 20000:
+            return None
+    except UnicodeError:
+        return None  # lone surrogate: message() refuses it as a protocol error
+    if html.unescape(_TAG.sub("", text)).strip():
+        return None  # visible text behind unsupported markup: refuse, never drop it
     try:
         history_text(text)
         return None

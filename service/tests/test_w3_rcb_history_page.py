@@ -75,3 +75,14 @@ def test_history_text_accepts_benign_paragraph_variants_inferred(text):
 def test_history_text_still_refuses_unsupported_wrappers(text):
     with pytest.raises(NativeProtocolError):
         history_text(text)
+
+
+# Flash W3RCB-01 r1 (blocker): only markup with NO visible text may be skipped. Fan words behind
+# unsupported markup must refuse the page (protocol doc: never silently lose meaning), not vanish.
+@pytest.mark.parametrize("text", ["<blockquote>fan words</blockquote>", "I <3 you", "\ud800"],
+                         ids=["blockquote", "bare-lt", "lone-surrogate"])
+def test_visible_text_behind_unsupported_markup_refuses_never_drops(text, tmp_path):
+    newer = native_message(20, owner=OWNER, text="<p>Synthetic newer inbound</p>")
+    old = native_message(10, owner=OWNER, text=text)
+    with pytest.raises(NativeProtocolError):
+        _read_page([newer, old], tmp_path)

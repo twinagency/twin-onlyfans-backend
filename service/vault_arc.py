@@ -404,6 +404,7 @@ async def heal_armed_arcs() -> None:
             select(AccountAiConfig.vault_ai_config_json)
             .where(AccountAiConfig.vault_ai_config_json.is_not(None)))).scalars().all()
         tease_ids: list[int] = []
+        opener_ids: list[int] = []
         for blob in blobs:
             try:
                 cfg = json.loads(blob) if blob else {}
@@ -415,12 +416,17 @@ async def heal_armed_arcs() -> None:
             # arcs book kind arc_tease and never need healing. One malformed
             # entry must not abort the heal for every other account.
             for d in drops:
-                if d.get("kind") != "send_mass_message":
+                if d.get("kind") == "auto_posts" and d.get("channel") == "feed_paid":
+                    target = opener_ids
+                elif d.get("kind") == "send_mass_message":
+                    target = tease_ids
+                else:
                     continue
                 try:
-                    tease_ids.append(int(d["job_id"]))
+                    target.append(int(d["job_id"]))
                 except (KeyError, TypeError, ValueError):
                     continue
+        await _heal_opener_counts(s, opener_ids)
         if not tease_ids:
             return
 
@@ -443,6 +449,39 @@ async def heal_armed_arcs() -> None:
             patched += 1
     if patched:
         log.info("arc_tease_heal patched=%d reopened=%d", patched, reopened)
+
+
+async def _heal_opener_counts(s, job_ids: list[int]) -> None:
+    """Batch5 F1 heal: a priced opener booked before `_post_job` wrote counts sells
+    1 of N items at the full day price. Pending registry-listed jobs get the
+    authored counts. Idempotent (only absent counts are set); nothing is re-opened."""
+    if not job_ids:
+        return
+    from sqlalchemy import select
+
+    from db.models import ScheduledJob
+    jobs = (await s.execute(select(ScheduledJob).where(
+        ScheduledJob.id.in_(job_ids), ScheduledJob.status == "pending"))).scalars().all()
+    patched = 0
+    for j in jobs:
+        try:
+            payload = json.loads(j.payload_json or "{}")
+            posts = payload.get("posts") or []
+        except Exception:
+            continue
+        changed = False
+        for post in posts:
+            if not isinstance(post, dict) or not post.get("price") or "media_count" in post:
+                continue
+            post["media_count"] = len(post.get("media_files") or [])
+            if post.get("preview_media_files"):
+                post["preview_media_count"] = len(post["preview_media_files"])
+            changed = True
+        if changed:
+            j.payload_json = json.dumps(payload)
+            patched += 1
+    if patched:
+        log.info("arc_opener_count_heal patched=%d", patched)
 
 
 async def cancel(account_id: str, *, _reason: str = "cancelled") -> dict[str, Any]:

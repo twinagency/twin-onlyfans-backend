@@ -76,3 +76,4 @@ service/tests/test_g06g_arc_post_sale_gate.py
 service/tests/test_g06f_ppv_library_sale_gate.py
 service/tests/test_gds_disable_sends_pg.py
 service/tests/test_g06g_arc_post_sale_gate.py::test_booked_opener_sells_the_whole_day_every_fire
+service/tests/test_g06gb_opener_count_heal.py

@@ -1,0 +1,77 @@
+"""W3 runtime-core-b red tests: one bad historical row must not refuse the whole page.
+
+native_connector.messages parses every row with message(..., history=True); one row that
+is a tip/unsent/deleted or carries unsupported formatting raises, so every other row of
+the page (including a newer valid inbound message) is never ingested. Per-row refusal is
+pinned elsewhere (test_onlyfans_native_history.py) and is NOT contradicted here: the
+claim is page-level only. Synthetic wire, no network, no PG.
+"""
+import json
+import os
+from unittest.mock import patch
+
+import pytest
+
+from onlyfans_native_protocol_fixture import native_message
+from onlyfans_runtime.native_protocol import NativeProtocolError, history_text
+from onlyfans_runtime.provider_connector import NativeProviderConnector
+from test_onlyfans_vault_response_limits import session, OWNER
+
+FAN = 101
+
+
+def _page(rows):
+    def read(method, path, body=b"", **options):
+        if path.endswith("/users/me"):
+            return json.dumps({"id": OWNER}).encode()
+        if path == f"/api2/v2/chats/{FAN}":
+            return json.dumps({"withUser": {"id": FAN}, "unreadMessagesCount": 0,
+                               "hasUnreadMessages": False}).encode()
+        assert f"/chats/{FAN}/messages?" in path, path
+        return json.dumps({"list": rows, "hasMore": False}).encode()
+    return read
+
+
+def _read_page(rows, tmp_path):
+    wire = NativeProviderConnector(session())
+    with patch.dict(os.environ, {"ONLYFANS_PROCESS_ROLE": "worker",
+                                 "ONLYFANS_UNREAD_JOURNAL_DIR": str(tmp_path)}), \
+            patch.object(wire, "_signed_request", side_effect=_page(rows)):
+        return wire.messages(fan_id=FAN, before_id=None, limit=10)
+
+
+def test_control_valid_page_reads(tmp_path):
+    # Setup sanity (green at PIN): the same newer row alone is ingested.
+    page = _read_page([native_message(20, owner=OWNER, text="<p>Synthetic newer inbound</p>")], tmp_path)
+    assert [event.message_id for event in page.events] == [20]
+
+
+@pytest.mark.parametrize("old_row", [
+    {**native_message(10, owner=OWNER), "isTip": True},
+    {**native_message(10, owner=OWNER), "isDeleted": True},
+    native_message(10, owner=OWNER, text='<p><img src="x"></p>'),
+], ids=["old-tip", "old-deleted", "old-unsupported-formatting"])
+def test_newer_valid_inbound_survives_one_bad_older_row(old_row, tmp_path):
+    newer = native_message(20, owner=OWNER, text="<p>Synthetic newer inbound</p>")
+    try:
+        page = _read_page([newer, old_row], tmp_path)
+    except NativeProtocolError as exc:
+        pytest.fail(f"whole page refused by one bad older row ({exc}); newer inbound 20 never ingested")
+    ids = [event.message_id for event in page.events]
+    assert 20 in ids, f"newer valid inbound row 20 not returned; page events {ids}"
+
+
+# (g) INFERRED shapes, not observed on the wire: whitespace after the paragraph wrapper and
+# a paragraph with attributes. history_text currently raises for both.
+@pytest.mark.parametrize("text", ["<p>hi</p>\n", '<p class="x">hi</p>'])
+def test_history_text_accepts_benign_paragraph_variants_inferred(text):
+    assert history_text(text).strip() == "hi"
+
+
+# G04 guard: the relaxed paragraph wrapper still refuses non-paragraph or unsupported markup.
+@pytest.mark.parametrize("text", ["<pre>hi</pre>", "<p>hi</p>x", '<p><img src="x"></p>',
+                                  "<p>hi</p><script>x</script>", " hi <p>x</p>",
+                                  "<p>a</p>junk<p>b</p>", " <p>hi</p><img src=x>", " <p class=x>hi"])
+def test_history_text_still_refuses_unsupported_wrappers(text):
+    with pytest.raises(NativeProtocolError):
+        history_text(text)

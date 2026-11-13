@@ -1,5 +1,5 @@
 # Pre-existing reds, each measured failing on clean a253c84c. One per line: pytest node id (deselected), or a
-# script test file followed by the exact last output line (or final `Name: msg` exception line) it must fail with, every digit run written as # (volatile
+# script test file followed by the exact last output line it must fail with, every digit run written as # (volatile
 # timestamps/ids). Script entries only for scripts that abort on their first failure (one failure = one last line);
 # never for multi-test scripts with a summary line. Remove an entry once it is fixed.
 # a253c84c: of_earnings_total DuplicateTable when upgrading from rev 91

@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from conversation_engine.safety_context import sensitive_match
+from conversation_engine.safety_context import UNDER_18 as _UNDER_18, sensitive_match
 
 from .identity import denies_automation, discloses_ai, sincere_identity_question, wants_human
 
@@ -147,19 +147,21 @@ _HARDSHIP = (
 )
 
 # Minor / age (W5NR-5): matched on the full text (before quote stripping); explicit disclosures are never exempt.
-# A stated age needs a first-person subject (or "just turned" / "turning") AND a positive terminator (clause end,
-# "and"/"but", a chat filler like "lol"/"rn", an emoji, "years old" / "yo" / "-year-old", or a sex suffix "16f"), so "I'm 15 minutes away" or "my car is 15 years old" are not ages.
-_UNDER_18 = r"(?:1[0-7]|[1-9]|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen)"
+# A stated age needs a first-person subject AND a positive terminator (clause end, "and"/"but", a chat filler like
+# "lol"/"rn", a time word "today"/"now", an emoji, "years old" / "yo" / "-year-old", or a sex "16f" / "16 male"), so
+# "I'm 15 minutes away" or "my car is 15 years old" are not ages.
 _MINOR = (
-    re.compile(r"\b(?:under[\s-]?aged?|under\s+18|jailbait|loli|lolita|shota|pedo\w*|school\s?(?:girl|boy)s?|teen(?:s|age|aged|ager|agers)?|"
-               r"(?:i'?m|i\s+am|im)\s+a\s+minor)\b", re.I),
-    re.compile(rf"\b(?:(?:i'?m|i\s+am|im)\s+(?:turning|about\s+to\s+turn)|(?:i\s+)?just\s+turned|i'?m|i\s+am|im|my\s+age\s+is|age\s*:)"
+    re.compile(r"\b(?:under[\s-]?aged?|under\s*(?:18|eighteen)|jailbait|loli|lolita|shota|pedo\w*|school\s?(?:girl|boy)s?|"
+               r"(?:i'?m|i\s+am|im)\s+(?:(?:still|only|just)\s+)?a\s+minor)\b", re.I),
+    re.compile(rf"\b(?:(?:i'?m|i\s+am|im)\s+(?:turning|about\s+to\s+turn)|i\s+just\s+turned|i'?m|i\s+am|im|my\s+age\s+is|age\s*:)"
                rf"\s+(?:a\s+)?(?:(?:only|just|barely|still|almost)\s+)?{_UNDER_18}"
-               r"(?:\s*-?\s*(?:(?:years?|yrs?)[\s-]*old|yrs?|yo|y/o|y\.o|f|m(?!\s+(?:away|out|from|ahead|behind|late)))\b|"
+               r"(?:\s*(?:-\s*)?(?:(?:years?|yrs?)[\s-]*(?:old|of\s+age)|yrs?|yo|y/o|y\.o|f|m(?!\s+(?:away|out|from|ahead|behind|late))|"
+               r"(?:fe)?male|today|now|this\s+year|last\s+(?:week|month)|tomorrow)\b|"
                r"(?=\s*(?:[!?;\n]|[.,](?!\d)|$|(?:and|but|lol|haha+|lmao|tho|rn|btw|ok|okay)\b|[^\x00-\x7f])))", re.I),
 )
-# Step-family terms share the engine's single exemption: someone's real relative ("my stepsister got a job") only.
-_STEP = re.compile(r"\bstep[ -]?(?:sis|sister|bro|brother|daughter|son)s?\b", re.I)
+# Native minor set = sibling/child step terms + teen words (step-PARENT roleplay is adult; the engine's banned set is
+# broader by design). They go through the engine's single exemption: someone's real relative ("my teenager got a job").
+_STEP = re.compile(r"\b(?:step[ -]?(?:sis|sister|bro|brother|daughter|son)s?|teen(?:s|age|aged|ager|agers)?)\b", re.I)
 
 
 def _minor(raw):

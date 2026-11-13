@@ -52,17 +52,19 @@ def shrink_data_url(data_url: str, max_edge: int = MAX_EDGE_DEFAULT) -> str:
 
 
 # A vision model that declines OPENS with the refusal ("I'm sorry, but I can't ..."), whatever its length; a real
-# description may quote "I can't wait" later on, so only the opening counts. On True, inbound_describe tries its next
-# model and, when every model refuses, returns None (image_desc stays NULL); the vault describer (when escalate) retries
-# once on qwen3-vl-235b, then records the item as `refused`. An apology is never stored as a description.
-_REFUSAL_OPENINGS = ("i'm sorry", "sorry", "i can't", "i cannot", "i'm unable", "i am unable", "unfortunately",
-                     "i won't", "i will not", "as an ai")
+# description may quote "I can't wait" later on, so only the opening (or "content policy" in the first 80 chars)
+# counts. On True, inbound_describe tries its next model and, when every model refuses, returns None (image_desc stays
+# NULL); the vault describer (when escalate) retries once on qwen3-vl-235b, then records the item as `refused`. An apology is never stored as a description.
+_REFUSAL_OPENINGS = ("i'm sorry", "sorry", "i apologize", "apologies", "i can't", "i cannot", "can't assist", "cannot assist",
+                     "can't help", "cannot help", "i'm unable", "i am unable", "unable to", "i'm not able", "i am not able",
+                     "not able to", "unfortunately", "i'm afraid", "i must decline", "i won't", "i will not", "against my",
+                     "as an ai")
 
 
 def is_refusal(text: str) -> bool:
     """Did the model decline instead of describing? Empty counts as a refusal."""
     low = (text or "").strip().lower().replace("\u2019", "'")
-    return not low or low.startswith(_REFUSAL_OPENINGS)
+    return not low or low.startswith(_REFUSAL_OPENINGS) or "content policy" in low[:80]
 
 
 def img_data_url(b: bytes) -> str:

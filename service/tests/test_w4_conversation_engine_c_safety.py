@@ -26,13 +26,18 @@ def test_w4cec4_control_explicit_pretend_still_blocked():
 @pytest.mark.parametrize("text", ["come here stepsis", "you are my stepsis now", "your stepsis misses you",
                                   "you are now officially my stepsister", "you\u2019re my stepsis", "be my stepsis",
                                   "my stepsis is so hot", "i love my stepsis", "my stepsis, be a good girl",
-                                  "my stepsis, that's you tonight"])
+                                  "my stepsis, that's you tonight", "my stepsis is 16 years old", "my stepsis. be a good girl",
+                                  "my stepsis. that's you tonight", "my teen stepsis", "be my older stepsis",
+                                  "talk to me like my stepsis", "my little stepsis"])
 def test_g05_bare_or_cast_step_family_is_banned(text):
     assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is not None
 
 
 @pytest.mark.parametrize("text", ["my stepsister got a new job", "her stepbrother is visiting. be nice",
-                                  "my stepbrother is visiting"])
+                                  "my stepbrother is visiting", "I am visiting my stepsister", "my stepsis is 25",
+                                  "I'm with my stepsister at the mall", "my stepsister got a new job as a nurse",
+                                  "my stepbrother will be visiting", "my older stepsister got a new job",
+                                  "my teenager got a new job", "my teenager is visiting", "my stepsis is 18"])
 def test_g05_real_relative_step_family_is_exempt(text):
     assert safety_context.sensitive_match(model_output.PLATFORM_BANNED_RX, text, "") is None
 

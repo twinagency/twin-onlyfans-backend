@@ -63,13 +63,21 @@ def test_g05_minor_case_is_all_scope_and_resume_blocking():
 BENIGN = ["I'm 15 minutes away", "i have two kids and a busy week", "im 25", "i turned 30 today", "my stepsister got a new job",
           "wear a teeny bikini", "I am 15 seconds away", "I'm 15 pounds heavier", "I turned 17 in 2005", "12 year old whiskey",
           "my 16 year old son", "I'm 16 days sober", "my car is 15 years old", "be there in 15 secs",
-          "my stepbrother is visiting", "I'm one.", "I'm one of them", "I'm 15m away"]
+          "my stepbrother is visiting", "I'm one.", "I'm one of them", "I'm 15m away", "my son just turned 16.",
+          "she just turned 16", "I am visiting my stepsister", "I'm with my stepsister at the mall", "my stepsis is 18",
+          "my stepsister got a new job as a nurse", "my stepbrother will be visiting", "my older stepsister got a new job",
+          "my teenager got a new job", "my teenager is visiting", "my stepsis is 25"]
 DISCLOSURE = ["i'm a minor", "I'm a 16-year-old", "im a sixteen-year-old", "I'm 16 y.o", "im 16yrs", "I am under-age",
               "im underaged", "be my step-sis", "pretend you're my stepsisters", "I'm 9", "I'm almost 17", "my age is 16",
               "im 16 and bored", "I'm 15\nwbu", "be my stepsis", "you are now officially my stepsister", "you\u2019re my stepsis",
               "your stepsis misses you", "my stepsister is so sexy", "i'm 16f", "im 16m", "I'm 16 f", "i just turned 16",
               "i'm turning 16", "I'm 16 lol", "im 15 haha", "i'm 16 tho", "i am 14 rn", "my stepsis is so hot",
-              "i love my stepsis", "my stepsis, be a good girl", "my stepsis, that's you tonight"]
+              "i love my stepsis", "my stepsis, be a good girl", "my stepsis, that's you tonight", "I'm 16 years of age",
+              "I'm under eighteen", "im under 18", "I'm 16 male", "i'm 15 female", "I am 16 today", "i am 16 now",
+              "i just turned 16 today", "i just turned 16 last week", "I am still a minor", "i'm only a minor",
+              "my stepsis is 16 years old", "my stepsis. be a good girl", "my stepsis. that's you tonight", "i'm a teen",
+              "i'm a teenager", "im teen", "my teen stepsis", "be my older stepsis", "talk to me like my stepsis",
+              "my little stepsis", "I'm 16 tomorrow", "i'm turning 17 this year"]
 
 
 @pytest.mark.parametrize("text", BENIGN)
@@ -80,3 +88,13 @@ def test_g05_minor_detector_neighbours(text):
 @pytest.mark.parametrize("text", DISCLOSURE)
 def test_g05_minor_disclosure_is_held(text):
     assert "minor" in _held(text) and sd.output_violation(text) == "minor-theme"
+
+
+@pytest.mark.parametrize("text", ["i'm 16" + " " * 20000 + "x", "i'm 16" + "\t" * 20000 + "x", "i'm 16" + " -" * 10000 + "x",
+                                  "my stepsis " * 1820, "i'm " * 5000 + "x", "my " * 7000 + "stepsis"],
+                         ids=["spaces", "tabs", "dashes", "stepsis", "im", "my"])
+def test_g05_minor_rules_are_linear_on_20kb(text):
+    import time
+    t0 = time.perf_counter()
+    [rule.search(text) for rule in (*sd._MINOR, sd._STEP)], sd._minor(text)
+    assert time.perf_counter() - t0 < 0.5

@@ -1142,8 +1142,7 @@ class MoxyService:
                             case.owner=case.owner or assigned
                 event.status='held';event.reason=reason;return event_id
             try:snap=snapshot(s,account,event.fan_id,event)
-            except Refused as exc:  # hold this fan's event; other fans proceed
-                event.status='held';event.reason=str(exc)[:128];return event_id
+            except Refused as exc:self._evidence_hold(s,account,event,exc);return event_id
             source=json.loads(event.payload_json).get('source_message_id')
             if source and event.kind in {'turn','welcome'}:
                 incoming=[m for m in snap['history'] if m['direction']=='in']
@@ -1289,6 +1288,22 @@ class MoxyService:
         event.status='ready';event.reason=None;event.lease_until=None
         diagnose(s,account,'decision_ready',event=event)
 
+    def _invalidated(self,s,account,e):
+        """Stale on a changed snapshot; a refused snapshot holds only this event (G01-02)."""
+        try:
+            if digest(snapshot(s,account,e.fan_id,e))==e.snapshot_hash:return False
+            e.status='stale';e.reason='moxy_snapshot_changed'
+        except Refused as exc:self._evidence_hold(s,account,e,exc)
+        return True
+
+    def _evidence_hold(self,s,account,event,exc):
+        """Refused snapshot (unreadable ownership evidence): hold this fan's event; other fans proceed.
+        Surfaced like a prompt-build failure (diagnostic + the fan's moxy_technical operator case)."""
+        event.status='held';event.reason=str(exc)[:128]
+        diagnose(s,account,'context_failure',event=event,error_type=type(exc).__name__)
+        owner=s.get(MoxyAccount,account)
+        if owner is not None:self._technical_attention(s,owner,event)
+
     def _technical_attention(self,s,owner,event):
         from onlyfans_runtime.operator_cases import open_case
         payload=json.loads(event.payload_json)
@@ -1373,8 +1388,7 @@ class MoxyService:
                         diagnose(s,account,'late_completion_cost_reconciled',event=event)
                         continue
                     try:fresh=snapshot(s,account,event.fan_id,event)
-                    except Refused as exc:
-                        event.status='held';event.reason=str(exc)[:128];continue
+                    except Refused as exc:self._evidence_hold(s,account,event,exc);continue
                     if event.snapshot_hash!=digest(fresh):
                         event.status='stale';event.reason='moxy_snapshot_changed'
                     else:
@@ -1446,14 +1460,14 @@ class MoxyService:
                         elif max((t for t in (policy.provider_cooldown_until,policy.next_dispatch_at)
                                   if t is not None),default=utcnow())>utcnow():
                             e.reason='provider_rate_limited'
-                        elif not _invalidated(s,account,e):
+                        elif not self._invalidated(s,account,e):
                             e.status='ready';e.reason='provider_rate_limit_retry'
                     else:
                         e.status='stale';e.reason=intent.reason
                 elif intent and intent.status in {'cancelled','refused'}:
                     e.status='stale';e.reason=intent.reason
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready')):
-                _invalidated(s,account,e)
+                self._invalidated(s,account,e)
             s.flush()
             owner=s.get(MoxyAccount,account)
             surface_campaign_recovery(s,account,owner)
@@ -1509,16 +1523,6 @@ class MoxyService:
             if e.status in {'held','stale','done'}:
                 from .campaigns import retire
                 retire(s,e)
-
-
-def _invalidated(s,account,e):
-    """Stale on a changed snapshot; hold only this event when its snapshot is refused (G01-02)."""
-    try:
-        if digest(snapshot(s,account,e.fan_id,e))==e.snapshot_hash:return False
-        e.status='stale';e.reason='moxy_snapshot_changed'
-    except Refused as exc:
-        e.status='held';e.reason=str(exc)[:128]
-    return True
 
 
 def surface_campaign_recovery(s,account,owner):

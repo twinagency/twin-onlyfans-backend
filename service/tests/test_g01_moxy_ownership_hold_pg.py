@@ -6,7 +6,10 @@ malformed `media_ids` payload inserted by ORM (stand-in for corrupt ingested PPV
 import pytest
 from sqlalchemy.orm import Session
 
+from sqlalchemy import func, select
+
 from db.models import Fan, Message, OfConversationState
+from db.onlyfans_case_models import OfOperatorCase
 from db.onlyfans_moxy_models import MoxyEvent
 from onlyfans_runtime.store import utcnow
 from test_moxy_integrated_pg import decision, model, setup
@@ -34,8 +37,15 @@ def test_g01_02_corrupt_ownership_for_one_fan_holds_only_that_fans_event(databas
                       price_cents=7500, is_paid=True, created_at=utcnow()))
     good = service.add_event(TENANT, ACCOUNT, HEALTHY, 'scheduled', 'g01-healthy', {})
     assert service.step(TENANT, ACCOUNT, model(decision())) == 1
+    assert service.step(TENANT, ACCOUNT, model(decision())) == 0  # next tick: no retry of the held event
     with Session(engine) as s:
         held = s.get(MoxyEvent, (ACCOUNT, bad))
         assert (held.status, held.reason) == ('held', 'ownership evidence unavailable')
+        assert stage == 'ready' or held.model_call_id is None  # held before any model call
         assert s.get(MoxyEvent, (ACCOUNT, good)).status == 'queued'
+        cases = s.scalars(select(OfOperatorCase).where(OfOperatorCase.account_id == ACCOUNT,
+                                                       OfOperatorCase.fan_id == CORRUPT)).all()
+        assert [c.category for c in cases] == ['moxy_technical']  # surfaced once, to an operator
+        assert s.scalar(select(func.count()).select_from(OfOperatorCase).where(
+            OfOperatorCase.account_id == ACCOUNT, OfOperatorCase.fan_id == HEALTHY)) == 0
     store.close()

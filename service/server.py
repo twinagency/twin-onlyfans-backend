@@ -208,7 +208,7 @@ def _migrate_proxy_bindings_to_accounts() -> None:
     if mapping:
         try:
             n = proxy_registry.migrate_legacy_assignments(mapping)
-        except proxy_registry.ProxyRegistryUnreadable as e:
+        except (proxy_registry.ProxyRegistryUnreadable, OSError) as e:
             # Boot must survive; every proxy lookup refuses (503) until fixed.
             log.error("proxy registry unreadable, skipping migration: %s", e)
             return

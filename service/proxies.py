@@ -31,8 +31,6 @@ secrets into the OS keychain — see TODO section O.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,41 +46,47 @@ def _empty() -> dict[str, Any]:
     return {"proxies": []}
 
 
-class ProxyRegistryUnreadable(RuntimeError):
+class ProxyRegistryUnreadable(Exception):
     """proxies.json exists but can't be read/parsed/is mis-shaped. Fail closed:
     an unreadable registry must never read as "no proxy assigned" (that would
     send the account's OF traffic out direct), nor be overwritten by a save."""
 
 
+def _ref(v: Any) -> bool:  # an account id / session filename as written by this module
+    return isinstance(v, (str, int)) and not isinstance(v, bool)
+
+
+def _well_formed(data: Any) -> bool:
+    """Shape every routing reader relies on; a mis-typed binding field would
+    otherwise read as "unassigned" (direct egress) or crash the migration."""
+    return isinstance(data, dict) and isinstance(data.get("proxies"), list) and all(
+        isinstance(p, dict)
+        and (p.get("assigned_account_id") is None or _ref(p["assigned_account_id"]))
+        and (p.get("assigned_session") is None or isinstance(p["assigned_session"], str))
+        and (p.get("assigned_account_ids") is None or (
+            isinstance(p["assigned_account_ids"], list) and all(map(_ref, p["assigned_account_ids"]))))
+        for p in data["proxies"])
+
+
 def load() -> dict[str, Any]:
-    if not REGISTRY_PATH.exists():
-        return _empty()  # fresh install: no proxies is legitimate
     try:
         data = json.loads(REGISTRY_PATH.read_text())
+    except FileNotFoundError:
+        if REGISTRY_PATH.is_symlink():  # dangling link = registry lost, not "none assigned"
+            raise ProxyRegistryUnreadable(f"{REGISTRY_PATH.name} is a dangling symlink") from None
+        return _empty()  # fresh install: no proxies is legitimate
     except (OSError, ValueError) as e:  # ValueError covers JSON + unicode decode
         raise ProxyRegistryUnreadable(f"{REGISTRY_PATH.name} unreadable: {type(e).__name__}") from None
-    if not (isinstance(data, dict) and isinstance(data.get("proxies"), list)
-            and all(isinstance(p, dict) for p in data["proxies"])):
+    if not _well_formed(data):
         raise ProxyRegistryUnreadable(f"{REGISTRY_PATH.name} mis-shaped: expected {{\"proxies\": [{{...}}]}}")
     return data
 
 
 def save(data: dict[str, Any]) -> None:
-    """Atomic: temp file in the same dir, then os.replace — a crash mid-write
-    leaves the old file intact instead of a truncated one."""
-    fd, tmp = tempfile.mkstemp(dir=REGISTRY_PATH.parent, prefix=".proxies.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:  # mkstemp → 0600; holds proxy creds
-            f.write(json.dumps(data, indent=2, sort_keys=False))
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, REGISTRY_PATH)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
-        raise
+    # In place, not temp+rename: docker-compose bind-mounts this single file, and
+    # replacing a mount point fails (EBUSY). A torn write reads back as
+    # unreadable → fail closed, never as "no proxy".
+    REGISTRY_PATH.write_text(json.dumps(data, indent=2, sort_keys=False))
 
 
 def list_proxies() -> list[dict[str, Any]]:

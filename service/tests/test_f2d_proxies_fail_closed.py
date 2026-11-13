@@ -1,7 +1,6 @@
 """F2d: an existing-but-unreadable proxies.json must fail closed, never read as
 "no proxy assigned" (which routes the account's OF traffic out direct)."""
 import json
-import os
 
 import pytest
 
@@ -12,6 +11,11 @@ BAD = {
     "not_a_dict": '[{"label": "x"}]',
     "no_proxies_key": '{"other": []}',
     "proxies_not_list": '{"proxies": {"label": "x"}}',
+    # mis-typed bindings: a str ids field reads as "unassigned" (direct), an int one crashes the migration
+    "ids_str": '{"proxies": [{"label": "t-1", "assigned_account_ids": "acct-test"}]}',
+    "ids_int": '{"proxies": [{"label": "t-1", "assigned_account_ids": 7}]}',
+    "id_list": '{"proxies": [{"label": "t-1", "assigned_account_id": ["acct-test"]}]}',
+    "session_int": '{"proxies": [{"label": "t-1", "assigned_session": 5}]}',
 }
 ENTRY = {"label": "t-1", "scheme": "http", "host": "127.0.0.1", "port": 9,
          "assigned_account_ids": ["acct-test"]}
@@ -69,24 +73,22 @@ def test_of_client_refuses_instead_of_direct(reg, tmp_path, monkeypatch):
     assert built and built[0]["proxy_label"] == "t-1"
 
 
-def test_save_is_atomic_temp_then_replace(reg, monkeypatch):
-    proxies.upsert(dict(ENTRY))
-    calls = []
-    real = os.replace
-    monkeypatch.setattr(proxies.os, "replace",
-                        lambda s, d: (calls.append((s, d)), real(s, d)))
-    proxies.upsert({**ENTRY, "notes": "n2"})
-    assert len(calls) == 1 and str(calls[0][1]) == str(reg)
-    assert os.path.dirname(calls[0][0]) == str(reg.parent)
-    assert proxies.get_by_label("t-1")["notes"] == "n2"
+def test_lost_registry_is_not_empty(reg, tmp_path):
+    reg.symlink_to(tmp_path / "gone.json")  # dangling link: exists() is False, registry still lost
+    with pytest.raises(proxies.ProxyRegistryUnreadable):
+        proxies.get_for_account("acct-test")
+    reg.unlink()
+    reg.mkdir()  # docker creates a dir when the bind-mounted host file is missing
+    with pytest.raises(proxies.ProxyRegistryUnreadable):
+        proxies.get_for_account("acct-test")
 
-    def boom(s, d):
-        raise OSError("crash mid-save")
-    monkeypatch.setattr(proxies.os, "replace", boom)
-    with pytest.raises(OSError):
-        proxies.upsert({**ENTRY, "notes": "n3"})
-    assert json.loads(reg.read_text())["proxies"][0]["notes"] == "n2"
-    assert [p.name for p in reg.parent.iterdir()] == ["proxies.json"]  # no temp litter
+
+def test_well_formed_legacy_shapes_still_route(reg):
+    reg.write_text(json.dumps({"proxies": [
+        {"label": "a", "assigned_account_ids": [], "assigned_account_id": 101, "assigned_session": None},
+        {"label": "b", "assigned_account_ids": None, "assigned_session": "session_x.json"}]}))
+    assert proxies.get_for_account("101")["label"] == "a"
+    assert proxies.get_for_session("session_x.json")["label"] == "b"
 
 
 def test_relay_surfaces_503_not_no_proxy(reg, tmp_path, monkeypatch):

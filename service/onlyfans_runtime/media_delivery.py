@@ -64,17 +64,21 @@ def outside(session, account_id, media_ids):
     return vault_import_policy.outside_selection(session, account_id, list(media_ids)) if fansapi else set()
 
 
-def refusal(session, account_id, rows):
-    """(media_id, reason) of the first vault row the sale refuses, else None: removed, unsellable
-    kind, provider metadata (_unusable), or on FansAPI verified outside the commercial selection
-    (`outside`). Native accounts have no selection and are unchanged."""
+def refusals(session, account_id, rows):
+    """Every (media_id, reason) the sale refuses, in row order: removed, unsellable kind, provider
+    metadata (_unusable), or on FansAPI verified outside the commercial selection (`outside`).
+    Native accounts have no selection and are unchanged. Automation picks drop these rows."""
     fansapi, gone = fansapi_policy(session, account_id), outside(session, account_id, [r.media_id for r in rows])
     for r in rows:
         why = ("removed" if r.removed_at is not None else "kind" if r.kind not in {"image", "photo", "video"}
                else _unusable(r, fansapi) or ("outside_selection" if r.media_id in gone else None))
         if why:
-            return r.media_id, why
-    return None
+            yield r.media_id, why
+
+
+def refusal(session, account_id, rows):
+    """(media_id, reason) of the first vault row the sale refuses (`refusals`), else None."""
+    return next(refusals(session, account_id, rows), None)
 
 
 def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):

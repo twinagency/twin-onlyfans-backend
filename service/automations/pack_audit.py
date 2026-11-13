@@ -32,7 +32,7 @@ from sqlalchemy import func, select
 
 import vault_pack_picker
 from db.engine import get_session
-from db.models import VaultCacheRun, VaultFolder, VaultFolderItem, VaultItem
+from db.models import VaultCacheRun, VaultFolder, VaultFolderItem
 
 from . import content_resolver
 from .pack_claim import Claim, is_substitute_claim
@@ -50,7 +50,7 @@ log = logging.getLogger("of-relay.automation.pack_audit")
 # whatever our cache says.
 #
 # What DOES matter is narrower and is checked directly: every id about to be
-# charged for must still be a live `VaultItem` (not soft-deleted). A genuinely
+# charged for must still be sellable (`_live_media`, the sale's refusals). A genuinely
 # dead id fails loudly at the wire, which is the right place for it.
 MIRROR_WARN_AGE = timedelta(days=7)
 
@@ -96,22 +96,13 @@ async def _mirror_age(account_id: str) -> timedelta | None:
 
 
 async def _live_media(account_id: str, media: list[int] | set[int]) -> set[int]:
-    """Of these ids, the ones that are still un-deleted `VaultItem`s.
+    """Of these ids, the ones the sale would still sell (`content_resolver.sellable`).
 
-    The one query behind both modules' liveness rule: an id soft-deleted after
-    two clean collect sweeps is gone from her vault, and charging for it delivers
-    nothing.
+    The one read behind both modules' liveness rule: an id soft-deleted after
+    two clean collect sweeps, or one the provider marks not ready / hidden /
+    errored, delivers nothing, and charging for it is the lie this audit vetoes.
     """
-    ids = sorted({int(m) for m in media})
-    if not ids:
-        return set()
-    async with get_session() as s:
-        return {int(m) for m in (await s.execute(
-            select(VaultItem.media_id).where(
-                VaultItem.account_id == str(account_id),
-                VaultItem.media_id.in_(ids),
-                VaultItem.removed_at.is_(None))
-        )).scalars().all()}
+    return set(await content_resolver.sellable(account_id, media))
 
 
 async def audit_pack(account_id: str, category: str, rung: str,
@@ -146,11 +137,12 @@ async def audit_pack(account_id: str, category: str, rung: str,
     if len(paid) < MIN_ITEMS:
         bad.append(f"rule4 |M−P| = {len(paid)} < {MIN_ITEMS}")
 
-    # Rule 5 — every paid id must still EXIST.
-    if paid:
-        missing = sorted(paid - await _live_media(account_id, paid))
+    # Rule 5 — every attached id (paid AND free preview) must still be sellable: a dead
+    # preview fails the send as surely as a dead paid id.
+    if setM:
+        missing = sorted(setM - await _live_media(account_id, setM))
         if missing:
-            bad.append(f"rule5 media no longer in the vault: {missing}")
+            bad.append(f"rule5 media the sale would not sell: {missing}")
     return bad
 
 
@@ -164,8 +156,8 @@ async def audit_ask(account_id: str, media: list[int], claim: Claim,
 
       1. the count in the claim is the count he receives (the claim IS the
          contract, and a caption that over-counts is the 2026-07-31 shape);
-      2. every id is still a live `VaultItem` — a soft-deleted id is charged for
-         and never arrives;
+      2. every id is still sellable (`_live_media`: not removed, ready, not hidden /
+         errored, inside the FansAPI selection) — a dead id is charged for and never arrives;
       3. nobody else is in it unless he asked (2026-08-11, "very important").
 
     🚨 Rule 1 compares two integers. It used to recover the count by summing every

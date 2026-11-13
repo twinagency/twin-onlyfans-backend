@@ -1414,17 +1414,15 @@ class MoxyService:
             self.store._runtime(s,tenant,account);event=s.get(MoxyEvent,(account,event_id))
             if event.status=='queued':return event.intent_id
             if event.status!='ready':raise Refused('moxy_decision_not_ready')
+            # D429: a pre-D429 rate-limit retry may already be delivered; only an operator may release it.
+            if event.reason=='provider_rate_limit_retry':raise Refused('moxy_provider_delivery_unconfirmed')
             from .parts import active, index
             d=active(event);snap=json.loads(event.snapshot_json)
             terms=validate_decision(json.loads(s.get(MoxyAccount,account).settings_json),snap,
                 json.loads(event.decision_json),part_index=index(event))
             control=s.get(OfConversationState,(account,event.fan_id));fan=event.fan_id
             body=d['text'];revision=control.revision
-            # A proved rejection is retained as its own immutable attempt. A
-            # bounded rate-limit retry receives a new idempotency key.
             command_key='moxy:'+event_id+':part:'+str(index(event))
-            if event.reason=='provider_rate_limit_retry' and event.intent_id:
-                command_key=digest({'moxy_retry_event':event_id,'rejected_intent':event.intent_id,'part':index(event)})
         return self.authority.prepare(tenant,account,fan,command_key=command_key,
             expected_revision=revision,body=body,origin='automated',actor='moxy-owner',moxy_event_id=event_id,
             catalog_item_id=terms['item']['id'] if terms else None,

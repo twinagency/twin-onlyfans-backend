@@ -8,7 +8,7 @@ from test_moxy_integrated_pg import setup,run,decision,model
 from test_onlyfans_text_delivery_pg import TENANT,ACCOUNT,unthrottle
 from db.onlyfans_delivery_models import OfTextIntent,OfDeliveryPolicy
 from db.onlyfans_moxy_models import MoxyEvent
-from onlyfans_runtime.store import utcnow
+from onlyfans_runtime.store import utcnow,Refused
 from onlyfans_runtime.text_delivery import SyntheticTextTransport,ProviderThrottled,NotAccepted
 
 
@@ -76,6 +76,8 @@ def test_legacy_ready_rate_limit_retry_is_held_not_resent(database,monkeypatch):
     expire_cooldown(engine)
     with Session(engine) as s,s.begin():
         event=s.get(MoxyEvent,(ACCOUNT,identity));event.status='ready';event.reason='provider_rate_limit_retry'
+    with pytest.raises(Refused,match='moxy_provider_delivery_unconfirmed'):
+        service.queue(TENANT,ACCOUNT,identity)
     fresh=model(decision())
     assert service.step(TENANT,ACCOUNT,fresh)==0
     with Session(engine) as s:
@@ -130,7 +132,8 @@ def test_rate_limit_recovery_holds_never_reattempts(database,monkeypatch,mutatio
     assert service.step(TENANT,ACCOUNT,fresh)==0
     with Session(engine) as s:
         row=s.get(MoxyEvent,(ACCOUNT,identity))
-        assert row.status in {'stale','held'}
+        # Flash W7CS-01: no re-attempt exists to revalidate; whatever changed, the possibly-delivered reply is held.
+        assert row.status=='held' and row.reason=='provider_delivery_unconfirmed', (row.status,row.reason)
         assert row.intent_id==intent
         assert len(s.scalars(select(OfTextIntent).where(OfTextIntent.moxy_event_id==identity)).all())==1
     assert fresh.calls==[]

@@ -37,14 +37,22 @@ def _assert_stopped(w, result, n):
         assert s.get(OfLaunchCommand, (ACCOUNT, key(n))) is not None
         change = s.scalar(select(OfDeliveryPolicyChange).where(OfDeliveryPolicyChange.account_id == ACCOUNT,
             OfDeliveryPolicyChange.revision == policy.revision))
-        assert change.actor == ACTOR and json.loads(change.after_json)['enabled'] is False
+        before, after = json.loads(change.before_json), json.loads(change.after_json)
+        assert change.actor == ACTOR and after['enabled'] is False and after['media_enabled'] is False
+        # Audit keeps the wider stored values and records exactly the clamp (never a widening).
+        assert after['limit_units'] == min(before['limit_units'], limits['send_units'])
+        assert after['throttle_seconds'] == max(before['throttle_seconds'], limits['throttle_seconds'])
 
 
-def test_active_pilot_stop_commits_with_drifted_wider_policy(stopped_text):
+# Throttle cannot drift wider: the DB floor (>= 1) equals the scope limit; the narrowed-scope test covers its clamp.
+@pytest.mark.parametrize('drift', [{'limit_units': 10000}])
+def test_active_pilot_stop_commits_with_drifted_wider_policy(stopped_text, drift):
     w, _, _, _, first = stopped_text
     active = start(w, first['revision'])
+    limits = pilot_scope.describe(w.store, TENANT, ACCOUNT)['config']['limits']
+    assert limits['send_units'] < 10000   # the drift really is wider
     with Session(w.database[1]) as s, s.begin():
-        s.execute(update(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == ACCOUNT).values(limit_units=10000))
+        s.execute(update(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == ACCOUNT).values(**drift))
     with Session(w.database[1]) as s:
         assert s.get(OfRuntime, ACCOUNT).enabled and s.get(OfDeliveryPolicy, ACCOUNT).enabled   # sending is armed
     _assert_stopped(w, _stop(w, active['revision'], 92001), 92001)

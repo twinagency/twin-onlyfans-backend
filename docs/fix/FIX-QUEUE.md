@@ -1,7 +1,8 @@
 # FIX-QUEUE (backend)
 
-**Buckets (findings/groups, Flash triage @91e32acc, approved by Opus 2026-11-12T23:5xZ):**
-blk 25/12 · sec-money maj 14/11 · maj 27/16 · minor 3/1 · relay-deferred 13/4 · fixed-by-team 0 · closed 10 · in-flight 2 (F4 W6HR-1, F5 W2OR-04) · drift-unknown 25 · YAGNI 4. **Open queued: 82** (≥50 → review lanes stay paused).
+**Buckets (findings/groups; triage @91e32acc, recounted @77b6d33d 2026-11-13T05:4xZ):**
+blk 17/8 (G01 G02 G04 G05 merged) · sec-money maj 14/11 · maj 28/17 (+G05-PR2) · minor 4/2 (+W6HR-1c) · relay-deferred 13/4 · fixed-by-team 0 · closed 19 (+G01 G02 G04 G05, F5 W2OR-04) · in-flight 1 (F4 W6HR-1: 1a #100 merged, 1b pending) · drift-unknown 25 · YAGNI 4. **Open queued: 76** (≥50 → review lanes stay paused).
+- Queued from fixes 2026-11-13: **G05-PR2 (maj)** engine has no numeric-age path ("im 16 tbh" caught natively only) + engine "step-sis"/"stepbros", native "im a kid", obfuscated ages, non-English; shared minor module/parity table; owner gates (b) minor bypasses shadow mode? (c) wire output_violation (G14). **W6HR-1c (minor)** new-fan trailing tip counted one poll late (Codex FCF-01).
 
 - Source: [TRIAGE-91e32acc.md](TRIAGE-91e32acc.md) (DeepSeek Flash, read-only worktree). Opus spot-check 5/5 still red at 29f28729 (measured): W3RO-01, W6AX-7×2, W6OC-14, W4OFR-07, T17×2.
 - Order = group order G01→G44 (blk, sec-money maj, maj, minor batch, relay-deferred last = "before relay re-enable" gate). One PR per group (root cause).

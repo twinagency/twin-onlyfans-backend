@@ -67,6 +67,7 @@ from attribution import (
 )
 import automation_executor as ax  # shared _make_client seam (tests patch ax._make_client)
 from automation_registry import register
+from automations import content_resolver
 from automations._wordfilter import (  # compliance word filter
     banned_hit_summary, filter_banned, load_banned_words,
 )
@@ -265,6 +266,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         media_files, opener_previews = await _opener_media(funnel.id, account_id)
         if media_files and not previews:
             previews = opener_previews
+    # Sale gate at fire time (G06i) — covers every delegating sender (mass_premade, funnel opener):
+    # any refused media refuses the broadcast, never a reduced set at the price.
+    refused = await content_resolver.sale_refusal(account_id, price, media_files)
+    if refused:
+        log.warning("send_mass_message: refused account=%s — %d of %d media not sellable",
+                    account_id, len(refused), len(media_files))
+        return {"status": "skipped", "reason": "media_not_sellable", "refused_media": len(refused)}
 
     # Attribution: a broadcast from the worker is the system Automation actor
     # (no X-Employee-Id in a background run). Best-effort — NULL is acceptable.

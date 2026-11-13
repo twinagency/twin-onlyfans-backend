@@ -117,7 +117,25 @@ async def sellable(account_id: str, media, session=None) -> dict[int, str]:
     return {int(r.media_id): str(r.kind or "") for r in rows if r.media_id not in refused}
 
 
-_SCAN_MAX = 5000          # rows one sellable window may page through (bounds a mostly-refused vault)
+async def sale_refusal(account_id: str, price, media) -> list[int]:
+    """THE sale gate for a priced automation send at fire time (G06i); [] = it may go out.
+    Media authored days ahead can be hidden / errored / not ready / out of the selection by fire
+    time. An authored set sells whole or not at all (G06f), so the caller refuses the send on ANY
+    refused id (`media_not_sellable`), never shrinks it at the price. Free (price 0/None) or
+    media-less sends are not sales → []. An unparseable price counts as priced (fail closed).
+    Fresh-upload claim dicts (scheduled_send) are not vault rows, so they are not checked."""
+    try:
+        priced = float(price or 0) > 0
+    except (TypeError, ValueError):
+        priced = True
+    ids = [int(m) for m in (media or []) if not isinstance(m, dict)]
+    if not priced or not ids:
+        return []
+    ok = await sellable(account_id, ids)
+    return [m for m in ids if m not in ok]
+
+
+_SCAN_MAX = 5000         # rows one sellable window may page through (bounds a mostly-refused vault)
 
 
 async def sellable_window(account_id: str, q, limit: int, session=None) -> list:

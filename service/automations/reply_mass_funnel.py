@@ -111,6 +111,7 @@ import automation_executor as ax  # _make_client / _parse_iso / _to_cents / leas
 import llm_client                  # call .chat at runtime so tests can patch it
 from attribution import write_outbound_attribution
 from automation_registry import register
+from . import content_resolver
 from ._common import (
     LIVE_PROOF_GUARDRAIL, apply_word_restriction, hold_with_typing,
     is_substantive_msg, load_voice_blocks,
@@ -369,19 +370,32 @@ def _resolve_step_media(step: dict, acct_media: dict | None) -> tuple[list[int],
     return media, previews
 
 
-def _presend_problems(is_ppv: bool, texts: list[str], media: list[int]) -> list[str]:
+def _step_price(step: dict) -> int:
+    """The paid step's OF price (dollars); missing / garbage → the spec default."""
+    try:
+        return int(step["price"]) if step.get("price") is not None else _DEFAULT_PPV_PRICE
+    except (TypeError, ValueError):
+        return _DEFAULT_PPV_PRICE
+
+
+async def _presend_problems(account_id: str, step: dict, is_ppv: bool, texts: list[str],
+                            media: list[int]) -> list[str]:
     """#1 pre-send guard: reasons THIS step must NOT be sent as-is ([] = safe).
     Catches the blank-send traps the DOM flow could produce:
       • `ppv_without_media` — a paid_ppv step with no resolved vault media would
         send a blank paywall (a $-locked message with nothing behind it);
       • `empty_text` — every bubble is empty after OF word-restriction, i.e. the
-        fan would get an empty message.
+        fan would get an empty message;
+      • `media_not_sellable` — the sale gate at fire time (G06i): any refused media
+        blocks the paid step, never a reduced set at the price.
     The caller LOGS + SKIPS on any problem rather than sending garbage."""
     problems: list[str] = []
     if not any(apply_word_restriction(str(t)).strip() for t in texts):
         problems.append("empty_text")
     if is_ppv and not media:
         problems.append("ppv_without_media")
+    elif is_ppv and await content_resolver.sale_refusal(account_id, _step_price(step), media):
+        problems.append("media_not_sellable")
     return problems
 
 
@@ -645,11 +659,7 @@ async def _send_step(
     for i, text in enumerate(texts):
         kwargs: dict = {}
         if is_ppv and i == 0:
-            price = step.get("price")
-            try:
-                price = int(price) if price is not None else _DEFAULT_PPV_PRICE
-            except (TypeError, ValueError):
-                price = _DEFAULT_PPV_PRICE
+            price = _step_price(step)
             # `media`/`previews` are the caller-resolved per-account vault ids
             # (FunnelAccountMedia), normalized at the top of this function.
             # PPV: the TEXT is the sales pitch and must stay FREE/readable — only
@@ -984,8 +994,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 if _bw:
                     log.info("reply_mass_funnel banned word(s) %r account=%s fan=%s step=%s",
                              banned_hit_summary(_bw), account_id, fan_id, c)
-                problems = (["banned_words"] if texts is None
-                            else _presend_problems(is_ppv, texts, step_media))
+                problems = (["banned_words"] if texts is None else await _presend_problems(
+                    account_id, step, is_ppv, texts, step_media))
                 if problems:
                     blocked += 1
                     cs.last_error = "blocked:" + ",".join(problems)

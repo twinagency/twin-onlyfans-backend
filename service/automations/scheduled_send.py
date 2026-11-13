@@ -41,6 +41,7 @@ from datetime import datetime
 import automation_executor as ax  # _make_client / of_write_paced / _parse_iso / cooldown seams
 from attribution import write_outbound_attribution
 from automation_registry import register
+from automations import content_resolver
 
 log = logging.getLogger("of-relay.automation.scheduled_send")
 
@@ -77,6 +78,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         log.info("scheduled_send audience-blocked account=%s fan=%s (%s)",
                  account_id, fan_id, why)
         return {"status": "skipped", "reason": f"audience:{why}", "fan_id": fan_id}
+    # Sale gate at fire time (G06i): a priced send whose vault media went unsellable since it
+    # was scheduled is refused whole, never sold at the price.
+    refused = await content_resolver.sale_refusal(account_id, price, media_files)
+    if refused:
+        log.warning("scheduled_send refused account=%s fan=%s — %d media not sellable",
+                    account_id, fan_id, len(refused))
+        return {"status": "skipped", "reason": "media_not_sellable", "fan_id": fan_id}
     purpose = "manual" if str(payload.get("send_purpose") or "") == "manual" else "gated"
 
     client = await asyncio.to_thread(ax._make_client, account_id)

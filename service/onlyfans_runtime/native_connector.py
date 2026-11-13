@@ -191,7 +191,7 @@ class NativeLoopbackConnector:
             params["id"] = before_id
         path = API_PATH + f"/chats/{fan_id}/messages?" + urlencode(params)
         rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
-        kept, events, ids, skipped, indexes = [], [], [], {}, []
+        kept, events, ids, skipped, indexes, inbound = [], [], [], {}, [], []
         for index, row in enumerate(rows):
             try:
                 event = message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True)
@@ -204,6 +204,8 @@ class NativeLoopbackConnector:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 indexes.append(index)
                 ids.append(_id(row["id"]))
+                if _id(row["fromUser"]["id"]) == fan_id:
+                    inbound.append(_id(row["id"]))
                 continue
             kept.append(row); events.append(event); ids.append(event.message_id)
         if skipped:
@@ -216,7 +218,7 @@ class NativeLoopbackConnector:
         observations = [value for value in (from_history(row, event) for row, event in zip(kept, events)) if value is not None]
         # The cursor covers skipped rows too, so they are never re-read and a
         # page of only skipped rows still advances.
-        return MessagePage(events, more, observations, min(ids) if ids else None)
+        return MessagePage(events, more, observations, min(ids) if ids else None, tuple(inbound))
 
     def send(self, dispatch, *, authority, tenant_id):
         self._ready()

@@ -10,7 +10,8 @@
 #     in list order; files in scripts/premerge-serial.txt (contention-flaky) run alone. TERM/INT reaps running targets.
 # Exit 0 = OK, 1 = FAILED, 2 = INCOMPLETE (something skipped, ALLOW_SKIP=1 accepts; or no timeout binary). Pre-existing
 # reds live in scripts/premerge-known-red.txt (proven red at base): pytest ids are deselected (a file whose every test
-# is listed passes only on pytest's exact "N deselected[, M warnings] in Xs", rc 5); a script must end on the listed line, digit runs
+# is listed passes only on pytest's exact "N deselected[, M warnings] in Xs", rc 5); a script must end on the listed line (SQLAlchemy
+# "(Background on this error at" footer: its last `Name: msg`/`Name` line), digit runs
 # written as # (volatile timestamps/ids) - only for scripts that abort on their first failure. Any other failure, or a
 # listed script that passes, FAILS. Network blocked via dead proxy. Each target is capped at CHECK_FILE_TIMEOUT_S (600):
 # over = FAIL; a killed target (rc 137 before its cap) = FAIL.
@@ -64,7 +65,7 @@ is_script() {  # run-service-tests.py rule: no pytest import and (__main__ entry
   ! grep -qE '^\s*(import|from) pytest' "$1" && { grep -qE '^if __name__ *== *.__main__.' "$1" || ! grep -qE '^(async )?def test_' "$1"; }
 }
 run() {  # one process per target, like run-service-tests.py isolation
-  local t="$1" file="${1%%::*}" res rc last expect="" k id rest s=$SECONDS tmo=0 cmd=(-m pytest -q -p no:cacheprovider "$1")
+  local t="$1" file="${1%%::*}" res rc last pin expect="" k id rest s=$SECONDS tmo=0 cmd=(-m pytest -q -p no:cacheprovider "$1")
   [ -f "$file" ] || { echo "MISSING $t"; fail=1; return 0; }
   if [[ "$file" == *_pg.py && -z "${ONLYFANS_TEST_PG_URL:-}" ]]; then echo "SKIP (no ONLYFANS_TEST_PG_URL) $t"; skip=$((skip+1)); return 0; fi
   for k in "${known[@]+"${known[@]}"}"; do read -r id rest <<<"$k"
@@ -72,7 +73,9 @@ run() {  # one process per target, like run-service-tests.py isolation
     elif [ "$id" = "$t" ]; then expect="$rest"; fi; done
   [ "$t" = "$file" ] && is_script "$file" && cmd=("$file")
   "$TO" -k 5 "$cap" "$PY" "${cmd[@]}" >"$out/$i.o" 2>&1 & echo $! >"$out/$i.pid"
-  wait $! && rc=0 || rc=$?; rm -f "$out/$i.pid"; res="$(cat "$out/$i.o")"; last="$(tail -1 <<<"$res")"
+  wait $! && rc=0 || rc=$?; rm -f "$out/$i.pid"; res="$(cat "$out/$i.o")"; last="$(tail -1 <<<"$res")" pin="$last"
+  # SQLAlchemy appends "[SQL: ...]" + "(Background on this error at: ...)" after the message: pin its exception line
+  [[ $last == "(Background on this error at: "* ]] && pin="$(grep -E '^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |$)' <<<"$res" | tail -1)"
   { [ "$rc" = 124 ] || [ "$rc" = 137 ]; } && [ $((SECONDS - s)) -ge "$cap" ] && tmo=1  # the cap fired, not a kill/own 124
   if [ "$rc" = 0 ]; then
     # pytest exits 0 on in-test skips/xfails: those cases did not run, so they are not a PASS.
@@ -81,7 +84,7 @@ run() {  # one process per target, like run-service-tests.py isolation
     if [ -z "$expect" ]; then echo "PASS $t: $(tail -1 <<<"$res")"; else echo "FAIL $t: known-red but passed; drop it from $KNOWN"; fail=1; fi
   elif [ "$tmo" = 1 ] && [ "$cut" = 1 ]; then echo "DEFERRED to wide: $t (cut at the fast budget)"; def=1
   elif [ "$tmo" = 1 ]; then echo "FAIL $t: per-file timeout ${FTO}s (CHECK_FILE_TIMEOUT_S)"; tail -30 <<<"$res"; fail=1
-  elif [ -n "$expect" ] && [ "$(sed -E 's/[0-9]+/#/g' <<<"$last")" = "$expect" ]; then
+  elif [ -n "$expect" ] && [ "$(sed -E 's/[0-9]+/#/g' <<<"$pin")" = "$expect" ]; then
     echo "KNOWN-RED $t: $expect"; kr=$((kr+1))
   elif [ "$rc" = 5 ] && [ "${cmd[0]}" = -m ] && [[ " ${cmd[*]} " == *" --deselect "* ]] && [[ $last =~ ^[0-9]+\ deselected(,\ [0-9]+\ warnings?)?\ in\ [0-9.]+s$ ]]; then
     echo "KNOWN-RED $t: every test in it is known-red (deselected)"  # pytest rc 5: nothing left to run

@@ -179,6 +179,17 @@ def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure
         r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S=stop, **{how: "1"})  # (OOM, self-kill, a test's own 124): FAIL, not deferred
         assert r.returncode == 1 and "FAIL service/tests/test_uses_m.py" in r.stdout and "DEFERRED" not in r.stdout, r.stdout
 
+def test_premerge_known_red_script_pins_its_terminal_exception_not_an_earlier_one(tmp_path):
+    ctx = "raise RuntimeError('pinned 7\\n[SQL: CREATE x]\\n(Background on this error at: u)')"  # SQLAlchemy-style trailer
+    _, _, run = _pm_repo(tmp_path, {
+        "test_x1.py": ctx + "\n",  # terminal exception = the pin, trailer lines after it: KNOWN-RED
+        "test_x2.py": f"try:\n    {ctx}\nexcept RuntimeError:\n    raise AssertionError\n",  # chained, message-less: FAIL
+        "test_x3.py": f"import traceback\ntry:\n    {ctx}\nexcept RuntimeError:\n    traceback.print_exc()\nraise SystemExit('later')\n"},
+        known="".join(f"service/tests/{k}.py RuntimeError: pinned #\n" for k in ("test_x1", "test_x2", "test_x3")))
+    r = run()
+    assert "KNOWN-RED service/tests/test_x1.py: RuntimeError: pinned #" in r.stdout, r.stdout
+    assert "FAIL service/tests/test_x2.py" in r.stdout and "FAIL service/tests/test_x3.py" in r.stdout and r.returncode == 1, r.stdout
+
 def test_premerge_per_file_timeout_fails_and_a_killed_run_reaps_inner_tests(tmp_path):
     hang = "import os, time\ndef test_hang():\n    open(os.environ.get('ZZ_PID', os.devnull), 'w').write(str(os.getpid()))\n    time.sleep(60)\n"
     _, env, run = _pm_repo(tmp_path, {"test_z5.py": hang})

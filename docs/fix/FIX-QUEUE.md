@@ -222,3 +222,7 @@ Relay (service/server.py, automations, wcfi) is NOT in prod; it may be reused. T
 | R3 | W6CE-1 | relay-only, per OQ-27 list |
  YAGNI rows (CVA-06, CVA-10, W5BB-8) skipped. Drift-unknown 25 = code not on head → not queued here (belongs to commercial-integration line).
 Live confirm after F3 (or F4) and after F6.
+
+- **G08b** (major, from G08 rwl): ModelLedger.reconcile_unknown has no prod caller; model_transport/reconciliation.py keeps timeouts `unknown` and sets usage_known (blocks reconcile_unknown); pilot cap sums across days → unresolvable unknown reservations can exhaust the pilot. Owner Q: is one bounded retry after an unknown outcome acceptable?
+- **G06b** (minor+): out-of-selection check at sale for legacy items; native sync inline isDeleted/isHidden copies (vault_management ~833/~998); vault_video protected_source re-export; tests preview⊆media / dup-shelf / classify-removed.
+- **BASE-RED campaigns** (from sweep): test_onlyfans_campaigns_pg / fastt_campaign_dispatch_pg / provider_pg native campaign / fold_pending_pg: 25 red at a253c84c and cf3095d7 (m); test_concurrent_admission_units HEAD pin 0110 stale.

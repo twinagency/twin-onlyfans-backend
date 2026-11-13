@@ -232,7 +232,8 @@ def test_planner_preserves_gates(monkeypatch,case):
  async def session():
   items=[] if case=="missing" else [NS(media_id=12,account_id="of-test",removed_at=None,content_hash="v1",kind="photo",
         description="portrait in soft window light",default_price_cents=1500)]
-  yield NS(execute=AsyncMock(return_value=NS(first=lambda:None if case=="missing" else (10,),scalars=lambda:NS(all=lambda:items))))
+  yield NS(execute=AsyncMock(return_value=NS(first=lambda:None if case=="missing" else (10,),scalars=lambda:NS(all=lambda:items))),
+           run_sync=AsyncMock(return_value=[]))  # media_delivery.refusals: nothing refused
  monkeypatch.setattr(co,"get_session",session)
  monkeypatch.setattr("automations.sales_turn.prepare",AsyncMock(return_value=None))
  monkeypatch.setattr("automations.sales_turn.progress_decision",AsyncMock(return_value=None))

@@ -66,3 +66,4 @@ service/tests/test_f2d_proxies_fail_closed.py
 service/tests/test_g02_01_provider_disable_never_refused_pg.py
 service/tests/test_g06s_sqlite_singles_save.py
 service/tests/test_g06d_automation_sale_gate.py
+service/tests/test_w7_ci4_send_d429_native_pg.py

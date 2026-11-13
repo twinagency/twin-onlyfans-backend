@@ -1440,21 +1440,10 @@ class MoxyService:
                     if evidence.startswith('fastt-auth-failed:'):
                         e.status='held';e.reason='provider_authentication_required'
                     elif evidence.startswith('fastt-rate-limited:'):
-                        attempts=s.scalar(select(func.count()).select_from(OfTextIntent).where(
-                            OfTextIntent.account_id==account,OfTextIntent.moxy_event_id==e.event_id,
-                            OfTextIntent.status=='not_accepted'))
-                        policy=s.get(OfDeliveryPolicy,account)
-                        if attempts>=3:
-                            e.status='held';e.reason='provider_retry_limit_reached'
-                        elif json.loads(e.payload_json).get('campaign_id'):
-                            e.status='held';e.reason='campaign_provider_recovery_required'
-                        elif s.get(MoxyAccount,account).mode!='on':
-                            e.status='held';e.reason='moxy_off'
-                        elif max((t for t in (policy.provider_cooldown_until,policy.next_dispatch_at)
-                                  if t is not None),default=utcnow())>utcnow():
-                            e.reason='provider_rate_limited'
-                        elif not self._invalidated(s,account,e):
-                            e.status='ready';e.reason='provider_rate_limit_retry'
+                        # Legacy rows only (D429: a 429 now stays unknown). A 429 after the POST never proved
+                        # non-delivery, so hold for an operator; never re-dispatch (possible double send).
+                        e.status='held';e.reason=('campaign_provider_recovery_required'
+                            if json.loads(e.payload_json).get('campaign_id') else 'provider_delivery_unconfirmed')
                     else:
                         e.status='stale';e.reason=intent.reason
                 elif intent and intent.status in {'cancelled','refused'}:

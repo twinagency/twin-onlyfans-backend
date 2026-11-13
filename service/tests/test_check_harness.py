@@ -136,7 +136,7 @@ def _pm_repo(tmp_path, files, known="", promoted="# none\n", serial="# none\n"):
     """Fake repo for premerge.sh: service/m.py touched (-> test_uses_m.py is touched-area (d)); `files` = changed (b)."""
     repo, t = tmp_path / "r", tmp_path / "r/service/tests"
     t.mkdir(parents=True), (repo / "scripts").mkdir(), shutil.copy(ROOT / "scripts/premerge.sh", repo / "scripts")
-    for n, s in {"promoted": promoted, "known-red": known, "serial": serial}.items():
+    for n, s in {"promoted": promoted, "known-red": known, "serial": serial, "surfaces": "# none\n"}.items():
         (repo / f"scripts/premerge-{n}.txt").write_text(s)
     (repo / "service/m.py").write_text("X = 1\n")
     (t / "test_uses_m.py").write_text("import m, os, time\ndef test_m():\n    os.environ.get('ZZ_KILL') and os.kill(os.getpid(), 9); os.environ.get('ZZ_124') and os._exit(124)"
@@ -268,10 +268,19 @@ def _imports(p):  # service-relative dotted names p imports (absolute, service.-
             out |= {base} | {f"{base}.{a.name}".strip(".") for a in n.names}
     return {m.removeprefix("service.") for m in out}
 
+# Floor: a member importing another member also counts as an importer, so demoting it to `!safety` would pass the
+# guard below silently. Shrinking a group must edit this list too (visible in review).
+SURFACE_FLOOR = {"safety": {f"service/{m}.py" for m in (
+    "native_pilot/safety_detect", "conversation_engine/safety_context", "vision", "conversation_engine/journey",
+    "conversation_engine/model_output", "onlyfans_runtime/conversation_policy", "onlyfans_runtime/operator_cases")}}
+
 def test_premerge_surface_groups_list_or_vet_every_importer():
     dot = lambda path: path.removeprefix("service/").removesuffix(".py").replace("/", ".")
     srcs = [p for p in (ROOT / "service").rglob("*.py") if "tests" not in p.parts]
-    for g, (members, vetted) in _surfaces().items() or pytest.fail("no surface groups"):
+    groups = _surfaces()
+    for g, floor in SURFACE_FLOOR.items():
+        assert floor <= groups.get(g, (set(), set()))[0], f"{g}: floor members missing or demoted: {sorted(floor - groups.get(g, (set(),))[0])}"
+    for g, (members, vetted) in groups.items() or pytest.fail("no surface groups"):
         assert all((ROOT / m).is_file() for m in members | vetted), g
         mods = {dot(m) for m in members}
         importers = {str(p.relative_to(ROOT)) for p in srcs if _imports(p) & mods} - members
@@ -287,8 +296,12 @@ def test_premerge_surface_change_selects_group_tests_in_c2(tmp_path):
     (sd := repo / "service/native_pilot/safety_detect.py").parent.mkdir(), sd.write_text("X = 1\n")
     _git(repo, "init", "-q"), _git(repo, "add", "."), _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b")
     sd.write_text("X = 2\n")
-    r = subprocess.run(["bash", "scripts/premerge.sh"], cwd=repo, env={**_env(tmp_path), "BASE": "HEAD", "PREMERGE_LIST": "1"},
-                       capture_output=True, text=True, timeout=120)
-    c2 = r.stdout.split("== (c2) surface tests")[-1].split("== (d)")[0]
-    assert r.returncode == 0 and "groups: safety" in c2, r.stdout + r.stderr
-    assert "service/tests/conversation_engine/test_model_units.py" in c2 and "service/tests/test_engine_real_worker_pg.py" in c2, r.stdout
+    for change in ("edit", "delete"):  # a deleted member, unlisted in the same change, still selects its group
+        if change == "delete":
+            _git(repo, "checkout", "-q", "--", "."), sd.unlink()
+            (sf := repo / "scripts/premerge-surfaces.txt").write_text(sf.read_text().replace("safety service/native_pilot/safety_detect.py\n", ""))
+        r = subprocess.run(["bash", "scripts/premerge.sh"], cwd=repo, env={**_env(tmp_path), "BASE": "HEAD", "PREMERGE_LIST": "1"},
+                           capture_output=True, text=True, timeout=120)
+        c2 = r.stdout.split("== (c2) surface tests")[-1].split("== (d)")[0]
+        assert r.returncode == 3 and "groups: safety" in c2, (change, r.stdout + r.stderr)  # 3: a listing is never a pass
+        assert "service/tests/conversation_engine/test_model_units.py" in c2 and "service/tests/test_engine_real_worker_pg.py" in c2, r.stdout

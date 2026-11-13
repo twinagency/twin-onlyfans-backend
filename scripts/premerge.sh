@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # FIX-MODE pipeline gate (added in the first fix PR; CI is billing-locked): every fix PR runs it.
 #   scripts/premerge.sh [extra test files...]   env: BASE PY ONLYFANS_TEST_PG_URL ALLOW_SKIP=1 CHECK_JOBS CHECK_FILE_TIMEOUT_S
-#                                                    PREMERGE_LIST=1 (print the target list by section, run nothing)
+#                                                    PREMERGE_LIST=1 (print the target list by section, run nothing, exit 3)
 #                                                    PREMERGE_DEFER_AFTER_S PREMERGE_STOP_AT_S (both set by check.sh fast)
 # (a) lint python changed since merge-base($BASE) (syntax + undefined names)
 # (b) pytest: changed service/tests/**/test_*.py + extra args        (c) scripts/premerge-promoted.txt (path[::test]/line)
@@ -26,7 +26,7 @@ PROMOTED=scripts/premerge-promoted.txt KNOWN=scripts/premerge-known-red.txt SURF
 export PYTHONPATH="$ROOT:$ROOT/service:$ROOT/service/tests:$ROOT/ops/plan-c-supervision${PYTHONPATH:+:$PYTHONPATH}"
 export HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 NO_PROXY= no_proxy=
 git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || { echo "premerge: FAILED (unknown BASE $BASE)"; exit 1; }
-[ -f "$PROMOTED" ] || { echo "premerge: FAILED (missing $PROMOTED)"; exit 1; }
+for f in "$PROMOTED" "$SURF"; do [ -f "$f" ] || { echo "premerge: FAILED (missing $f)"; exit 1; }; done
 MB="$(git merge-base "$BASE" HEAD)"
 JOBS="${CHECK_JOBS:-3}"; [[ $JOBS =~ ^[1-9][0-9]?$ ]] || { echo "premerge: FAILED (CHECK_JOBS=$JOBS not 1..99)"; exit 1; }
 FTO="${CHECK_FILE_TIMEOUT_S:-600}"; [[ $FTO =~ ^[1-9][0-9]{0,4}$ ]] || { echo "premerge: FAILED (CHECK_FILE_TIMEOUT_S=$FTO)"; exit 1; }
@@ -38,6 +38,7 @@ reap() { local p; for p in "$out"/*.pid; do [ -f "$p" ] && kill -TERM -- "-$(cat
 trap 'reap; rm -rf "$list" "$out"' EXIT; trap 'exit 143' TERM HUP; trap 'exit 130' INT  # inner timeouts lead own pgroups
 git diff --name-only --diff-filter=d "$MB" >"$list"; git ls-files --others --exclude-standard >>"$list"
 changed=(); while IFS= read -r f; do changed+=("$f"); done < <(sort -u "$list" | grep '\.py$' || true)
+gone=(); while IFS= read -r f; do gone+=("$f"); done < <(git diff --name-only --diff-filter=D "$MB" | grep '^service/.*\.py$' || true)
 fail=0 skip=0 kr=0
 
 echo "== (a) lint (${#changed[@]} changed .py vs ${MB:0:8})"
@@ -55,17 +56,20 @@ mentions() {  # tests that import service/<path>.py by its dotted path (or name 
   grep -rlE --include='test_*.py' "$re" service/tests || true
 }
 tests=() area=() surf=() groups=""
+surface() {  # (c2): every group listing $1 (here or at the merge-base) pulls the tests that mention any of its members
+  local g m t; for g in $( { cat "$SURF"; git show "$MB:$SURF" 2>/dev/null || true; } | awk -v f="$1" '$1 !~ /^[#!]/ && $2 == f {print $1}' | sort -u); do
+    [[ "$groups " == *" $g "* ]] && continue; groups+=" $g"
+    for m in $(awk -v g="$g" '$1 == g {print $2}' "$SURF"); do while IFS= read -r t; do surf+=("$t"); done < <(mentions "$m"); done
+  done
+}
 for f in "${changed[@]+"${changed[@]}"}"; do
   case "$f" in
     service/tests/*) case "$(basename "$f")" in test_*.py) tests+=("$f");; esac;;
     service/*) [ "$(basename "$f")" = __init__.py ] && continue
-      while IFS= read -r t; do area+=("$t"); done < <(mentions "$f")
-      [ -f "$SURF" ] && for g in $(awk -v f="$f" '$1 !~ /^[#!]/ && $2 == f {print $1}' "$SURF"); do
-        [[ "$groups " == *" $g "* ]] && continue; groups+=" $g"
-        for m in $(awk -v g="$g" '$1 == g {print $2}' "$SURF"); do while IFS= read -r t; do surf+=("$t"); done < <(mentions "$m"); done
-      done;;
+      while IFS= read -r t; do area+=("$t"); done < <(mentions "$f"); surface "$f";;
   esac
 done
+for f in "${gone[@]+"${gone[@]}"}"; do surface "$f"; done  # a deleted member (base's list: it may be unlisted now)
 promoted=(); while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) promoted+=("$l");; esac; done <"$PROMOTED"
 serial=" $(grep -hv '^#' scripts/premerge-serial.txt 2>/dev/null | tr '\n' ' ' || true)"
 known=(); [ -f "$KNOWN" ] && while IFS= read -r l; do case "$l" in ''|'#'*) ;; *) known+=("$l");; esac; done <"$KNOWN"
@@ -115,7 +119,7 @@ hdr() { [ "$1" = 0 ] && echo "== (b) changed tests ($nc)"; [ "$1" = "$nc" ] && e
   [ "$1" = "$nd" ] && echo "== (d) touched-area tests ($((total - nd)), CHECK_JOBS=$JOBS)"; return 0; }
 flush() { local f s k d; while [ "$n" -lt "$1" ] && [ -f "$out/$n.n" ]; do hdr "$n"; cat "$out/$n"; read -r f s k d <"$out/$n.n"
   fail=$((fail | f)) skip=$((skip + s)) kr=$((kr + k)) deferred=$((deferred + d)) n=$((n + 1)); done; }
-[ -n "${PREMERGE_LIST:-}" ] && { for ((i = 0; i <= total; i++)); do hdr "$i"; [ "$i" = "$total" ] || echo "${targets[$i]}"; done; exit 0; }
+[ "${PREMERGE_LIST:-}" = 1 ] && { for ((i = 0; i <= total; i++)); do hdr "$i"; [ "$i" = "$total" ] || echo "${targets[$i]}"; done; exit 3; }  # 3: not a pass
 for ((i = 0; i < total; i++)); do
   lim=$JOBS; [[ $serial == *" ${targets[$i]%%::*} "* ]] && lim=1  # serial lane: drain the pool, run alone
   while [ "$(jobs -rp | wc -l)" -ge "$lim" ]; do sleep 0.2; flush "$i"; done

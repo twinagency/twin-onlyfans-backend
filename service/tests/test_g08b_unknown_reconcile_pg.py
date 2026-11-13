@@ -2,11 +2,11 @@
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from conversation_engine.model_ledger import ModelLedger
-from db.onlyfans_engine_models import OfEngineModelCall, OfEngineRequest
+from db.onlyfans_engine_models import OfEngineModelCall, OfEnginePilotScope, OfEngineRequest
 from db.onlyfans_case_models import OfOperatorCase
 from onlyfans_runtime.store import utcnow
 from test_onlyfans_foundation_pg import database  # noqa: F401
@@ -15,8 +15,10 @@ from test_plan_c_draft_app_pg import configured_draft  # noqa: F401
 from test_plan_c_supervised_pg import supervised, stage  # noqa: F401
 
 
+@pytest.mark.parametrize('reactivated', [False, True])
 @pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
-def test_crash_recovered_unknown_call_is_handed_to_an_operator_case(supervised, monkeypatch):
+def test_crash_recovered_unknown_call_is_handed_to_an_operator_case(supervised, monkeypatch, reactivated):
+    # reactivated: the call predates the current activation (pilot stopped/re-activated after the crash; Codex G08b).
     world, _, _, seen, pilot = supervised
     ledger = pilot.worker.engine.model.ledger
     original = ledger.mark_calling
@@ -32,6 +34,9 @@ def test_crash_recovered_unknown_call_is_handed_to_an_operator_case(supervised, 
         assert row.status == 'calling'
         row.lease_expires_at = utcnow() - timedelta(seconds=1)
         request_id = row.request_id
+        if reactivated:  # a later activation; the scope guard only allows that via stop/activate, so bypass it here
+            s.execute(text('SET LOCAL session_replication_role = replica'))
+            s.scalar(select(OfEnginePilotScope)).active_since = utcnow() + timedelta(seconds=1)
     for _ in range(3):
         pilot.tick()
     assert not seen and not world.fans.posts  # never re-asked, never sent

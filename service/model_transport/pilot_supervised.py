@@ -305,13 +305,14 @@ class SupervisedPilot:
                 self.worker._cancel_queued(self.tenant, self.account, intent_id, reason)
         # Expire model leases through the existing ledger. A reservation that never
         # reached the wire can resume; a calling lease becomes unknown and stays held.
+        # Neither this sweep nor the handover below is limited to the current activation: a call stranded before a
+        # stop/re-activation still has to settle or reach a human (Codex G08b).
         with Session(store.engine) as s:
             runtime = store._runtime(s, self.tenant, self.account, lock=False)
             expired_calls = s.execute(select(OfEngineModelCall.request_id, OfEngineModelCall.generation).where(
                 OfEngineModelCall.account_id == self.account,
                 OfEngineModelCall.binding_id == runtime.binding_id,
                 OfEngineModelCall.fan_id.in_(self.allowed_fans),
-                OfEngineModelCall.created_at >= active_since,
                 OfEngineModelCall.status.in_(('reserved', 'calling')),
                 OfEngineModelCall.lease_expires_at <= utcnow()).order_by(
                     OfEngineModelCall.lease_expires_at, OfEngineModelCall.call_id).limit(limit)).all()
@@ -326,8 +327,7 @@ class SupervisedPilot:
                 OfEngineRequest, and_(OfEngineRequest.account_id == OfEngineModelCall.account_id,
                     OfEngineRequest.request_id == OfEngineModelCall.request_id)).where(
                 OfEngineModelCall.account_id == self.account, OfEngineModelCall.binding_id == runtime.binding_id,
-                OfEngineModelCall.fan_id.in_(self.allowed_fans), OfEngineModelCall.created_at >= active_since,
-                OfEngineModelCall.status == 'unknown', OfEngineModelCall.response_text.is_(None),
+                OfEngineModelCall.fan_id.in_(self.allowed_fans), OfEngineModelCall.status == 'unknown', OfEngineModelCall.response_text.is_(None),
                 OfEngineRequest.status == 'open', OfEngineRequest.binding_id == runtime.binding_id)
                 .order_by(OfEngineModelCall.created_at, OfEngineModelCall.call_id).limit(limit)).all()
         engine = self.worker.engine

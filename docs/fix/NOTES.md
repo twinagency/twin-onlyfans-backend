@@ -157,3 +157,6 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F0d r1 ceb23b6b (worker): F0D-01..09 + FLD-01..06 fixed, own fast GREEN 53s (m), +243/-36. history_capacity_turns dropped from known-red (= team base red; will FAIL any gate touching it). Flash delta re-review launched.
 - Slot 2 → G04 (W3RCB-01 rest, native_protocol history_text) worker via delegate_task Claude3 Opus, PG 55654. Disjoint from F4/G01b/G02 (i).
 - G01b gate1 RED 1762s (m): 2 FAILs both red at base 91547788 (m) → known-red 6b9b0aa5, gate2 running.
+- F0d: Flash delta FLR-01 (rc 124 own-exit deferred) + FLR-02 (HUP) fixed by orch 5fbd1a23 (red old/green new, m). Rebased → 83699ddf, fast GREEN 52s (m). **#93 merged 5bc2abd9** (merge 10). Local target ff'd.
+- Gates restarted on new harness (default 900s budget, CHECK_JOBS=2 each): G01b rebased 843485e0 (known-red union + dedupe), G02 rebased. Old gates stopped.
+- Stack restart: 2 merges since a1151b1f; due after G01b (3).

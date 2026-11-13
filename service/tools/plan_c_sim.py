@@ -377,8 +377,17 @@ class Simulation:
                                  throttle_seconds=self.opts['throttle_seconds'], actor=OPERATOR, media_enabled=True,
                                  reason='Plan C simulation delivery policy (fansapi, pacing on)', transport_kind='fansapi')
         epoch = FansWebhookAdapter(self.store).bind_simulated(TENANT, ACCOUNT, ffs.ACCT, ffs.CREATOR)
+        # Unpiloted lab: provider reads are budget-exempt only on a declared simulated wire (MockTransport,
+        # same seam as test_real_transport_pg); it still forwards to the loopback fake server.
+        import httpx
+        wire = self.fake.transport()
+        def loopback(request):
+            response = wire.handle_request(request)
+            raw = response.read()
+            response.close()
+            return httpx.Response(response.status_code, headers=response.headers, stream=httpx.ByteStream(raw))
         client = build_client(RealFansConfig('sim-fixture-token', ffs.ACCT, 'https://api.fansapi.com', 20),
-                              creator_id=ffs.CREATOR, epoch=epoch, transport=self.fake.transport())
+                              creator_id=ffs.CREATOR, epoch=epoch, transport=httpx.MockTransport(loopback))
         self.client = client
         self.sync = sync_vault(self.store, TENANT, ACCOUNT, client)
         if not self.sync['complete'] or self.sync['upserted'] != 3:
@@ -869,7 +878,8 @@ class Simulation:
         with contextlib.suppress(Exception):
             self.store.close()
         import shutil
-        shutil.rmtree(self.profiles_dir, ignore_errors=True)
+        if getattr(self, 'profiles_dir', None):   # setup may fail before the profiles dir exists
+            shutil.rmtree(self.profiles_dir, ignore_errors=True)
 
 
 # ======================================================================================= markdown

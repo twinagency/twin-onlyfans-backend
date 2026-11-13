@@ -162,3 +162,11 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - Stack restart: 2 merges since a1151b1f; due after G01b (3).
 - G02 gate GREEN (11 deferred) 623s (m); deferred run by hand. G01b gate INFRA 687s: 6 opt-in transcript skips (m) → rerun ALLOW_SKIP=1 + 8 deferred by hand. F0e queued.
 - 2026-11-13: G02 merged #94 e5903d1b (fast GREEN 11 deferred 623s; deferred 10 pass, u3_readiness 6 red = base, /proc boot_id macOS). Local target ff'd. G01b deferred: commerce_pg `test_encrypted_restore_...` red at base e5903d1b too (KeyError ONLYFANS_TEST_PG_BIN, env); media_pg = known-red SO_ACCEPTCONN. Merges since stack a1151b1f: 3 (G01a, F0d, G02) → restart due.
+
+## G01b merged (#95 → 7e5ac8e4) + live batch 3, 2026-11-13T03:2xZ
+- G01b: fast (ALLOW_SKIP=1) GREEN 640s (m); rebased on e5903d1b (promoted-list union), promoted+G02 tests 12 passed (m). Merge #12.
+- 429s over a1151b1f window: api 0 / worker 9 (all read `chats`, provider_rate_limited; m). Logs copied to .local-dev/evidence/fix/live-7e5ac8e4/.
+- Stack restart under STACK.lock (released): /tmp/stack-live a1151b1f → 7e5ac8e4 (api, worker, sign-in; dashboard/broker untouched; no migrations in range).
+- check.sh live GREEN 1s (m). Sign-in still LISTEN 127.0.0.1:8479 (m). Worker post-restart: 29 cycles, 0 Traceback/ERROR/429/evidence_hold (m).
+- LIVE-CHECK G01a/G01b/G02: no owner-mismatch capture or pilot stop exercised (would write; read-only rule) → code at running sha only (i). F0d harness n/a.
+- Fable consult due (12).

@@ -61,3 +61,4 @@ service/tests/test_vault_auto_folders_uncertain.py
 service/tests/test_w3_trace_ledger_pg.py
 service/tests/test_w1_fans_api_adapter_pg.py
 service/tests/test_w2_conversation_engine_sale_drm_pg.py
+service/tests/test_f2d_proxies_fail_closed.py

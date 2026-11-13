@@ -57,6 +57,7 @@ from datetime import datetime, timedelta
 import account_page  # free-vs-paid page: a paid page has no paid-post lane
 import automation_executor as ax  # shared _make_client seam + enqueue_job
 from automation_registry import register
+from automations import content_resolver
 from automations._pools import has_media_source, pick_media, pick_text
 from db.engine import get_session
 from db.models import Post
@@ -185,6 +186,14 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     except Exception:
         log.debug("automation employee lookup failed; post attribution NULL", exc_info=True)
 
+    # ── The sale gate (G06g): a priced item is a sale, checked at FIRE time ──
+    # (an arc opener is booked days ahead). Explicit pools are filtered BEFORE
+    # sampling so a refused pick never sinks a post that had a sellable id.
+    if price and price > 0:
+        pools = {k: _int_list(spec.get(k)) for k in ("media_files", "preview_media_files")}
+        ok = await content_resolver.sellable(account_id, [m for v in pools.values() for m in v])
+        spec = {**spec, **{k: [m for m in v if m in ok] for k, v in pools.items()}}
+
     # ── Fire the OF post (off-thread so the loop never blocks) ───────────
     client = await asyncio.to_thread(ax._make_client, account_id)
     # Sample the image(s) for this fire (folder pull, if any, hits OF → thread).
@@ -213,6 +222,16 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 if pid not in media_files:
                     media_files.append(pid)
             previews = [p for p in preview_files if p in media_files]
+
+        # Folder-pulled ids too. Price kept (as G06f): never re-priced; nothing
+        # locked left (refused, or only free teasers) = nothing to sell, no post.
+        ok = await content_resolver.sellable(account_id, media_files)
+        media_files = [m for m in media_files if m in ok]
+        previews = [p for p in previews if p in ok]
+        if not set(media_files) - set(previews):
+            log.warning("auto_posts account=%s refused: no sellable media on a priced post", account_id)
+            remaining = await _drip_rest(account_id, rest, employee_id, cycle)
+            return {"status": "skipped", "reason": "no_sellable_media", "remaining": remaining}
 
     # Shuffle the attachment order (item 35): the pool is sampled but preview ids
     # are appended last, so without this OF's gallery would post free-then-paid in

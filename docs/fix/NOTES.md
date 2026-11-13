@@ -160,3 +160,4 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F0d: Flash delta FLR-01 (rc 124 own-exit deferred) + FLR-02 (HUP) fixed by orch 5fbd1a23 (red old/green new, m). Rebased → 83699ddf, fast GREEN 52s (m). **#93 merged 5bc2abd9** (merge 10). Local target ff'd.
 - Gates restarted on new harness (default 900s budget, CHECK_JOBS=2 each): G01b rebased 843485e0 (known-red union + dedupe), G02 rebased. Old gates stopped.
 - Stack restart: 2 merges since a1151b1f; due after G01b (3).
+- G02 gate GREEN (11 deferred) 623s (m); deferred run by hand. G01b gate INFRA 687s: 6 opt-in transcript skips (m) → rerun ALLOW_SKIP=1 + 8 deferred by hand. F0e queued.

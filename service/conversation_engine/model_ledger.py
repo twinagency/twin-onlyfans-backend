@@ -27,7 +27,7 @@ import re
 import logging
 import uuid
 
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from db.onlyfans_engine_models import OfEngineModelCall, OfEngineOwner, OfEngineRequest
@@ -108,10 +108,16 @@ class ModelLedger:
             return before - sum(1 for r in rows if r.status in ('reserved', 'calling'))
 
     def rows(self, account, request_id, generation):
+        """(this generation's calls, UNRESOLVED calls of the request in ANY generation) in one read. Unresolved = may have
+        reached the provider but has no recorded answer (timeout, lost lease, partial or unclassified failure): possibly
+        charged, never asked again automatically."""
         with Session(self.engine) as s:
-            return [_row(r) for r in s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
-                OfEngineModelCall.request_id == request_id, OfEngineModelCall.generation == generation)
-                .order_by(OfEngineModelCall.seq))]
+            found = list(s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
+                OfEngineModelCall.request_id == request_id, or_(OfEngineModelCall.generation == generation, and_(
+                    OfEngineModelCall.status == 'unknown', OfEngineModelCall.response_text.is_(None))))
+                .order_by(OfEngineModelCall.generation, OfEngineModelCall.seq)))
+            return ([_row(r) for r in found if r.generation == generation],
+                    [_row(r) for r in found if r.status == 'unknown' and r.response_text is None])
 
     # ---- reservation -----------------------------------------------------------
     @staticmethod

@@ -1,50 +1,87 @@
-"""W3 trace-ledger probes (W3TL-01/02; were RED before G08, now promoted).
-
-REVIEW.md #5 + proof table: "ledger path | unit: inject `unknown` -> no second call, reservation intact".
-These drive ModelRuntime.propose through engine.plan with a fixture client (no network) on a throwaway PG.
+"""W3 trace ledger (W3TL-01/02): an unresolved model outcome may have been charged, so the request goes to a human at
+once, in the live pass and on any replay. Exactly one handover case, no second model call, the reservation kept.
+Fixture client only (no network) on a throwaway PG.
 """
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database  # noqa: F401
-from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
+from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT, unthrottle
 from test_engine_simulated_journey_pg import incoming
-from test_engine_model_pg import BOUND, FALLBACK, Clock, config, ok, rows, with_model
-from conversation_engine.model_client import ModelOutcomeUnknown
+from test_engine_model_pg import BOUND, FALLBACK, Clock, _cases, _make_request, _reserve, config, ok, rows, with_model
+from conversation_engine.model_client import ModelBudgetExhausted, ModelIncompleteResponse, ModelOutcomeUnknown
+from db.onlyfans_engine_models import OfEngineRequest
 from onlyfans_runtime.store import Refused
 
+HANDED = 'outcome is unknown; request handed to a human'
 
-def test_w3_unknown_timeout_is_not_called_again_on_replay(database):
-    """W3TL-01 (dup-of W1-04(b)): a later plan() for the same request (webhook redelivery, resume, any caller that
-    is not the scheduler tick) must not make a second paid call while the first call's outcome is unknown."""
+
+def _handed_over_once(database, outcomes):
+    [(category, _, _, reason, evidence)] = _cases(database)
+    assert (category, reason, evidence['outcomes']) == ('model_handover', 'model_outcome_unknown', outcomes)
+    with Session(database[1]) as s:
+        assert s.scalar(select(OfEngineRequest.status)) == 'handover_pending'
+
+
+@pytest.mark.parametrize('failure,outcome', [
+    (ModelOutcomeUnknown('timeout'), 'timeout'), (ModelIncompleteResponse('partial'), 'provider_incomplete'),
+    (RuntimeError('boom'), 'client_error')])
+def test_w3_unknown_outcome_hands_over_in_the_live_pass_and_never_unlocks_the_fallback(database, failure, outcome):
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [failure, ok('from the fallback')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match=HANDED):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [r.model for r in client.requests] == ['m/primary']  # W3TL-02: no same-pass fallback
+    [row] = rows(database)
+    assert (row.status, row.outcome) == ('unknown', outcome)
+    assert runtime.ledger.committed(day=row.cost_day) == BOUND  # the handover keeps the full reservation
+    _handed_over_once(database, [outcome])
+    store.close()
+
+
+def test_w3_replay_after_an_unknown_outcome_makes_no_second_call_and_opens_no_second_case(database):
     clock = Clock()
     store, authority, engine, runtime, client, _ = with_model(
         database, [ModelOutcomeUnknown('timeout'), ok('second paid call')], clock=clock)
     incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match=HANDED):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    clock.offset = timedelta(seconds=3600)  # long past every cooldown
     with pytest.raises(Refused):
-        engine.plan(TENANT, ACCOUNT, FAN, 1)
-    [first] = rows(database)
-    assert (first.status, first.outcome) == ('unknown', 'timeout')
-    clock.offset = timedelta(seconds=45)  # past updated_at + transport_retry_seconds
-    try:
-        engine.plan(TENANT, ACCOUNT, FAN, 1)
-    except Refused:
-        pass  # held or handed to a human: both satisfy REVIEW #5
-    assert [r.model for r in client.requests] == ['m/primary'], 'unknown call was retried automatically'
-    assert runtime.ledger.committed(day=first.cost_day) == BOUND  # reservation intact, nothing new reserved
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # W3TL-01: redelivery / resume of a handed-over request
+    assert [r.model for r in client.requests] == ['m/primary']
+    [row] = rows(database)
+    assert runtime.ledger.committed(day=row.cost_day) == BOUND
+    _handed_over_once(database, ['timeout'])
     store.close()
 
 
-def test_w3_unknown_timeout_does_not_unlock_a_same_pass_fallback(database):
-    """W3TL-02 (dup-of W1-04(a)): a timeout is 'may have been charged', not 'provider unavailable'; it must not make
-    the fallback model eligible in the same pass (second possibly-charged call for one request)."""
-    store, authority, engine, runtime, client, _ = with_model(
-        database, [ModelOutcomeUnknown('timeout'), ok('from the fallback')], cfg=config(**FALLBACK))
+def test_w3_an_unknown_call_of_another_generation_also_hands_over(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('must not be asked')])
     incoming(store, 1, 'hello')
-    try:
+    request_id = _make_request(database, engine, runtime, client)
+    r = _reserve(runtime, database, request_id, calling=True, worker='w-old', generation=1)
+    runtime.ledger.mark_unknown(ACCOUNT, r.call_id, 'w-old', outcome='timeout', error_class='timeout')
+    with pytest.raises(Refused, match=HANDED):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # this pass plans generation 0
+    assert client.requests == []
+    _handed_over_once(database, ['timeout'])
+    store.close()
+
+
+def test_w3_unknown_reservation_still_counts_against_the_cap_for_a_later_request(database):
+    # each new request needs 2 x BOUND (call + retry allowance); the earlier unknown keeps BOUND reserved after handover
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [ModelOutcomeUnknown('timeout'), ok('never')], cfg=config(daily_cap_microusd=3 * BOUND - 1))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match=HANDED):
         engine.plan(TENANT, ACCOUNT, FAN, 1)
-    except Refused:
-        pass
-    assert [r.model for r in client.requests] == ['m/primary'], 'unknown call was followed by a fallback call'
+    unthrottle(database[1]); incoming(store, 2, 'next')
+    with pytest.raises(ModelBudgetExhausted, match='daily'):
+        engine.plan(TENANT, ACCOUNT, FAN, 2)
+    assert len(client.requests) == 1
     store.close()

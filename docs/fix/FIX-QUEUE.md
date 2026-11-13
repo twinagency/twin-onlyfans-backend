@@ -271,3 +271,5 @@ Live confirm after F3 (or F4) and after F6.
 - **GDS-2 — major, send gate**: engine sends with no pilot ignore send_blocked (pilot_scope.py:365-377 early return); plain configure re-enable → enabled=True + send_blocked=True. Fix: send_blocked checked regardless of pilot / configure refuses enable while blocked.
 - GDS-3 minor (auth): send_stop_failed hold only surfaced with active pilot scope + 3 reasons; not in _REPROJECTABLE_DETAILS (never re-driven).
 - W3CEA-07: pending unlinked transaction freeze vs test_fans_intake_pg design (unlinked money does not freeze) → OWNER Q; worker xfail(strict) for that case.
+- **Merge 38: G05-PR2 #122 1924c0dc** (fast GREEN 620s at CHECK_JOBS=4 after 2× 900s budget kills at jobs=2 under load ~9.5/16 cores, 0 fails). Batch rwl 4 counter: 1/4. Gates now CHECK_JOBS=4.
+- G-DS 107fa5cd: Opus final APPROVE, minors fixed (SQL text redaction, sweep re-raise, test bumps==[]). GDS-4 (minor, auth): crash between projection commit and _disable_sends not re-driven (pre-existing). Note: session_expired is informational in _account (no stop) — confirm intended (owner Q).

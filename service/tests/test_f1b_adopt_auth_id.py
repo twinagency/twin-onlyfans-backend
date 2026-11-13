@@ -130,3 +130,11 @@ def test_matching_legacy_session_still_migrates(env, monkeypatch):
         monkeypatch.setattr(accounts, name, value)
     out = accounts.migrate_legacy()
     assert out["active"] == "123" and (env.legacy / "accounts" / "123" / "session_T.json").exists()
+
+
+def test_missing_user_id_and_auth_id_is_a_parse_error(env, tmp_path):
+    p = env.legacy / "session_T.json"
+    p.write_text(json.dumps({"headers": {}, "cookies": []}))
+    with pytest.raises(sb.CurlParseError, match="user_id"):
+        _adopt(p)
+    assert env.writes == []

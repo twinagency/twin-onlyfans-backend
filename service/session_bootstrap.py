@@ -60,9 +60,9 @@ def run_incogniton(profile_id: str | None = None, *,
 
     The capture writes a session file into the OF account's per-account
     directory (`sessions/accounts/<user_id>/`) — bucketed by the user_id OF
-    returns. The optional `account_id` arg is used only as a hint for the
-    incogniton profile lookup; the real account_id is always derived from
-    the captured session's `headers.user_id`.
+    returns. The optional `account_id` arg picks the stored incogniton
+    profile, and the capture must be that account's own login (refused
+    otherwise, F1b); the account is always filed by `headers.user_id`.
 
     - `profile_id`: Incogniton profile UUID. If None, falls back to
       `connect_incogniton.PROFILE_ID` (env INCOGNITON_PROFILE_ID).
@@ -204,7 +204,7 @@ def _adopt_into_account(raw_path: Path, *,
     data = json.loads(raw_path.read_text())
     uid = str((data.get("headers") or {}).get("user_id") or "")
     if not uid:
-        raise RuntimeError("Captured session is missing headers.user_id — cannot route to account")
+        raise CurlParseError("Captured session is missing headers.user_id — cannot route to account")  # 400, not 500
     _check_owner(f"of-{account_id or uid}", uid, data.get("cookies") or [])
     adir = account_registry.account_dir(uid)
     adir.mkdir(parents=True, exist_ok=True)

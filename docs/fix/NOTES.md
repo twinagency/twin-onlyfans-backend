@@ -147,3 +147,4 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 
 - 02:5xZ G01b r2 fix 75f7b602 (/tmp/fix-g01b): G01R2-01 held evidence event -> diagnose + one moxy_technical case (method _evidence_hold); G01R2-02 test: 2nd step no retry, no model call, case once. 29/29 g01b+moxy_integrated+w2_sale green (measured); mutation drop-case -> red (measured). Awaiting Flash r2 (4f1e1aaf), F0d, F4 r3.
 - 03:2xZ Flash r2 G01: FIX-THEN-MERGE both. Fixed: G01a 182a37fe (FLG2-02/04; webhook 170/170), G01b 06167d9a (FLG2-01 high: receipt path regression; red at 75f7b602, green after; moxy+text_delivery 116/116). D: FLG2-05 disclose, FLG2-07 relay gate. Flash r3 delta review running (780493b0).
+- 03:4xZ MERGED G01a #92 = 91547788 (gate GREEN 481s measured; merge #9). Local target ff to 91547788; no worktree checked out on target. G01b rebased (promoted list union) -> 591c391e, gate running.

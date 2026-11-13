@@ -327,3 +327,10 @@ Live confirm after F3 (or F4) and after F6.
 - Re-triage the 43 maj now (read-only lane @7a3f41ce → /tmp/retriage-7a3f.md), not after restart.
 - Owner Q (not acted on): narrow restart barrier to findings introduced/made reachable by unreleased merges (G06i pre-existing + latent with sends off). Stack lags 6 merges.
 - W3RCB-01b r2 3c..8155e246: DA I2 archive-page creator skip + 2 tests.
+
+## Re-triage @7a3f41ce (Opus reviewer, read-only; all inferred, code-read unless noted)
+- **Still-open maj 33** (31 on GATE line + G08c, NP429-RA). Fixed: G06h #128 (measured). Downgrade: G25 → fold into G07b (folder membership only). Dup: G28 → G01 residual (paid row media_ids=[] + media_count>0 owns nothing; owner Q), G37 → LW-A1. Drift-unknown: stage3 + campaign base-red (need PG).
+- Merge: G15 into G13 (same F2 root). G16 red test needs update (rows() returns tuple).
+- **S (<50 LOC) candidates:** G15/G13-F2, G16, G17, G18, G19, G21, G22, G23, G26, G27, G30, G31, G32, G38, G39, G07d, GDS-2, F2c, G08c, NP429-RA, NP429-H. **M:** G13 F1/F5, G14, G20, G34, G35, G36, W3CEA-07B, LW-B, LW-C. **L:** G24, G29, G33.
+- Order (fan-send → money → auth → admin): G06i (barrier) → GDS-2, GDS-6, G22, G08c, G13/G15 → G14, G16, G23, G31, W3CEA-07B → G18, G19, G21, F2c → rest.
+- Merge 48: G06g-b #132 a780ba43 (fast RED 259s = harness interrupt[1] flake only, 45/45 rerun). Batch6 3/4.

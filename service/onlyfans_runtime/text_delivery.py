@@ -279,6 +279,10 @@ class TextAuthority:
             safe_disable = actor == 'fans-webhook' and not enabled
             if not safe_disable:
                 authorize(config, actor, 'activate' if enabled else 'stop')
+            else:
+                # A provider safety stop only tightens: clamp drift into the scope so it is never refused.
+                limit_units = min(limit_units, config['limits']['send_units'])
+                throttle_seconds = max(throttle_seconds, config['limits']['throttle_seconds'])
             if (limit_units > config['limits']['send_units'] or throttle_seconds < config['limits']['throttle_seconds']
                     or transport_kind is not None and transport_kind != 'fansapi'):
                 raise Refused('delivery policy exceeds the durable pilot scope')
@@ -301,10 +305,10 @@ class TextAuthority:
             unchanged_safety_stop = safe_disable and not enabled and effective_media is policy.media_enabled
             if effective_media and not unchanged_safety_stop:
                 raise Refused('text-only pilot cannot enable media')
-        if pilot is not None and safe_disable and (limit_units != policy.limit_units or
-                throttle_seconds != policy.throttle_seconds or media_enabled not in (None, policy.media_enabled) or
+        if pilot is not None and safe_disable and (limit_units > policy.limit_units or
+                throttle_seconds < policy.throttle_seconds or media_enabled not in (None, policy.media_enabled) or
                 transport_kind not in (None, policy.transport_kind)):
-            raise Refused('provider safety stop cannot change pilot limits')
+            raise Refused('provider safety stop cannot widen pilot limits')
         if transport_kind is not None and transport_kind != policy.transport_kind:
             if (policy.active_intent_id or policy.queued_count or s.scalar(select(OfTextIntent.intent_id).where(
                     OfTextIntent.account_id == account_id, OfTextIntent.status.in_(("dispatching", "unknown"))).limit(1))):

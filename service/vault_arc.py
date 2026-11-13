@@ -156,8 +156,13 @@ def _post_job(day: dict[str, Any], price_cents: int) -> dict[str, Any]:
         "media_files": media,
         "price": round(int(price_cents) / 100, 2) if price_cents else 0,
     }
-    if price_cents and previews:
-        post["preview_media_files"] = previews
+    if price_cents:
+        # A priced drop sells the whole authored set: without a count auto_posts samples
+        # ONE item and posts it at the day's full price (batch5 F1).
+        post["media_count"] = len(media)
+        if previews:
+            post["preview_media_files"] = previews
+            post["preview_media_count"] = len(previews)
     return {"posts": [post]}
 
 

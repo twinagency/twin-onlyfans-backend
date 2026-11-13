@@ -131,3 +131,10 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - F4 timing run (CHECK_BUDGET_S=3600, little contention): >28 min and still in m* files at 01:30 (m). The cause is suite size (touched-area of store.py), not contention (i) → F0d worker: parallel per-file runner (CHECK_JOBS), or a fast/wide split; also known-reds the 4 a1151b1f base reds.
 - G02 (W2SC-02 pilot stop refused → rollback, LIVE stop) worker started, disjoint from F4/G01/F0d.
 - Workers: F0d, G02 (2/2).
+
+## 01:4xZ
+- Over the 2-worker cap (G01 r1 fixes + F0d + G02) → G02 paused: WIP commit 86327a35 on fix/G02-pilot-stop-refused (pilot_scope.py +5/−2 + test; neighbour suites + gate pending). PG 55651 stopped.
+- G01 rwl r1: Opus + Flash FIX-THEN-MERGE (/tmp/rwl-g01/FINDINGS.md). Decision: strict raise only on engine + Moxy (Moxy ValueError → Refused, per-event hold); relay callers get an explicit lenient mode = base behaviour → relay gate. Sent to the G01 worker (rebase onto a1151b1f, PG 55654).
+- F4 rwl r2: Opus + Flash FIX-THEN-MERGE; r3 list in /tmp/rwl-f4/FINDINGS.md (same-page tip helper after record, migration IF NOT EXISTS, unfiltered ids, tests; W6HR-2b tip-only re-read deferred). Split into PR-a column / PR-b logic if > 300 LOC. Waits for a slot.
+- F4 r1 timing run: RED at the 3600 s budget, 140 files, unfinished (m). test_native_pilot_service.py hung ~45 min (send-check-failed under the dead proxy) → a per-file timeout goes in F0d.
+- More base reds at a1151b1f (m): campaigns_pg 15 (identity None :99), moxy_input_supersession 1, moxy_vault_cross_lineage 1 (env: hardcoded /home/ronan path). multicreator_load passes at base in isolation (58 s); failed at 181 s under load (flake or F4; recheck at r3). → F0d.

@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from db.models import Account,AccountAiConfig,OfCreatorBinding
 from db.onlyfans_models import OfRuntime,OfScan,OfRecovery,OfIngress
-from db.onlyfans_delivery_models import OfDeliveryPolicy,OfDeliveryPolicyChange
+from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChange
 from onlyfans_read.contract import ID_PATTERN
 from capture_owner import check_capture_owner
@@ -351,15 +351,13 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
             if row.status!='verified' or row.expires_at<=utcnow() or row.verified_at is None:raise Refused('verify the selected provider connection before activation')
             if policy and (policy.active_intent_id or policy.queued_count):raise Refused('delivery is unresolved')
             if policy and payload['limitUnits']<policy.used_units:raise Refused('used allowance cannot be reset')
-            if policy is None:policy=OfDeliveryPolicy(account_id=account);s.add(policy);s.flush()
-            before={name:getattr(policy,name) for name in ['enabled','limit_units','throttle_seconds','transport_kind','media_enabled']}
-            if payload['throttleSeconds']>policy.throttle_seconds and policy.next_dispatch_at is not None:
-                policy.next_dispatch_at=max(policy.next_dispatch_at,utcnow()+timedelta(seconds=payload['throttleSeconds']))
-            policy.revision+=1;policy.enabled=True;policy.transport_kind='native'
-            policy.limit_units=payload['limitUnits'];policy.throttle_seconds=payload['throttleSeconds'];policy.media_enabled=payload['mediaEnabled']
-            after={name:getattr(policy,name) for name in before}
-            s.add(OfDeliveryPolicyChange(account_id=account,revision=policy.revision,actor=actor,reason='Explicit dashboard account activation',before_json=canonical(before),after_json=canonical(after),created_at=utcnow()))
-            runtime.enabled=True;runtime.recovery_needed=True
+            # The shared policy owner refuses a pilot/preparation scope and records the audit row.
+            from .text_delivery import TextAuthority
+            from .launch_operations import operator_stopped
+            TextAuthority(store)._configure_in_session(s,runtime,expected_revision=policy.revision if policy else 0,
+                enabled=True,limit_units=payload['limitUnits'],throttle_seconds=payload['throttleSeconds'],
+                media_enabled=payload['mediaEnabled'],transport_kind='native',actor=actor,reason='Explicit dashboard account activation')
+            runtime.enabled=not operator_stopped(s,runtime);runtime.recovery_needed=True   # Activate never clears an operator stop
             row.automate_new_conversations=False;row.automation_starts_at=None   # activation never arms future conversations
         else:
             runtime.enabled=False

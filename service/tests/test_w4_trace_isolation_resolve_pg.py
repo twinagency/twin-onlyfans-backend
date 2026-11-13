@@ -107,6 +107,13 @@ def test_scoped_a_refuses_a_provider_id_bound_only_to_another_account(database):
         with Session(engine) as s, s.begin():
             s.add(OfFansConnection(account_id='acc-w4-b', epoch=2, binding_id='binding-acc-w4-b',
                   provider_account_id='acct_w4_b_only', provider_creator_id=CREATOR, status='retired', created_at=utcnow()))
+        with Session(engine) as s:  # _resolve itself refuses, not only accept()'s outer scope check
+            body = {'event': 'messages.received', 'account_id': 'acct_w4_b_only', 'payload': {}}
+            try:
+                FansEventIntake(store_a)._resolve(s, body, 'messages.received', utcnow(), expected_account='acc-w4-a')
+                raise AssertionError('scoped _resolve returned a row bound only to B')
+            except Refused as exc:
+                assert str(exc) == 'webhook account scope mismatch', exc
         raw, sig = _signed('acct_w4_b_only', 9102)
         try:
             FansEventIntake(store_a).accept(raw, sig, SECRET, 'w4-scoped-a',

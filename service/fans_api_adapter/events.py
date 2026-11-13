@@ -211,16 +211,16 @@ class FansEventIntake:
         """Find the connection row for this delivery; a reconnect (new acct_) re-binds by creator id.
 
         Epochs are per Fastt account, so rows of different accounts are never ranked against each
-        other: a scoped delivery reads only its own account, and an unscoped one refuses a provider
+        other: a scoped delivery loads only its own account's rows (another account's only existence-checked), and an unscoped one refuses a provider
         id that spans accounts rather than route it to whichever account has the higher epoch."""
         provider_id = body['account_id']
-        matches = s.scalars(select(OfFansConnection).where(OfFansConnection.provider_account_id == provider_id)
-                            .order_by(OfFansConnection.epoch.desc())).all()
+        q = select(OfFansConnection).where(OfFansConnection.provider_account_id == provider_id)
         if expected_account is not None:
-            own = [c for c in matches if c.account_id == expected_account]
-            if matches and not own:
-                raise Refused('webhook account scope mismatch')
-            matches = own
+            q = q.where(OfFansConnection.account_id == expected_account)
+        matches = s.scalars(q.order_by(OfFansConnection.epoch.desc())).all()
+        if expected_account is not None and not matches and s.scalar(select(OfFansConnection.account_id).where(
+                OfFansConnection.provider_account_id == provider_id).limit(1)) is not None:
+            raise Refused('webhook account scope mismatch')
         if len({c.account_id for c in matches}) > 1:
             raise Refused('provider account is bound to more than one account')
         connection = matches[0] if matches else None

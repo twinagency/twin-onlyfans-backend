@@ -21,7 +21,9 @@ META = {1: {"id": 1, "type": "photo", "isReady": True},
         3: {"id": 3, "type": "photo", "isReady": True, "hasError": True},
         4: {"id": 4, "type": "photo", "isReady": True, "isHidden": True},
         5: {"id": 5, "type": "video", "isReady": True},              # DRM: ready, no full URL
-        6: {"id": 6, "type": "photo"}}                               # isReady absent
+        6: {"id": 6, "type": "photo"},                               # isReady absent
+        7: {"id": 7, "type": "photo", "isReady": True}}              # removed_at set below
+REMOVED = {7}
 SOLD = {"native": {1, 5, 6}, "fansapi": {1, 5}, "fastt_sqlite": {1, 5, 6}}  # FansAPI requires isReady true
 
 
@@ -61,7 +63,8 @@ def vault(request, tmp_path, monkeypatch):
                 s.add(VaultItem(account_id=ACC, media_id=mid, kind=raw["type"], raw_json=json.dumps(raw),
                                 description="Barefoot on the beach, soles to the camera, warm light.",
                                 search_text="barefoot beach soles feet", content_hash=f"h{mid}",
-                                created_at=datetime(2026, 1, 1, 0, mid)))
+                                created_at=datetime(2026, 1, 1, 0, mid),
+                                removed_at=datetime(2026, 2, 1) if mid in REMOVED else None))
                 s.add(VaultFolderItem(account_id=ACC, folder_id=folder.id, media_id=mid))
             await s.commit()
     asyncio.run(setup())
@@ -87,3 +90,15 @@ def test_resolver_pools_drop_unusable_media(vault):
     curated = asyncio.run(content_resolver._curated_pool(ACC, "feet", "nude", set()))
     described = asyncio.run(content_resolver._described_pool(ACC, set(), None, ["feet"]))
     assert {m for m, _ in curated} == {m for m, _ in described} == vault.want
+
+
+def test_pack_previews_drop_unusable_media(vault):
+    """Free teaser frames ride inside the priced send: refused ones are dropped, paid ones skipped."""
+    tease = list(META)
+    assert asyncio.run(pack_sender._live_previews(ACC, tease, [1])) == sorted(vault.want - {1})[:pack_sender.PREVIEW_MAX]
+
+
+def test_audit_veto_covers_previews(vault):
+    """Rule 5 vetoes a refused id attached as a free preview, not only paid ids (base: paid only)."""
+    bad = asyncio.run(pack_audit.audit_pack(ACC, "feet", "nude", [1, 5, 2, 7], [2, 7]))
+    assert [b for b in bad if b.startswith("rule5")] == ["rule5 media the sale would not sell: [2, 7]"]

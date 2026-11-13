@@ -50,7 +50,7 @@ log = logging.getLogger("of-relay.automation.pack_audit")
 # whatever our cache says.
 #
 # What DOES matter is narrower and is checked directly: every id about to be
-# charged for must still be a live `VaultItem` (not soft-deleted). A genuinely
+# charged for must still be sellable (`_live_media`, the sale's refusals). A genuinely
 # dead id fails loudly at the wire, which is the right place for it.
 MIRROR_WARN_AGE = timedelta(days=7)
 
@@ -137,11 +137,12 @@ async def audit_pack(account_id: str, category: str, rung: str,
     if len(paid) < MIN_ITEMS:
         bad.append(f"rule4 |M−P| = {len(paid)} < {MIN_ITEMS}")
 
-    # Rule 5 — every paid id must still EXIST.
-    if paid:
-        missing = sorted(paid - await _live_media(account_id, paid))
+    # Rule 5 — every attached id (paid AND free preview) must still be sellable: a dead
+    # preview fails the send as surely as a dead paid id.
+    if setM:
+        missing = sorted(setM - await _live_media(account_id, setM))
         if missing:
-            bad.append(f"rule5 media no longer in the vault: {missing}")
+            bad.append(f"rule5 media the sale would not sell: {missing}")
     return bad
 
 
@@ -155,8 +156,8 @@ async def audit_ask(account_id: str, media: list[int], claim: Claim,
 
       1. the count in the claim is the count he receives (the claim IS the
          contract, and a caption that over-counts is the 2026-07-31 shape);
-      2. every id is still a live `VaultItem` — a soft-deleted id is charged for
-         and never arrives;
+      2. every id is still sellable (`_live_media`: not removed, ready, not hidden /
+         errored, inside the FansAPI selection) — a dead id is charged for and never arrives;
       3. nobody else is in it unless he asked (2026-08-11, "very important").
 
     🚨 Rule 1 compares two integers. It used to recover the count by summing every

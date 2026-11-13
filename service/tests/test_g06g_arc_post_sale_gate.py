@@ -100,8 +100,16 @@ def lane(request, tmp_path, monkeypatch):
     asyncio.run(engine.dispose())
 
 
-def test_priced_opener_posts_only_sellable_media(lane):
+def test_priced_opener_with_a_refused_item_skips_never_a_reduced_set(lane):
+    """Codex/Flash G06g P1: filtering may not shrink the authored set below its media_count at full price."""
     out = asyncio.run(auto_posts.run(ACC, _opener(list(META), [2, 5, 7]), run_id=1))
+    assert (out["status"], out["reason"]) == ("skipped", "media_not_sellable") and lane.posts == []
+    out = asyncio.run(auto_posts.run(ACC, _opener([1, 2], []), run_id=1))   # the measured [1,2] repro
+    assert out["reason"] == "media_not_sellable" and lane.posts == []
+
+
+def test_priced_opener_posts_a_fully_sellable_set_whole(lane):
+    out = asyncio.run(auto_posts.run(ACC, _opener(sorted(lane.want), [2, 5, 7]), run_id=1))
     assert out["status"] == "ok" and len(lane.posts) == 1
     post = lane.posts[0]
     assert set(post["media_files"]) == lane.want
@@ -111,14 +119,25 @@ def test_priced_opener_posts_only_sellable_media(lane):
 
 def test_priced_opener_with_nothing_sellable_skips(lane):
     out = asyncio.run(auto_posts.run(ACC, _opener([2, 3, 4, 7], [2]), run_id=1))
-    assert out == {"status": "skipped", "reason": "no_sellable_media", "remaining": 0}
+    assert out == {"status": "skipped", "reason": "media_not_sellable", "remaining": 0}
     assert lane.posts == []
 
 
-def test_priced_opener_with_only_free_previews_left_skips(lane):
-    """The locked media is refused, only the free teaser survives: a price on nothing locked, refuse."""
-    out = asyncio.run(auto_posts.run(ACC, _opener([5, 7], [5]), run_id=1))
+def test_priced_opener_with_only_free_previews_skips(lane):
+    """Every item is also a free teaser: a price on nothing locked, refuse."""
+    out = asyncio.run(auto_posts.run(ACC, _opener([5], [5]), run_id=1))
     assert out["reason"] == "no_sellable_media" and lane.posts == []
+
+
+def test_refused_terminal_post_still_books_the_repost_cycle(lane):
+    """Codex/Flash G06g P2: a skipped last item must not end the configured resend cycles."""
+    payload = _opener([1, 2], [])
+    payload.update(resend_count=2, resend_after_hours=24)
+    out = asyncio.run(auto_posts.run(ACC, payload, run_id=1))
+    assert out["reason"] == "media_not_sellable" and lane.posts == []
+    assert [k for k, _ in lane.jobs] == ["auto_posts"] and out["resend_job_id"] == 1
+    job = lane.jobs[0][1]["payload"]
+    assert job["resend_count"] == 1 and job["_original_posts"] == payload["posts"]
 
 
 def test_priced_opener_samples_only_sellable_media(lane):

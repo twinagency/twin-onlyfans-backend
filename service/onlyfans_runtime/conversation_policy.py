@@ -48,13 +48,14 @@ CATEGORY_SCOPE = {
     "identity": SCOPE_ALL,
     "distress": SCOPE_ALL,
     "consent": SCOPE_ALL,
+    "minor": SCOPE_ALL,                 # minor-implying roleplay / stated age under 18: hard stop
     "external_sender": SCOPE_ALL,       # another tool (Infloww, the app) wrote to this chat: one active sender
     "hardship": SCOPE_COMMERCIAL,
     "complaint": SCOPE_COMMERCIAL,
 }
-# Cases that also forbid resuming automation until a human resolves them (distress, consent and no-contact).
+# Cases that also forbid resuming automation until a human resolves them (distress, consent, minor and no-contact).
 # Identity keeps its existing resume rules (the human answers and hands back).
-RESUME_BLOCKING = frozenset({"stop_contact", "distress", "consent"})
+RESUME_BLOCKING = frozenset({"stop_contact", "distress", "consent", "minor"})
 
 # skip_list reasons that mean "no automation for this fan" (service.native_pilot.service.STOP_REASONS plus ladder_stop,
 # which ai_chatter already treats as a hard skip).

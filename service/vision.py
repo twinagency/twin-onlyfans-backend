@@ -51,10 +51,10 @@ def shrink_data_url(data_url: str, max_edge: int = MAX_EDGE_DEFAULT) -> str:
         return data_url
 
 
-# A vision model that declines shapes its refusal like prose, so length is half
-# the test: a genuine description of an explicit picture is long, a refusal is a
-# short apology. Both halves are needed — "i'm sorry" appears inside plenty of
-# real descriptions of screenshots.
+# A vision model that declines leads with the apology, so the markers are looked
+# for in the opening only: the stock refusal is exactly 40 chars and longer ones
+# exist. A screenshot description quoting "i'm sorry" early is read as a refusal:
+# callers escalate, then hold — never store an apology as a description.
 _REFUSAL_MARKERS = ("i can't", "i cannot", "i'm unable", "cannot assist", "content policy",
                     "i'm sorry", "not able to", "against my")
 
@@ -62,8 +62,8 @@ _REFUSAL_MARKERS = ("i can't", "i cannot", "i'm unable", "cannot assist", "conte
 def is_refusal(text: str) -> bool:
     """Did the model decline instead of describing? Consumers escalate to a bigger
     model on True rather than storing an apology as a description."""
-    low = (text or "").strip().lower()
-    return not low or (len(low) < 40 and any(m in low for m in _REFUSAL_MARKERS))
+    low = (text or "").strip().lower().replace("\u2019", "'")
+    return not low or any(m in low[:80] for m in _REFUSAL_MARKERS)
 
 
 def img_data_url(b: bytes) -> str:

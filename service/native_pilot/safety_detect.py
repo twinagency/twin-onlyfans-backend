@@ -14,6 +14,7 @@ A verdict is *scoped*, never a bare keyword hit:
 * ``hardship``        spending money on ESSENTIALS is at risk (food, rent, bills, medicine, children).
 * ``complaint``       a material complaint or dispute about something he paid for.
 * ``identity``        the fan asks whether he is talking to a bot / asks for a human (existing detector).
+* ``minor``           minor-implying roleplay (school / teen / step-family terms) or a stated age under 18. Hard stop.
 
 Deliberately NOT matched (these are the legitimate neighbours the tests pin): "stop teasing me", "stop it" in play,
 "I don't want you to stop", the isolated word "rent", routine budget haggling ("out of my budget, can you do 20"),
@@ -35,9 +36,10 @@ CONSENT = "consent"
 HARDSHIP = "hardship"
 COMPLAINT = "complaint"
 IDENTITY = "identity"
+MINOR = "minor"
 
 # Verdicts that create an operator case when the detectors are live. The rest are recorded only.
-HOLD_CATEGORIES = (IDENTITY, DISTRESS, CONSENT, STOP_CONTACT, COMPLAINT, HARDSHIP)
+HOLD_CATEGORIES = (MINOR, IDENTITY, DISTRESS, CONSENT, STOP_CONTACT, COMPLAINT, HARDSHIP)
 _PRIORITY = {c: i for i, c in enumerate(HOLD_CATEGORIES)}
 
 
@@ -62,7 +64,7 @@ def _norm(text):
 # A phrase the fan merely quotes or reports is not a request: drop quoted spans and "you said ..." reports.
 # A single-quoted span must open and close on a word boundary: the apostrophes in "i've ... i'm" are not quotes.
 _QUOTED = re.compile(r'"[^"]{1,200}"|(?<!\w)\'[^\']{3,200}\'(?!\w)')
-_REPORTED = re.compile(r"\b(?:you|u|she|he|they|someone|everyone|my ex|my wife|my gf)\s+(?:said|says|told me|texted|wrote)\b[^.!?\n]{0,120}", re.I)
+_REPORTED = re.compile(r"\b(?:you|u|she|he|they|someone|everyone|my ex|my wife|my gf)\s+(?:said|says|told me|texted|wrote)\b(?:(?!,|\bbut\b|\band\b)[^.!?\n]){0,120}", re.I)
 _I_SAID_EARLIER = re.compile(r"\b(?:when|if|every time|whenever)\s+(?:i|you|u)\s+(?:said|say|tell)\b[^.!?\n]{0,80}", re.I)
 
 
@@ -142,6 +144,15 @@ _HARDSHIP = (
     re.compile(r"\b(?:my|the)\s+(?:weekly\s+|monthly\s+|whole\s+)?(?:wages|pay(?:check)?|salary|paycheck|savings)\b[^.!?\n]{0,40}\b(?:instead\s+of|rather\s+than)\b", re.I),
 )
 
+# Minor / age (W5NR-5): matched on the FULL text, never downgraded by quoting or roleplay; inbound and output alike.
+_UNDER_18 = r"(?:1[0-7]|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen)"
+_MINOR = (
+    re.compile(r"\b(?:under\s?age|under\s+18|jailbait|loli|lolita|shota|pedo\w*|school\s?(?:girl|boy)s?|teen(?:s|age|ager|agers|y)?|"
+               r"step\s?(?:sis|sister|bro|brother|daughter|son))\b", re.I),
+    re.compile(rf"\b(?:i'?m|i\s+am|im|i\s+turn(?:ed)?|aged?)\s+(?:only\s+|just\s+)?{_UNDER_18}\b(?!\s*(?:%|\$|mins?|minutes|hours?|hrs?|inch|cm|ft|feet|foot|'))"
+               rf"|\b{_UNDER_18}\s*(?:yo|y/o|yrs?\s+old|years?\s+old)\b", re.I),
+)
+
 _COMPLAINT = (
     re.compile(r"\b(?:refund|charge\s*back|chargeback|scam(?:med|mer|ming)?|rip(?:ped)?[\s-]?off|money\s+back|report(?:ed|ing)?\s+you|dispute|disputing|fraud)\b", re.I),
     re.compile(r"\b(?:i\s+)?(?:paid|bought|purchased|unlocked)\b[^.!?\n]{0,60}\b(?:didn'?t\s+(?:see|get|receive|open|work|show|load|include)|did\s+not\s+(?:get|receive|open|show)|never\s+(?:got|received|came|arrived|opened|showed|saw|loaded)|nothing\s+(?:in|there|inside|came|showed)|not\s+what|wasn'?t\s+(?:what|as|there)|empty|blank|blurry|can'?t\s+(?:see|open|play)|cant\s+(?:see|open|play)|only\s+\d+|no\s+(?:face|video|pic))\b", re.I),
@@ -165,13 +176,15 @@ def _classify_one(raw, index):
     if not full:
         return out
     text = _strip_quotes(full)
+    if _first(_MINOR, full):
+        out.append(Verdict(MINOR, "minor-theme", "all", message_index=index))
     if sincere_identity_question(text):
         out.append(Verdict(IDENTITY, "identity-question", "all", message_index=index))
     # Distress and consent are NEVER downgraded by laughter, by roleplay, or by quoting context: a statement about
     # ending one's own life is a hold whatever came before it.
-    if _first(_DISTRESS, text):
+    if _first(_DISTRESS, full):
         out.append(Verdict(DISTRESS, "distress-phrase", "all", message_index=index))
-    if _first(_CONSENT_STRONG, text) or _SAFEWORD_FIRST_PERSON.search(text):
+    if _first(_CONSENT_STRONG, full) or _SAFEWORD_FIRST_PERSON.search(full):
         out.append(Verdict(CONSENT, "consent-withdrawn", "all", message_index=index))
     elif _AMBIGUOUS_STOP.search(text) and not _NEGATED_STOP.search(text) and not _LAUGH.search(text):
         out.append(Verdict(CONSENT, "consent-ambiguous-stop", "all", ambiguous=True, message_index=index))
@@ -233,6 +246,7 @@ _OUT_ESSENTIALS = re.compile(r"\b(?:(?:the\s+|your\s+|ur\s+)?(?:kids?|children|r
 def output_violation(text) -> str | None:
     """A fixed reason code when generated text introduces a consent or trust violation, else None.
 
+    ``minor-theme``          minor-implying roleplay or a stated age under 18 (same rules as inbound);
     ``unconscious-partner``  depicts a passed-out / drugged / sleeping partner;
     ``ignores-stop``         continues past a stop, a safeword or begging;
     ``endorses-essentials``  tells a fan that rent, food, bills, medicine or his children can wait for spending;
@@ -242,6 +256,8 @@ def output_violation(text) -> str | None:
     if not isinstance(text, str) or not text.strip():
         return None
     t = _norm(text)
+    if _first(_MINOR, t):
+        return "minor-theme"
     if _OUT_UNCONSCIOUS.search(t):
         return "unconscious-partner"
     if _OUT_IGNORE_STOP.search(t):
@@ -256,4 +272,4 @@ def output_violation(text) -> str | None:
 
 
 __all__ = ["Verdict", "assess", "output_violation", "HOLD_CATEGORIES", "STOP_CONTACT", "STOP_OFFER", "STOP_NICKNAME",
-           "DISTRESS", "CONSENT", "HARDSHIP", "COMPLAINT", "IDENTITY", "wants_human"]
+           "DISTRESS", "CONSENT", "MINOR", "HARDSHIP", "COMPLAINT", "IDENTITY", "wants_human"]

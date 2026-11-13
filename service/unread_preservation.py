@@ -17,6 +17,14 @@ class UnreadPreservationError(RuntimeError):
     pass
 
 
+def _paced(error):
+    """A provider pacing hint (retry_after: 429, read transient) means stop calling the provider now.
+
+    Such errors carry fixed non-secret messages, so they propagate unwrapped and
+    the caller's read budget honours Retry-After; the pending undo waits."""
+    return getattr(error, 'retry_after', None) is not None
+
+
 def chat_was_unread(chat, fan_id):
     if not isinstance(chat, dict):
         raise UnreadPreservationError('unread snapshot is unavailable')
@@ -56,7 +64,9 @@ def _restore(restore, fan_id, confirm=None):
         if confirm is not None and chat_was_unread(confirm(), fan_id):return
         try:
             result = restore(fan_id)
-        except Exception:
+        except Exception as error:
+            if _paced(error):
+                raise
             if confirm is not None and chat_was_unread(confirm(), fan_id):return
             raise
         if confirm is not None:
@@ -64,7 +74,9 @@ def _restore(restore, fan_id, confirm=None):
                 raise UnreadPreservationError('unconfirmed unread restoration')
         elif not isinstance(result, dict) or result.get('success') is not True:
             raise UnreadPreservationError('unconfirmed unread restoration')
-    except Exception:
+    except Exception as error:
+        if _paced(error):
+            raise error from None
         # Provider exceptions may contain session/proxy credentials.
         raise UnreadPreservationError('OnlyFans unread restoration failed; pending undo retained') from None
 
@@ -83,8 +95,13 @@ def preserve_unread(*, account_id, fan_id, snapshot, read, restore, confirm=None
                 marker.flush()
                 os.fsync(marker.fileno())
         try:
-            return read()
-        finally:
-            if was_unread:
+            page = read()
+        except Exception as error:
+            if was_unread and not _paced(error):
                 _restore(restore, fan_id, confirm)
                 pending.unlink()
+            raise
+        if was_unread:
+            _restore(restore, fan_id, confirm)
+            pending.unlink()
+        return page

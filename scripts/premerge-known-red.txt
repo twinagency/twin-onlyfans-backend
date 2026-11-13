@@ -48,3 +48,6 @@ service/tests/test_concurrent_admission_units.py::test_concurrent_migration_is_t
 service/tests/test_onlyfans_media_pg.py::test_native_reply_and_existing_media_use_one_call_quote_and_real_http
 # base red at 91547788 (measured 2026-11-13, red with and without G01b; load test, also in the serial lane; team queue)
 service/tests/test_moxy_multicreator_load_pg.py::test_three_creators_concurrent_mixed_load
+# 91547788 (measured, G04): page-level skip of an unsupported-formatting row lives in native_connector._skip_reason
+# (not G04's file); history_text correctly keeps refusing <img>. Owner: native_connector worker.
+service/tests/test_w3_rcb_history_page.py::test_newer_valid_inbound_survives_one_bad_older_row[old-unsupported-formatting]

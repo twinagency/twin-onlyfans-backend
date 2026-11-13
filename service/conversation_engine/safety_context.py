@@ -11,7 +11,8 @@ _CONTEXTUAL_MENTION = re.compile(
     r"(?:minors?|(?:little|young) (?:girl|boy)|kiddo|child(?:ren)?|kids?|(?:my|your) (?:daughter|son|niece|nephew))\Z", re.I)
 _STEP_FAMILY = re.compile(r"step[ -]?(?:sis|sister|bro|brother|daughter|son|mom|mum|mother|dad|father)s?\Z", re.I)
 _POSSESSIVE_BEFORE = re.compile(r"\b(?:my|his|her|our|their)\s+\Z", re.I)
-_ROLE_FRAME = re.compile(r"\b(?:be|being|play|playing|as|like|call (?:me|you|u)|you(?:'re| are)|ur|i(?:'m| am)|im|i'll be|i will be)\b", re.I)
+_ROLE_FRAME = re.compile(r"\b(?:be|being|play|playing|as|like|call (?:me|you|u)|you(?:'re| are)|ur|i(?:'m| am)|im|i'll be|i will be|"
+                         r"(?:that|it)(?:'s| is) (?:you|u)|love|hot|cute|good (?:girl|boy)|kiss\w*)\b", re.I)
 _SENSITIVE_CONTEXT = re.compile(
     r"\b(?:pretend|role[ -]?play|fantas(?:y|ies|ise|ize|ising|izing)|incest|sexual(?:ly)?|sex|sexy|"
     r"horny|nudes?|naked|fuck\w*|cocks?|dicks?|pussy|cum\w*|blowjob|orgasm\w*|masturbat\w*|"
@@ -26,11 +27,14 @@ _AGE_ASSERTION = re.compile(
 
 def relative_mention(text, match):
     """True only for a step-family noun that names someone's real relative ("my stepsister got a job"): an owner
-    possessive (not "your") right before it, and no role frame anywhere earlier in its clause (capped at 160 chars)."""
+    possessive (not "your") right before it, and no role frame / affection cue anywhere in its clause, before or after
+    the noun (each side capped at 160 chars)."""
     if not _STEP_FAMILY.fullmatch(match.group(0)):
         return False
-    clause = re.split(r"[.!?\n]", text[max(0, match.start() - 160):match.start()].replace("\u2019", "'"))[-1]
-    return bool(_POSSESSIVE_BEFORE.search(clause)) and not _ROLE_FRAME.search(clause)
+    norm = lambda part: part.replace("\u2019", "'")
+    before = re.split(r"[.!?\n]", norm(text[max(0, match.start() - 160):match.start()]))[-1]
+    after = re.split(r"[.!?\n]", norm(text[match.end():match.end() + 160]))[0]
+    return bool(_POSSESSIVE_BEFORE.search(before)) and not _ROLE_FRAME.search(before + " " + after)
 
 
 def sensitive_match(pattern, text, *related):

@@ -313,7 +313,8 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
     from onlyfans_runtime.commerce import held
     from ownership import owned_media_in_session
     inventory=_inventory(s,account,settings,pa)
-    owned=sorted(owned_media_in_session(s,account,fan,limit=10000))
+    try:owned=sorted(owned_media_in_session(s,account,fan,limit=10000))
+    except ValueError as exc:raise Refused('ownership evidence unavailable') from exc
     from .exposure import previously_sent_assets
     exposed,exposure_verified=previously_sent_assets(s,account,fan)
     paid_assets={key:sorted(set(terms['media_ids'])-set(terms['preview_ids'])) for key,terms in inventory.items()}
@@ -1140,7 +1141,9 @@ class MoxyService:
                             OfOperatorCase.fan_id==event.fan_id,OfOperatorCase.status.in_(('open','acknowledged')))):
                             case.owner=case.owner or assigned
                 event.status='held';event.reason=reason;return event_id
-            snap=snapshot(s,account,event.fan_id,event)
+            try:snap=snapshot(s,account,event.fan_id,event)
+            except Refused as exc:  # hold this fan's event; other fans proceed
+                event.status='held';event.reason=str(exc)[:128];return event_id
             source=json.loads(event.payload_json).get('source_message_id')
             if source and event.kind in {'turn','welcome'}:
                 incoming=[m for m in snap['history'] if m['direction']=='in']
@@ -1369,7 +1372,9 @@ class MoxyService:
                         event.status='held';event.reason='moxy_late_generation_fenced'
                         diagnose(s,account,'late_completion_cost_reconciled',event=event)
                         continue
-                    fresh=snapshot(s,account,event.fan_id,event)
+                    try:fresh=snapshot(s,account,event.fan_id,event)
+                    except Refused as exc:
+                        event.status='held';event.reason=str(exc)[:128];continue
                     if event.snapshot_hash!=digest(fresh):
                         event.status='stale';event.reason='moxy_snapshot_changed'
                     else:
@@ -1441,17 +1446,14 @@ class MoxyService:
                         elif max((t for t in (policy.provider_cooldown_until,policy.next_dispatch_at)
                                   if t is not None),default=utcnow())>utcnow():
                             e.reason='provider_rate_limited'
-                        elif digest(snapshot(s,account,e.fan_id,e))!=e.snapshot_hash:
-                            e.status='stale';e.reason='moxy_snapshot_changed'
-                        else:
+                        elif not _invalidated(s,account,e):
                             e.status='ready';e.reason='provider_rate_limit_retry'
                     else:
                         e.status='stale';e.reason=intent.reason
                 elif intent and intent.status in {'cancelled','refused'}:
                     e.status='stale';e.reason=intent.reason
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready')):
-                if digest(snapshot(s,account,e.fan_id,e))!=e.snapshot_hash:
-                    e.status='stale';e.reason='moxy_snapshot_changed'
+                _invalidated(s,account,e)
             s.flush()
             owner=s.get(MoxyAccount,account)
             surface_campaign_recovery(s,account,owner)
@@ -1507,6 +1509,16 @@ class MoxyService:
             if e.status in {'held','stale','done'}:
                 from .campaigns import retire
                 retire(s,e)
+
+
+def _invalidated(s,account,e):
+    """Stale on a changed snapshot; hold only this event when its snapshot is refused (G01-02)."""
+    try:
+        if digest(snapshot(s,account,e.fan_id,e))==e.snapshot_hash:return False
+        e.status='stale';e.reason='moxy_snapshot_changed'
+    except Refused as exc:
+        e.status='held';e.reason=str(exc)[:128]
+    return True
 
 
 def surface_campaign_recovery(s,account,owner):

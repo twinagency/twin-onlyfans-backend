@@ -156,12 +156,15 @@ async def seen_media(account_id: str, fan_id: int) -> set[int]:
     return {int(x) for x in ids}
 
 
-def owned_media_in_session(s, account_id: str, fan_id: int, *, limit: int | None = None) -> set[int]:
+def owned_media_in_session(s, account_id: str, fan_id: int, *, limit: int | None = None,
+                           strict: bool = True) -> set[int]:
     """The same ownership reader inside an existing canonical transaction.
 
     Actual sent media outrank a subsequently edited catalogue. Legacy delivered
     offers without a recorded payload retain their old catalogue fallback, scoped
     to this account. A bounded caller refuses rather than truncating evidence.
+    Strict (engine, Moxy): unreadable evidence raises ValueError. `strict=False`
+    is the relay's explicit legacy mode: a bad row drops only its own ids.
     """
     def rows(query):
         result = s.execute(query.limit(limit + 1) if limit is not None else query).all()
@@ -177,10 +180,22 @@ def owned_media_in_session(s, account_id: str, fan_id: int, *, limit: int | None
         ContentOffer.status == "delivered", ContentOffer.resolved_by.in_(OWNED_RESOLVED_BY)))
     out = {int(row[0]) for row in seen}
     def add(raw):
+        # Unreadable evidence is UNKNOWN ownership, never "not owned": raise so
+        # callers refuse ("ownership evidence unavailable") instead of selling.
+        if not strict:  # relay legacy mode, byte-for-byte the base reader
+            try:
+                out.update(int(x) for x in json.loads(raw or "[]"))
+            except (ValueError, TypeError):
+                pass
+            return
+        # Only NULL means "no media"; '' is unreadable.
         try:
-            out.update(int(x) for x in json.loads(raw or "[]"))
-        except (ValueError, TypeError):
-            pass
+            ids = json.loads("[]" if raw is None else raw)
+            if type(ids) is not list:
+                raise ValueError("media list expected")
+            out.update([int(x) for x in ids])
+        except (ValueError, TypeError) as exc:
+            raise ValueError("ownership evidence unreadable") from exc
     for (raw,) in paid:
         add(raw)
     message_ids = {mid for _, offer_mid, delivery_mid in offers for mid in (offer_mid, delivery_mid) if mid is not None}
@@ -203,8 +218,11 @@ def owned_media_in_session(s, account_id: str, fan_id: int, *, limit: int | None
 
 async def owned_or_seen_media(account_id: str, fan_id: int) -> set[int]:
     """Purchased media only; merely sent/free-preview media do not grant ownership."""
+    # Relay callers (server.py `_reject_if_resale` via resale_verdict, ai_chatter,
+    # make_right) keep base behaviour: lenient, a corrupt row drops only its own
+    # ids. Gate before relay re-enable (G01-01/03/04): make these fail closed.
     async with get_session() as s:
-        return await s.run_sync(owned_media_in_session, account_id, fan_id)
+        return await s.run_sync(lambda sync: owned_media_in_session(sync, account_id, fan_id, strict=False))
 
 
 # A priced send must be at least half NEW photography (operator ruling

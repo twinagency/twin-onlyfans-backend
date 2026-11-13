@@ -43,3 +43,5 @@ service/tests/test_w2or04_activate_guard_pg.py::test_never_stopped_scopeless_ver
 service/tests/test_w2or04_activate_guard_pg.py::test_w3rca02_connection_api_activate_after_pause_is_200_and_runtime_stays_off
 service/tests/test_w4_trace_isolation_resolve_pg.py
 service/tests/test_g02_pilot_stop_never_refused_pg.py
+service/tests/test_w2_conversation_engine_sale_pg.py
+service/tests/test_g01_moxy_ownership_hold_pg.py

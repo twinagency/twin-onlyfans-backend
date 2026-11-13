@@ -98,8 +98,10 @@ def _auto_memberships(session, account_id, media_id, keys=None):
 
 
 def _withdraw_filings(session, account_id, media_id, filed):
-    """Remove live memberships in auto folders the classifier filed; return their keys. Operator additions,
-    Miscellaneous/Unsorted and archived folders are untouched. Idempotent: a second call finds nothing."""
+    """Remove live memberships in the auto folders of `filed` categories; return their keys. Memberships in
+    other auto folders (operator additions), Miscellaneous/Unsorted and archived folders are untouched. An
+    operator membership in a filed category cannot be told apart from the classifier's and is removed.
+    Idempotent: a second call finds nothing."""
     rows = _auto_memberships(session, account_id, media_id, sorted(filed)) if filed else []
     if rows:
         session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
@@ -168,9 +170,11 @@ def assign_sync(session, account_id, media_id, *, commercial=False):
         elif isinstance(previous, dict):
             filed = set()           # filed as uncertain only; nothing automatic to preserve
         else:
-            # categorised before commercial mode (no FILED): its live auto filings count as filed, so evidence
-            # that changed or vanished cannot strand them; evidenced-but-removed stays not re-added.
-            filed = set(evidenced) | {key for key, _ in _auto_memberships(session, account_id, media_id)}
+            # Categorised before commercial mode (no FILED): no record says which live memberships the
+            # classifier made, and an operator may add an item to any auto folder. Only current evidence counts
+            # as filed (evidenced-but-removed stays not re-added); a live membership outside it is kept as a
+            # possible operator addition, even if an older, now-changed classification filed it.
+            filed = set(evidenced)
         if legacy:
             filed |= LEGACY_KEYS
         withdrawn = set()

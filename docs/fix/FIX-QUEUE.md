@@ -6,7 +6,7 @@ blk 25/12 · sec-money maj 14/11 · maj 27/16 · minor 3/1 · relay-deferred 13/
 - Source: [TRIAGE-91e32acc.md](TRIAGE-91e32acc.md) (DeepSeek Flash, read-only worktree). Opus spot-check 5/5 still red at 29f28729 (measured): W3RO-01, W6AX-7×2, W6OC-14, W4OFR-07, T17×2.
 - Order = group order G01→G44 (blk, sec-money maj, maj, minor batch, relay-deferred last = "before relay re-enable" gate). One PR per group (root cause).
 - Slot rule: next group must share no product file with the in-flight fix. G03 (recent_inbox.py) waits for F4 (same file). Next pick: G01 (ownership.py / fans_api_adapter), disjoint with F4 (inferred).
-- Follow-ups from fix reviews (queued, minor): FLG3-01 Moxy `current()` cancels on unreadable ownership evidence → event later `stale` w/o operator case (G01b); FLG2-05 G01b known-red HTTP ownership tests → macOS skipif (after F0b); W6HR-2b tip-only re-read (F4). Relay gate +: FLG2-07/G01-01 priced relay send on corrupt evidence (server.py:5141).
+- Follow-ups from fix reviews (queued, minor): FLG3-01 Moxy `current()` cancels on unreadable ownership evidence → event later `stale` w/o operator case (G01b); FLG2-05 G01b known-red HTTP ownership tests → macOS skipif (after F0b); W6HR-2b tip-only re-read (F4). From G02 review: **G02-01 (maj, send-safety)** `_disable_sends` (fans_api_adapter/events.py:483) refused by text_delivery.py:282 when policy drifted wider than scope → sends not disabled; clamp blocked by :304-307; **G02-02 (minor)** connections.py:319/:364 write delivery policy without an OfDeliveryPolicyChange audit row. Relay gate +: FLG2-07/G01-01 priced relay send on corrupt evidence (server.py:5141).
 - Drift-unknown (code only on commercial-integration) + 22 untested live-risk ids: not queued; need a red test first.
 
 ---

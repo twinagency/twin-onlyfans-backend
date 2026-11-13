@@ -149,3 +149,8 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - 03:2xZ Flash r2 G01: FIX-THEN-MERGE both. Fixed: G01a 182a37fe (FLG2-02/04; webhook 170/170), G01b 06167d9a (FLG2-01 high: receipt path regression; red at 75f7b602, green after; moxy+text_delivery 116/116). D: FLG2-05 disclose, FLG2-07 relay gate. Flash r3 delta review running (780493b0).
 - 03:4xZ MERGED G01a #92 = 91547788 (gate GREEN 481s measured; merge #9). Local target ff to 91547788; no worktree checked out on target. G01b rebased (promoted list union) -> 591c391e, gate running.
 - 04:1xZ F0d worker done (bd0f25f8; fast 40s own / 658s on F4 diff, measured); I dropped loose commercial_full_path entry (3dc98ef1). Opus F0d review FIX-THEN-MERGE (2 blk: lint var clobbers pool dir; deselected+errors masked) → /tmp/rwl-f0d/FINDINGS.md, sent back to F0d worker; Flash F0d (18ebeb16) running. G02 finished by me: 0ba586cd on 91547788, red at base 3/3, green + neighbours 49/49 (measured); rwl Opus+Flash (7f5d6057) running. G01b gate running.
+
+## 2026-11-13 G02 / G01b gate
+- G02-03 fixed by orchestrator: `_assert_stopped` asserts audit row after = min/max clamp of before (15fc3e89). Throttle drift not parametrized: DB floor 1 == scope limit 1. Green fix / red base (measured, PG 55651).
+- G01b gate FAIL test_moxy_input_supersession_pg::test_explicit_retirement_keeps_old_inputs_in_history_only: red at base 91547788 too (`moxy_event_key_conflict`, measured) → base red, already in F0d known-red; add to G01b known-red, rerun gate.
+- G02-01 (maj send-safety) + G02-02 (minor) queued in FIX-QUEUE.

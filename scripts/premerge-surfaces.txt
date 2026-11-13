@@ -5,6 +5,7 @@
 # their own tests are large (engine +20, text_delivery +102, native_pilot/service +20) and run in check.sh wide.
 safety service/native_pilot/safety_detect.py
 safety service/conversation_engine/safety_context.py
+safety service/conversation_engine/minor_signal.py  # shared minor signal (engine + native, G05-PR2)
 safety service/vision.py
 safety service/conversation_engine/journey.py
 safety service/conversation_engine/model_output.py

@@ -82,15 +82,16 @@ def _sexual_problems(texts, ctx):
     profile = ctx.profile
     level = getattr(profile, 'explicit_chat', 'explicit')
     problems = []
+    from .minor_signal import minor_match
     from .safety_context import sensitive_match
     fan_text = ctx.snapshot['current_message']['body']
-    hit = sensitive_match(PLATFORM_BANNED_RX, joined, fan_text)
+    hit = sensitive_match(PLATFORM_BANNED_RX, joined, fan_text) or minor_match(joined, fan_text)
     if hit:
         problems.append(f"platform-banned theme in her text ('{hit.group(0)}'); decline it in one line and change the subject")
     fan_sexual = bool(SEXUAL_FAN_RX.search(fan_text))
     # Declining a platform-banned theme or one of her documented limits in one line and changing the subject is what the
     # prompt demands (HARD LINES, HER LIMITS); it is not sanitising ordinary explicit chat.
-    demanded_decline = bool(sensitive_match(PLATFORM_BANNED_RX, fan_text, fan_text)) or any(
+    demanded_decline = bool(sensitive_match(PLATFORM_BANNED_RX, fan_text, fan_text) or minor_match(fan_text, fan_text)) or any(
         term and re.search(r'(?<![a-z0-9])' + re.escape(term.lower()) + r'(?![a-z0-9])', fan_text.lower())
         for term in getattr(profile, 'limit_terms', ()) or ())
     if level == 'explicit' and fan_sexual and not demanded_decline and SANITISE_RX.search(joined):

@@ -194,14 +194,9 @@ async def _live_of_kind(account_id: str, media: list[int],
     """
     if not media:
         return media
-    async with get_session() as s:
-        rows = (await s.execute(
-            select(VaultItem.media_id, VaultItem.kind).where(
-                VaultItem.account_id == str(account_id),
-                VaultItem.media_id.in_(media),
-                VaultItem.removed_at.is_(None))
-        )).all()
-    live = {int(m): str(k or "") for m, k in rows}
+    # Live = what the sale would sell (`content_resolver.sellable`), not merely un-removed:
+    # a not-ready / hidden / errored item is as undeliverable as a deleted one.
+    live = await content_resolver.sellable(account_id, media)
     # Only "photo"/"video" are real promises; anything else (None included) is
     # "he named no kind", which every kind satisfies.
     want = kind if kind in ("photo", "video") else None

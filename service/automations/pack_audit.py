@@ -32,7 +32,7 @@ from sqlalchemy import func, select
 
 import vault_pack_picker
 from db.engine import get_session
-from db.models import VaultCacheRun, VaultFolder, VaultFolderItem, VaultItem
+from db.models import VaultCacheRun, VaultFolder, VaultFolderItem
 
 from . import content_resolver
 from .pack_claim import Claim, is_substitute_claim
@@ -96,22 +96,13 @@ async def _mirror_age(account_id: str) -> timedelta | None:
 
 
 async def _live_media(account_id: str, media: list[int] | set[int]) -> set[int]:
-    """Of these ids, the ones that are still un-deleted `VaultItem`s.
+    """Of these ids, the ones the sale would still sell (`content_resolver.sellable`).
 
-    The one query behind both modules' liveness rule: an id soft-deleted after
-    two clean collect sweeps is gone from her vault, and charging for it delivers
-    nothing.
+    The one read behind both modules' liveness rule: an id soft-deleted after
+    two clean collect sweeps, or one the provider marks not ready / hidden /
+    errored, delivers nothing, and charging for it is the lie this audit vetoes.
     """
-    ids = sorted({int(m) for m in media})
-    if not ids:
-        return set()
-    async with get_session() as s:
-        return {int(m) for m in (await s.execute(
-            select(VaultItem.media_id).where(
-                VaultItem.account_id == str(account_id),
-                VaultItem.media_id.in_(ids),
-                VaultItem.removed_at.is_(None))
-        )).scalars().all()}
+    return set(await content_resolver.sellable(account_id, media))
 
 
 async def audit_pack(account_id: str, category: str, rung: str,

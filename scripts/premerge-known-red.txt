@@ -45,6 +45,3 @@ service/tests/test_onlyfans_commerce_pg.py::test_encrypted_restore_preserves_pai
 service/tests/test_native_pilot_service.py AssertionError: timeout waiting for first reply after 45 minutes; last events: [*
 # a1151b1f (measured, F0d, not on the orchestrator list): head assert '0133_preparation_retry_state' == '0110_recent_history'; team base red, queued
 service/tests/test_concurrent_admission_units.py::test_concurrent_migration_is_the_release_head
-# a1151b1f (measured, F0d, not on the orchestrator list): script, sqlite OperationalError unrecognized token ":" (weak
-# matcher: SQLAlchemy's generic e3q8 footer); team base red, queued
-service/tests/test_commercial_full_path.py (Background on this error at: https://sqlalche.me/e/20/e3q8)

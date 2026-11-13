@@ -3380,6 +3380,8 @@ class OfConversationState(Base):
         BigInteger, nullable=False, default=0, server_default=text("0"),
         info={"onlyfans_since": "0072_onlyfans_text_delivery"},
     )
+    #: Newest skipped fan row (tip/unsent/deleted) already counted as input.
+    skipped_input_id: Mapped[int | None] = mapped_column(BigInteger, info={"onlyfans_since": "0134_skipped_input"})
     #: none | requested | effective — a request is not effective until the
     #: backend confirms it, which is why the two are separate values.
     takeover_state: Mapped[str] = mapped_column(

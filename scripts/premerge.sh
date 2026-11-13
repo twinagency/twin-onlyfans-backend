@@ -8,7 +8,8 @@
 #     each its own process, output printed in list order.
 # Exit 0 = OK, 1 = FAILED, 2 = INCOMPLETE (something skipped; ALLOW_SKIP=1 accepts). Pre-existing reds live in
 # scripts/premerge-known-red.txt (proven red at base): pytest ids are deselected, a script must end on the listed
-# line; any other failure, or a listed script that passes, FAILS. Network blocked via dead proxy.
+# line (a trailing * = prefix match, for lines with volatile timestamps/ids); any other failure, or a listed script
+# that passes, FAILS. Network blocked via dead proxy. Each target is capped at CHECK_FILE_TIMEOUT_S (600): over = FAIL.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 BASE="${BASE:-origin/claude/commercial-r0-r3-20261111}"
@@ -20,6 +21,9 @@ git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || { echo "premerge: 
 [ -f "$PROMOTED" ] || { echo "premerge: FAILED (missing $PROMOTED)"; exit 1; }
 MB="$(git merge-base "$BASE" HEAD)"
 JOBS="${CHECK_JOBS:-3}"; [[ $JOBS =~ ^[1-9][0-9]?$ ]] || { echo "premerge: FAILED (CHECK_JOBS=$JOBS not 1..99)"; exit 1; }
+FTO="${CHECK_FILE_TIMEOUT_S:-600}"; [[ $FTO =~ ^[1-9][0-9]{0,4}$ ]] || { echo "premerge: FAILED (CHECK_FILE_TIMEOUT_S=$FTO)"; exit 1; }
+TO="$(command -v timeout || command -v gtimeout || true)"
+[ -n "$TO" ] || { echo "premerge: FAILED (no timeout/gtimeout for the per-file cap)"; exit 1; }
 [[ ${PREMERGE_DEFER_AFTER_S:-0} =~ ^[0-9]+$ ]] || { echo "premerge: FAILED (PREMERGE_DEFER_AFTER_S not an int)"; exit 1; }
 list="$(mktemp)" out="$(mktemp -d)"; trap 'rm -rf "$list" "$out"' EXIT
 git diff --name-only --diff-filter=d "$MB" >"$list"; git ls-files --others --exclude-standard >>"$list"
@@ -53,19 +57,22 @@ is_script() {  # run-service-tests.py rule: no pytest import and (__main__ entry
   ! grep -qE '^\s*(import|from) pytest' "$1" && { grep -qE '^if __name__ *== *.__main__.' "$1" || ! grep -qE '^(async )?def test_' "$1"; }
 }
 run() {  # one process per target, like run-service-tests.py isolation
-  local t="$1" file="${1%%::*}" res expect="" k id rest cmd=(-m pytest -q -p no:cacheprovider "$1")
+  local t="$1" file="${1%%::*}" res rc last expect="" k id rest cmd=(-m pytest -q -p no:cacheprovider "$1")
   [ -f "$file" ] || { echo "MISSING $t"; fail=1; return 0; }
   if [[ "$file" == *_pg.py && -z "${ONLYFANS_TEST_PG_URL:-}" ]]; then echo "SKIP (no ONLYFANS_TEST_PG_URL) $t"; skip=$((skip+1)); return 0; fi
   for k in "${known[@]+"${known[@]}"}"; do read -r id rest <<<"$k"
     if [[ "$id" == "$t::"* ]]; then cmd+=(--deselect "$id"); echo "KNOWN-RED $id (deselected)"; kr=$((kr+1))
     elif [ "$id" = "$t" ]; then expect="$rest"; fi; done
   [ "$t" = "$file" ] && is_script "$file" && cmd=("$file")
-  if res="$("$PY" "${cmd[@]}" 2>&1)"; then
+  res="$("$TO" -k 5 "$FTO" "$PY" "${cmd[@]}" 2>&1)" && rc=0 || rc=$?; last="$(tail -1 <<<"$res")"
+  if [ "$rc" = 0 ]; then
     # pytest exits 0 on in-test skips/xfails: those cases did not run, so they are not a PASS.
     if [ "${cmd[0]}" = -m ] && tail -1 <<<"$res" | grep -qE '[0-9]+ (skipped|xfailed)'; then
       echo "SKIP (pytest: $(tail -1 <<<"$res")) $t"; skip=$((skip+1)); return 0; fi
     if [ -z "$expect" ]; then echo "PASS $t: $(tail -1 <<<"$res")"; else echo "FAIL $t: known-red but passed; drop it from $KNOWN"; fail=1; fi
-  elif [ -n "$expect" ] && [ "$(tail -1 <<<"$res")" = "$expect" ]; then echo "KNOWN-RED $t: $expect"; kr=$((kr+1))
+  elif [ "$rc" = 124 ] || [ "$rc" = 137 ]; then echo "FAIL $t: per-file timeout ${FTO}s (CHECK_FILE_TIMEOUT_S)"; tail -30 <<<"$res"; fail=1
+  elif [ -n "$expect" ] && { [ "$last" = "$expect" ] || { [ "${expect: -1}" = '*' ] && [[ $last == "${expect%\*}"* ]]; }; }; then
+    echo "KNOWN-RED $t: $expect"; kr=$((kr+1))
   elif [ "${cmd[0]}" = -m ] && [[ " ${cmd[*]} " == *" --deselect "* ]] && tail -1 <<<"$res" | grep -qE '^[0-9]+ deselected'; then
     echo "KNOWN-RED $t: every test in it is known-red (deselected)"  # pytest rc 5: nothing left to run
   else echo "FAIL $t: $(tail -1 <<<"$res")"; tail -30 <<<"$res"; fail=1; fi

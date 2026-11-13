@@ -1,5 +1,6 @@
 # Pre-existing reds, each measured failing on clean a253c84c. One per line: pytest node id (deselected), or a
-# script test file followed by the exact last output line it must fail with. Remove an entry once it is fixed.
+# script test file followed by the exact last output line it must fail with (trailing * = prefix match, for lines
+# carrying volatile timestamps/ids). Remove an entry once it is fixed.
 # a253c84c: of_earnings_total DuplicateTable when upgrading from rev 91
 service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence
 # a253c84c: script, owner fence refuses before the suite asserts
@@ -17,3 +18,28 @@ service/tests/test_engine_defects_pg.py::test_r1_paused_plain_replies_cannot_pit
 service/tests/test_moxy_catalogue_context_pg.py::test_hundred_products_reach_model_and_last_item_can_deliver
 # a1151b1f (measured): script, 3 errors, SimpleNamespace has no attribute 'engine'; team base red, queued
 service/tests/test_history_capacity_turns.py FAILED (errors=3)
+# a1151b1f (measured): 15 failed / 12 passed, first failure `assert identity is not None` (:99); team base red, queued
+service/tests/test_onlyfans_campaigns_pg.py::test_scheduled_campaign_waits_durably_then_queues_one_shared_intent
+service/tests/test_onlyfans_campaigns_pg.py::test_no_contact_and_human_takeover_are_skipped_before_queue
+service/tests/test_onlyfans_campaigns_pg.py::test_campaign_delivery_uses_one_authority_and_human_authorship
+service/tests/test_onlyfans_campaigns_pg.py::test_worker_delivers_campaign_without_a_model_invocation
+service/tests/test_onlyfans_campaigns_pg.py::test_contact_and_input_are_rechecked_after_queue[no_contact]
+service/tests/test_onlyfans_campaigns_pg.py::test_contact_and_input_are_rechecked_after_queue[human_controlled]
+service/tests/test_onlyfans_campaigns_pg.py::test_contact_and_input_are_rechecked_after_queue[paused]
+service/tests/test_onlyfans_campaigns_pg.py::test_contact_and_input_are_rechecked_after_queue[new_input]
+service/tests/test_onlyfans_campaigns_pg.py::test_cancel_releases_only_queued_work_and_retains_unknown_hold
+service/tests/test_onlyfans_campaigns_pg.py::test_pause_resume_and_cancel_commands_are_revisioned_and_idempotent
+service/tests/test_onlyfans_campaigns_pg.py::test_pause_between_grant_and_consume_prevents_wire
+service/tests/test_onlyfans_campaigns_pg.py::test_mutated_frozen_campaign_is_not_sendable_and_audit_is_append_only
+service/tests/test_onlyfans_campaigns_pg.py::test_competing_workers_create_at_most_one_recipient_intent
+service/tests/test_onlyfans_campaigns_pg.py::test_campaign_fairness_advances_past_32_stale_recipients
+service/tests/test_onlyfans_campaigns_pg.py::test_stale_campaign_does_not_hold_independent_eligible_campaign
+# a1151b1f (measured): Refused: moxy_event_key_conflict; team base red, queued
+service/tests/test_moxy_input_supersession_pg.py::test_explicit_retirement_keeps_old_inputs_in_history_only
+# a1151b1f (measured): env, FileNotFoundError on a hardcoded /home/ronan/twin/moxy-collect-... path; team base red, queued
+service/tests/test_moxy_vault_cross_lineage.py::test_amelia_overlay_really_writes_needs_review_for_blank_description
+# a1151b1f (measured): env, KeyError ONLYFANS_TEST_PG_BIN; team base red, queued (G01 adds it too: second merge drops the dup)
+service/tests/test_onlyfans_commerce_pg.py::test_encrypted_restore_preserves_paid_owners_conflict_and_append_only_evidence
+# a1151b1f (measured): script, "timeout waiting for first reply after 45 minutes" (fake clock, ~62 s wall) under the dead
+# proxy; last line carries a lease timestamp, so prefix match; team base red, queued
+service/tests/test_native_pilot_service.py AssertionError: timeout waiting for first reply after 45 minutes; last events: [*

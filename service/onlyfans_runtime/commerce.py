@@ -63,11 +63,16 @@ def _unlinked_paid(account_id, fan_id=None, *, excluded=True, unknown_recipient=
 
 
 def _provider_evidence_held(s, account_id, fan_id):
-    """Fans API payment evidence a person must review (amount mismatch, ambiguity, no grant) holds only that fan."""
+    """Fans API payment evidence a person must review (amount mismatch, ambiguity, no grant) holds only that fan.
+
+    A message-bound unlock not yet resolved (applied/dismissed) also holds it: until then what the fan owns is
+    unknown, and unknown ownership fails closed (W3CEA-07). An unlinked transaction carries no message, so by
+    design it does not freeze the fan (payment_evidence); only a held one does."""
     from db.onlyfans_fans_intake_models import OfFansEvidence
     return s.scalar(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account_id,
-        OfFansEvidence.fan_id == fan_id, OfFansEvidence.status == "held",
-        OfFansEvidence.kind != "human_sent").limit(1)) is not None
+        OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind != "human_sent",
+        (OfFansEvidence.status == "held") | (OfFansEvidence.status.in_(("pending", "paired"))
+            & (OfFansEvidence.kind == "unlock"))).limit(1)) is not None
 
 
 def held(s, account_id, fan_id=None):

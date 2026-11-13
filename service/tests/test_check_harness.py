@@ -157,24 +157,43 @@ def test_premerge_parallel_pool_keeps_order_counts_known_red_and_planted_failure
         "test_z4.py": "import sys, time\nprint('boom at', time.time())\nsys.exit(1)\n",  # script, volatile digits
         "test_z6.py": "import pytest\n@pytest.fixture\ndef boom(): raise RuntimeError('setup')\n"  # "1 deselected, 1 error"
                       "def test_kr(): assert False\ndef test_err(boom): pass\n",
-        "test_z7.py": "def test_kr(): assert False\n"}, known="".join(f"service/tests/{k}\n" for k in (  # all deselected: rc 5
-        "test_z3.py::test_kr", "test_z4.py boom at #.#", "test_z6.py::test_kr", "test_z7.py::test_kr")))
+        "test_z7.py": "def test_kr(): assert False\n",
+        "test_z8.py": "import warnings\nwarnings.warn('dep')\ndef test_kr(): assert False\n"},  # "1 deselected, 1 warning"
+        known="".join(f"service/tests/{k}\n" for k in (  # all deselected: rc 5
+        "test_z3.py::test_kr", "test_z4.py boom at #.#", "test_z6.py::test_kr", "test_z7.py::test_kr", "test_z8.py::test_kr")))
     r = run(CHECK_JOBS="3")
-    assert r.returncode == 1 and _rows(r) == ["== (b) changed tests (6)", "PASS service/tests/test_z1.py",
+    assert r.returncode == 1 and _rows(r) == ["== (b) changed tests (7)", "PASS service/tests/test_z1.py",
         "FAIL service/tests/test_z2.py", "KNOWN-RED service/tests/test_z3.py", "PASS service/tests/test_z3.py",
         "KNOWN-RED service/tests/test_z4.py", "KNOWN-RED service/tests/test_z6.py", "FAIL service/tests/test_z6.py",
-        "KNOWN-RED service/tests/test_z7.py", "KNOWN-RED service/tests/test_z7.py", "== (c) promoted tests (0)",
+        "KNOWN-RED service/tests/test_z7.py", "KNOWN-RED service/tests/test_z7.py",
+        "KNOWN-RED service/tests/test_z8.py", "KNOWN-RED service/tests/test_z8.py", "== (c) promoted tests (0)",
         "== (d) touched-area tests (1, CHECK_JOBS=3)", "PASS service/tests/test_uses_m.py"], r.stdout
     assert "FAIL service/tests/test_z6.py: 1 deselected, 1 error" in r.stdout
     (t / "test_z2.py").unlink(), (t / "test_z6.py").unlink()
     r = run(PREMERGE_DEFER_AFTER_S="0")
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py" in r.stdout, r.stdout
-    assert "premerge: OK (0 skipped, 3 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
+    assert "premerge: OK (0 skipped, 4 known-red, 1 deferred to wide)" in r.stdout and "PASS service/tests/test_z1.py" in r.stdout
     r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S="3", ZZ_SLEEP="60")  # (d) still running at the stop time: cut, deferred
     assert r.returncode == 0 and "DEFERRED to wide: service/tests/test_uses_m.py (cut at the fast budget)" in r.stdout, r.stdout
     for stop, how in [(s, h) for s in ("60", "600") for h in ("ZZ_KILL", "ZZ_124")]:  # killed / exit 124 before the cap
         r = run(CHECK_JOBS="5", PREMERGE_STOP_AT_S=stop, **{how: "1"})  # (OOM, self-kill, a test's own 124): FAIL, not deferred
         assert r.returncode == 1 and "FAIL service/tests/test_uses_m.py" in r.stdout and "DEFERRED" not in r.stdout, r.stdout
+
+def test_premerge_known_red_script_pins_its_terminal_exception_not_an_earlier_one(tmp_path):
+    sql = lambda msg, stmt: f"raise RuntimeError('{msg}\\n[SQL: \\n{stmt} (\\n\\tx INT\\n)\\n\\n]\\n(Background on this error at: u)')"
+    ctx, log = sql("pinned 7", "CREATE x"), "import sys, traceback\ntry:\n    {}\nexcept RuntimeError:\n    traceback.print_exc({})\n"
+    _, _, run = _pm_repo(tmp_path, {
+        "test_x1.py": ctx + "\n",  # terminal exception + its statement = the pin, SQLAlchemy footer after it: KNOWN-RED
+        "test_x2.py": f"try:\n    {ctx}\nexcept RuntimeError:\n    raise AssertionError\n",  # chained, message-less: FAIL
+        "test_x3.py": log.format(ctx, "") + "raise SystemExit('later')\n",  # pinned error logged, later exit: FAIL
+        "test_x4.py": log.format(ctx, "file=sys.stdout") + "sys.stderr.write('later\\n'); sys.exit(1)\n",  # stdout block-buffered: FAIL
+        "test_x5.py": log.format(ctx, "") + sql("other 7", "CREATE x") + "\n",  # earlier pin, later footer error: FAIL
+        "test_x6.py": sql("pinned 7", "CREATE y") + "\n",  # same error, another statement: FAIL
+        "test_x7.py": "import sys\nprint('(Background on this error at: u)'); sys.exit(1)\n"},  # footer, no exception: FAIL
+        known="".join(f"service/tests/test_x{k}.py RuntimeError: pinned # [SQL: CREATE x (]\n" for k in range(1, 8)))
+    r = run()
+    assert "KNOWN-RED service/tests/test_x1.py: RuntimeError: pinned # [SQL: CREATE x (]" in r.stdout, r.stdout
+    assert all(f"FAIL service/tests/test_x{k}.py" in r.stdout for k in range(2, 8)) and r.returncode == 1, r.stdout
 
 def test_premerge_per_file_timeout_fails_and_a_killed_run_reaps_inner_tests(tmp_path):
     hang = "import os, time\ndef test_hang():\n    open(os.environ.get('ZZ_PID', os.devnull), 'w').write(str(os.getpid()))\n    time.sleep(60)\n"

@@ -1448,6 +1448,11 @@ class MoxyService:
                         e.status='stale';e.reason=intent.reason
                 elif intent and intent.status in {'cancelled','refused'}:
                     e.status='stale';e.reason=intent.reason
+            # Pre-D429 rate-limit re-sends left 'ready' are held too: their 429 proved nothing either.
+            for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready',
+                    MoxyEvent.reason=='provider_rate_limit_retry')):
+                e.status='held';e.reason=('campaign_provider_recovery_required'
+                    if json.loads(e.payload_json).get('campaign_id') else 'provider_delivery_unconfirmed')
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready')):
                 self._invalidated(s,account,e)
             s.flush()

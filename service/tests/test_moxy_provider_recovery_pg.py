@@ -66,6 +66,26 @@ def test_legacy_rate_limited_rejection_is_held_and_never_redispatched(database,m
     store.close()
 
 
+def test_legacy_ready_rate_limit_retry_is_held_not_resent(database,monkeypatch):
+    """W7CS-01: an event a pre-D429 build already re-armed (ready/provider_rate_limit_retry) is held, never re-sent."""
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    identity,_=run(service,engine,decision())
+    intent=service.queue(TENANT,ACCOUNT,identity)
+    monkeypatch.setattr(SyntheticTextTransport,'send',legacy_rate_limited)
+    assert authority.dispatch(TENANT,ACCOUNT,intent,SyntheticTextTransport(ACCOUNT))=='not_accepted'
+    expire_cooldown(engine)
+    with Session(engine) as s,s.begin():
+        event=s.get(MoxyEvent,(ACCOUNT,identity));event.status='ready';event.reason='provider_rate_limit_retry'
+    fresh=model(decision())
+    assert service.step(TENANT,ACCOUNT,fresh)==0
+    with Session(engine) as s:
+        event=s.get(MoxyEvent,(ACCOUNT,identity))
+        assert event.status=='held' and event.reason=='provider_delivery_unconfirmed'
+        assert len(s.scalars(select(OfTextIntent).where(OfTextIntent.moxy_event_id==identity)).all())==1
+    assert fresh.calls==[]
+    store.close()
+
+
 def test_authentication_rejection_is_owned_hold_and_never_retried(database,monkeypatch):
     engine,store,service,authority,claim,settings=setup(database,monkeypatch)
     identity,_=run(service,engine,decision())

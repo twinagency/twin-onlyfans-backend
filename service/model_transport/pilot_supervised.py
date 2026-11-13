@@ -24,7 +24,7 @@ from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfEnginePilotWebhookDigest, OfEnginePilotReconnectReceipt
 from db.onlyfans_fans_intake_models import OfFansProjection
 from db.onlyfans_models import OfIngress
-from fans_api_adapter.events import FansEventIntake, _parse as parse_event
+from fans_api_adapter.events import FansEventIntake, SendStopFailed, _parse as parse_event
 from fans_api_adapter.real_transport import build_real_transport, load_real_config, real_transport_enabled
 from fans_api_adapter.webhooks import verify_signature
 from onlyfans_runtime.store import Refused, utcnow
@@ -276,6 +276,8 @@ class SupervisedPilot:
                 if fan is None or fan in self.allowed_fans:
                     intake._project(self.account, epoch, key)
                     projected += 1
+            except SendStopFailed:
+                raise  # the safety stop did not apply: loud, never re-projected as ordinary malformed input
             except Refused:
                 # Authenticated but malformed input is held by the intake, never projected into another fan.
                 intake._project(self.account, epoch, key)
@@ -305,19 +307,36 @@ class SupervisedPilot:
                 self.worker._cancel_queued(self.tenant, self.account, intent_id, reason)
         # Expire model leases through the existing ledger. A reservation that never
         # reached the wire can resume; a calling lease becomes unknown and stays held.
+        # Neither this sweep nor the handover below is limited to the current activation: a call stranded before a
+        # stop/re-activation still has to settle or reach a human (Codex G08b).
         with Session(store.engine) as s:
             runtime = store._runtime(s, self.tenant, self.account, lock=False)
             expired_calls = s.execute(select(OfEngineModelCall.request_id, OfEngineModelCall.generation).where(
                 OfEngineModelCall.account_id == self.account,
                 OfEngineModelCall.binding_id == runtime.binding_id,
                 OfEngineModelCall.fan_id.in_(self.allowed_fans),
-                OfEngineModelCall.created_at >= active_since,
                 OfEngineModelCall.status.in_(('reserved', 'calling')),
                 OfEngineModelCall.lease_expires_at <= utcnow()).order_by(
                     OfEngineModelCall.lease_expires_at, OfEngineModelCall.call_id).limit(limit)).all()
         for request_id, generation in expired_calls:
             self.validate()
             self.worker.engine.model.ledger.sweep(self.account, request_id, generation)
+        # An unresolved call (may be charged, no answer) keeps its request out of the scheduler below, so the runtime
+        # never reaches its own handover. Hand it over here: same decision, reservation kept, never re-asked.
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            stranded = s.execute(select(OfEngineModelCall.request_id, OfEngineModelCall.outcome).join(
+                OfEngineRequest, and_(OfEngineRequest.account_id == OfEngineModelCall.account_id,
+                    OfEngineRequest.request_id == OfEngineModelCall.request_id)).where(
+                OfEngineModelCall.account_id == self.account, OfEngineModelCall.binding_id == runtime.binding_id,
+                OfEngineModelCall.fan_id.in_(self.allowed_fans), OfEngineModelCall.status == 'unknown', OfEngineModelCall.response_text.is_(None),
+                OfEngineRequest.status == 'open', OfEngineRequest.binding_id == runtime.binding_id)
+                .order_by(OfEngineModelCall.created_at, OfEngineModelCall.call_id).limit(limit)).all()
+        engine = self.worker.engine
+        for request_id, outcome in stranded:
+            self.validate()
+            engine._handover_model(self.tenant, self.account, request_id, engine.model.config.handover_target,
+                                   'model_outcome_unknown', {'outcomes': [str(outcome)[:64]]})
         # Only scope-era inbound messages without a completed draft are eligible
         # for repair. Unknown model calls are retained, never automatically retried.
         with Session(store.engine) as s:

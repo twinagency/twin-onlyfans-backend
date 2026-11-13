@@ -104,3 +104,29 @@ def test_playwright_recapture_of_another_owner_refused_before_proxy_bind(env, mo
     with pytest.raises(sb.OwnerMismatch):
         sb.run_playwright_proxy(None, account_id="999")
     _unmoved(env)
+
+
+@pytest.mark.parametrize("cookies", [[{"name": "auth_id", "value": "999"}], [{"name": "sess", "value": "FAKE"}]])
+def test_refused_capture_left_behind_is_never_migrated_or_activated(env, monkeypatch, cookies):
+    # The refused raw file stays in the legacy dir; a later first-boot migrate_legacy must not
+    # file it by headers.user_id and activate it (Codex F1b).
+    import accounts
+    with pytest.raises(sb.CurlParseError if cookies[0]["name"] == "sess" else sb.OwnerMismatch):
+        _adopt(env.raw(cookies))
+    for name, value in [("SESSIONS_DIR", env.legacy), ("ACCOUNTS_DIR", env.legacy / "accounts"),
+                        ("ACTIVE_FILE", env.legacy / "active.json"), ("MIGRATED_MARKER", env.legacy / ".migrated")]:
+        monkeypatch.setattr(accounts, name, value)
+    out = accounts.migrate_legacy()
+    assert out.get("active") is None and not out.get("moved")
+    assert not (env.legacy / "active.json").exists()
+    assert not list((env.legacy / "accounts").rglob("session_*.json"))
+
+
+def test_matching_legacy_session_still_migrates(env, monkeypatch):
+    import accounts
+    env.raw([{"name": "auth_id", "value": "123"}])
+    for name, value in [("SESSIONS_DIR", env.legacy), ("ACCOUNTS_DIR", env.legacy / "accounts"),
+                        ("ACTIVE_FILE", env.legacy / "active.json"), ("MIGRATED_MARKER", env.legacy / ".migrated")]:
+        monkeypatch.setattr(accounts, name, value)
+    out = accounts.migrate_legacy()
+    assert out["active"] == "123" and (env.legacy / "accounts" / "123" / "session_T.json").exists()

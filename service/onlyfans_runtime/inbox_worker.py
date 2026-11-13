@@ -15,7 +15,7 @@ from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_delivery_models import OfDeliveryPolicy
 from .connections import _open
 from .provider_connector import NativeProviderConnector, session_from_capture
-from .recent_inbox import MAX_FAN_ATTEMPTS, poll_recent
+from .recent_inbox import poll_recent
 from .store import Refused, utcnow
 from .inbox_health import HEALTH_PATH, healthy
 
@@ -64,7 +64,7 @@ def poll_account(store, tenant, account):
             "lastHeadAt": state.last_head_at.isoformat() + "Z" if state and state.last_head_at else None,
             "pendingConversations": len(state.pending) if state else 0,
             "conversationFailures": state.failures if state else 0,
-            "parkedConversations": sum(n >= MAX_FAN_ATTEMPTS for _, n in state.attempts.values()) if state else 0}
+            "backedOffConversations": state.backed_off() if state else 0}
 
 
 class InboxWorker(threading.Thread):

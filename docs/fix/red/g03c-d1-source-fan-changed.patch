@@ -1,0 +1,35 @@
+--- service/tests/test_w3_ro_recent_inbox_pg.py	2026-11-13 08:08:04
++++ /tmp/g03-with-d1.py	2026-11-13 08:08:04
+@@ -14,6 +14,9 @@
+ from test_onlyfans_connections_pg import TENANT
+ from db.models import Message, OfConversationState
+ from db.onlyfans_connection_models import OfProviderConnection
++from db.onlyfans_content_sync_progress_models import OfContentSyncSource
++from db.onlyfans_models import OfRuntime
++from onlyfans_runtime.offer_terms import OfferObservation
+ from onlyfans_runtime.store import Event, Refused
+ from onlyfans_runtime.worker import ChatPage, MessagePage
+ import onlyfans_runtime.recent_inbox as recent_inbox
+@@ -66,10 +69,21 @@
+         return s.get(Message, (account, fan, mid)) is not None
+ 
+ 
++def _foreign_source_offer(store, account):
++    """content_sync already holds message 300 under another fan: Refused("source fan changed") in the txn."""
++    with Session(store.engine) as s, s.begin():
++        s.merge(OfContentSyncSource(account_id=account, binding_id=s.get(OfRuntime, account).binding_id,
++                                    source_kind="message", source_id=300, fan_id=GOOD + 1, occurrence=0))
++    event = _event(BAD, 300)
++    offer = OfferObservation("message", 300, BAD, "direct", event.created_at, (8, 9), (8,), False, 2000)
++    return MessagePage([event], False, observations=[offer])
++
++
+ @pytest.mark.parametrize("bad_page", [
+     lambda store, account: MessagePage([_event(GOOD, 300)], False),           # rows of another fan (_commit check)
+     lambda store, account: MessagePage([_event(BAD, 300, "x" * 20001)], False),  # Event.normalized refusal
+-], ids=["other-fan-rows", "oversized-body"])
++    _foreign_source_offer,
++], ids=["other-fan-rows", "oversized-body", "source-fan-changed"])
+ def test_fan_specific_refusal_does_not_pin_the_inbox(native, monkeypatch, bad_page):
+     store, account, reader = native
+     now = _fake_clock(monkeypatch)

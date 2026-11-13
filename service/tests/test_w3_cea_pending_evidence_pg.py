@@ -8,6 +8,8 @@ FansAPI unlock or transaction evidence we cannot say what he owns, so a new paid
 Resolved evidence (applied / dismissed), no evidence, or another fan's evidence does not block.
 Real PostgreSQL (throwaway); no network, no sends. Synthetic ids only.
 """
+from datetime import timedelta
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -40,14 +42,14 @@ def world(database):
     return store, terms
 
 
-def evidence(database, kind, status, fan_id=FAN):
+def evidence(database, kind, status, fan_id=FAN, source='webhook', reason=None, intent_id=None, age=timedelta(0)):
     now = utcnow()
     with Session(database[1]) as s, s.begin():
         s.add(OfFansEvidence(account_id=ACCOUNT, evidence_id='w3cea-%s-%s' % (kind, status), kind=kind,
-            dedupe_key='%s:w3cea:%s' % (kind, status), source='webhook', fan_id=fan_id,
+            dedupe_key='%s:w3cea:%s' % (kind, status), source=source, fan_id=fan_id, reason=reason, intent_id=intent_id,
             message_id=CARD if kind == 'unlock' else None,
             provider_transaction_id='tx-w3cea' if kind == 'transaction' else None, amount_cents=1200,
-            occurred_at=now, status=status, raw_sha256='a' * 64, created_at=now, updated_at=now))
+            occurred_at=now - age, status=status, raw_sha256='a' * 64, created_at=now - age, updated_at=now - age))
 
 
 GATES = pytest.mark.parametrize('gate', [manual_gate, commercial_gate], ids=['a_manual', 'b_commercial'])
@@ -98,5 +100,51 @@ def test_no_evidence_or_another_fans_pending_evidence_still_sells(database, gate
         evidence(database, 'transaction', 'pending', fan_id=OTHER_FAN)
         with Session(database[1]) as s:
             gate(s, terms)                                              # fan-scoped, not account-wide
+    finally:
+        store.close()
+
+
+STALE = timedelta(minutes=16)                                           # past operator_v2.STALE_PENDING (15 min)
+
+
+@GATES
+@pytest.mark.parametrize('reason', ['no_matching_send', 'creator_scope_unverified'])
+def test_stale_unlinked_pending_unlock_does_not_hold_forever(database, gate, reason):
+    # Nothing ages an unlinked unlock out; holding on it would make every past buyer permanently unsellable.
+    store, terms = world(database)
+    try:
+        evidence(database, 'unlock', 'pending', reason=reason, age=STALE)
+        with Session(database[1]) as s:
+            gate(s, terms)
+    finally:
+        store.close()
+
+
+@GATES
+def test_history_import_pending_unlock_does_not_hold(database, gate):
+    # History backfill records an unlock for every opened priced creator message: past purchases, not a sale in flight.
+    store, terms = world(database)
+    try:
+        evidence(database, 'unlock', 'pending', source='history', reason='no_matching_send')
+        with Session(database[1]) as s:
+            gate(s, terms)
+    finally:
+        store.close()
+
+
+@GATES
+def test_linked_unlock_holds_past_the_window_until_settled(database, gate):
+    store, terms = world(database)
+    try:
+        evidence(database, 'unlock', 'pending', reason='awaiting_commerce',
+                 intent_id='00000000-0000-4000-8000-00000000c0a7', age=STALE)
+        with Session(database[1]) as s:
+            with pytest.raises(Refused):
+                gate(s, terms)
+        with Session(database[1]) as s, s.begin():                     # settle_unlock's real-provider outcome
+            row = s.get(OfFansEvidence, (ACCOUNT, 'w3cea-unlock-pending'))
+            row.status, row.reason = 'applied', 'unlock_confirmed_finance_unlinked'
+        with Session(database[1]) as s:
+            gate(s, terms)
     finally:
         store.close()

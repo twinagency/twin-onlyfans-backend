@@ -65,14 +65,17 @@ def _unlinked_paid(account_id, fan_id=None, *, excluded=True, unknown_recipient=
 def _provider_evidence_held(s, account_id, fan_id):
     """Fans API payment evidence a person must review (amount mismatch, ambiguity, no grant) holds only that fan.
 
-    A message-bound unlock not yet resolved (applied/dismissed) also holds it: until then what the fan owns is
-    unknown, and unknown ownership fails closed (W3CEA-07). An unlinked transaction carries no message, so by
-    design it does not freeze the fan (payment_evidence); only a held one does."""
-    from db.onlyfans_fans_intake_models import OfFansEvidence
-    return s.scalar(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account_id,
-        OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind != "human_sent",
-        (OfFansEvidence.status == "held") | (OfFansEvidence.status.in_(("pending", "paired"))
-            & (OfFansEvidence.kind == "unlock"))).limit(1)) is not None
+    An unresolved unlock also holds it while ownership is unknown (W3CEA-07): one linked to our send until
+    commerce settles it, or a fresh webhook one inside its link window. An unlinked unlock past the window and a
+    history-import unlock (a past purchase) do not, or every past buyer would stay unsellable; nothing ages them
+    out. An unlinked transaction carries no message, so by design it does not freeze the fan; only a held one does."""
+    from db.onlyfans_fans_intake_models import OfFansEvidence as E
+    from conversation_engine.operator_v2 import STALE_PENDING
+    from .store import utcnow
+    unresolved_unlock = (E.kind == "unlock") & E.status.in_(("pending", "paired")) & (E.source != "history") & (
+        E.intent_id.is_not(None) | (E.created_at >= utcnow() - STALE_PENDING))
+    return s.scalar(select(E.evidence_id).where(E.account_id == account_id, E.fan_id == fan_id,
+        E.kind != "human_sent", (E.status == "held") | unresolved_unlock).limit(1)) is not None
 
 
 def held(s, account_id, fan_id=None):

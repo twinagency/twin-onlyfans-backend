@@ -71,6 +71,10 @@ def _pilot_fan_allowed(s, runtime, raw, event):
     return fan is None or int(fan) in config['fans']
 
 
+class SendStopFailed(Refused):
+    """A provider auth-failure/disconnect stop did not disable sending; its projection is held (send_stop_failed)."""
+
+
 class FansEventIntake:
     def __init__(self, store, *, human_grace_seconds=30, pair_window_seconds=1800, mismatch_settle_seconds=240):
         self.store, self.engine = store, store.engine
@@ -334,7 +338,7 @@ class FansEventIntake:
             raise Refused('webhook intake is limited to the synthetic lab')
         current = self._current_account(s, connection, link)
         if event in ACCOUNT_EVENTS:
-            return self._account(s, event, payload, body['account_id'], current, connection, link, now, after)
+            return self._account(s, event, payload, body['account_id'], current, connection, link, now, after, raw.event_key)
         # Data events for a replaced acct_ id are still this creator's evidence (checked in _resolve).
         if event == 'messages.received':
             binding = s.get(OfCreatorBinding, connection.binding_id)
@@ -441,7 +445,7 @@ class FansEventIntake:
         return evidence.evidence_id
 
     # ---------------------------------------------------------------- accounts
-    def _account(self, s, event, payload, provider_id, current, connection, link, now, after):
+    def _account(self, s, event, payload, provider_id, current, connection, link, now, after, event_key):
         if provider_id != current and event != 'accounts.reconnected' and event != 'accounts.connected':
             return 'ignored', 'superseded_account'  # a late event about a replaced acct_ id
         creator = payload.get('onlyfans_id')
@@ -467,25 +471,31 @@ class FansEventIntake:
         if event == 'accounts.disconnected':
             connection.status = 'retired'  # that acct_ id answers 404 from now on
         tenant, account, reason = s.get(OfCreatorBinding, connection.binding_id).tenant_id, connection.account_id, link.state
-        after.append(lambda: self._disable_sends(tenant, account, reason))
+        epoch, key = connection.epoch, event_key
+        after.append(lambda: self._disable_sends(tenant, account, reason, epoch, key))
         return 'projected', reason
 
-    def _disable_sends(self, tenant, account, reason):
+    def _disable_sends(self, tenant, account, reason, epoch, event_key):
+        """The provider safety stop. Under the runtime and policy row locks no writer can move the revision, so it
+        never loses a race; if it still cannot apply, the projection is held for an operator and SendStopFailed
+        is raised. It is never dropped silently."""
         from onlyfans_runtime.text_delivery import TextAuthority
-        authority = TextAuthority(self.store)
-        for _ in range(3):
-            with Session(self.engine) as s:
-                policy = s.get(OfDeliveryPolicy, account)
+        try:
+            with Session(self.engine) as s, s.begin():
+                runtime = self.store._runtime(s, tenant, account)
+                policy = s.scalar(select(OfDeliveryPolicy).where(
+                    OfDeliveryPolicy.account_id == account).with_for_update())
                 if policy is None or not policy.enabled:
                     return
-                revision, limit, throttle = policy.revision, policy.limit_units, policy.throttle_seconds
-            try:
-                authority.configure(tenant, account, expected_revision=revision, enabled=False, limit_units=limit,
-                    throttle_seconds=throttle, actor='fans-webhook', reason=('Provider connection: ' + reason)[:512])
-                return
-            except Refused as exc:
-                if 'revision' not in str(exc):
-                    raise
+                TextAuthority(self.store)._configure_in_session(s, runtime, expected_revision=policy.revision,
+                    enabled=False, limit_units=policy.limit_units, throttle_seconds=policy.throttle_seconds,
+                    actor='fans-webhook', reason=('Provider connection: ' + reason)[:512])
+        except Exception as exc:
+            with Session(self.engine) as s, s.begin():
+                row = s.get(OfFansProjection, (account, epoch, event_key), with_for_update=True)
+                if row is not None:
+                    row.status, row.detail, row.updated_at = 'held', 'send_stop_failed', utcnow()
+            raise SendStopFailed('provider safety stop did not apply: ' + str(exc)[:200]) from exc
 
     def release_send_block(self, tenant, account, creator_id, *, actor, reason):
         """Operator re-enables sending after a reconnect. Never automatic."""

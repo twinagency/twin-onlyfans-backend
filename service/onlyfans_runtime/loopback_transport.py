@@ -7,6 +7,7 @@ protocol is a local test contract, not a verified OnlyFans API adapter.
 from __future__ import annotations
 
 import asyncio
+import errno
 from dataclasses import dataclass, field
 from http.server import ThreadingHTTPServer
 import json
@@ -43,6 +44,18 @@ class LoopbackPeerHandle:
         raise TypeError("Use from_server with a fixture-owned listener")
 
 
+def _listening(server) -> bool:
+    try:
+        return server.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1
+    except OSError as error:
+        if error.errno != errno.ENOPROTOOPT:
+            return False
+    # Darwin cannot read SO_ACCEPTCONN (ENOPROTOOPT). listen() is idempotent on a
+    # listening socket and consumes no pending connection, so make it hold instead.
+    server.socket.listen(server.request_queue_size)
+    return True
+
+
 def from_server(server, *, account_id: str, policy_revision: int) -> LoopbackPeerHandle:
     """Mint a picklable internal fixture handle, never from API/env/URL input.
 
@@ -60,7 +73,7 @@ def from_server(server, *, account_id: str, policy_revision: int) -> LoopbackPee
             or address[0] != "127.0.0.1" or type(address[1]) is not int
             or not 1 <= address[1] <= 65535 or server.socket.fileno() < 0
             or server.socket.getsockname() != address
-            or server.socket.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1):
+            or not _listening(server)):
         raise Refused("listener must be owned and bound to literal IPv4 loopback")
     handle = object.__new__(LoopbackPeerHandle)
     for key, value in dict(account_id=account_id, policy_revision=policy_revision,

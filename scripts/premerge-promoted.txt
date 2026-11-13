@@ -45,3 +45,4 @@ service/tests/test_w4_trace_isolation_resolve_pg.py
 service/tests/test_g02_pilot_stop_never_refused_pg.py
 service/tests/test_w2_conversation_engine_sale_pg.py
 service/tests/test_g01_moxy_ownership_hold_pg.py
+service/tests/test_flg2_05_loopback_listen_check.py

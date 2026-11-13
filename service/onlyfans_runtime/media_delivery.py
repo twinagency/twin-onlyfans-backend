@@ -47,6 +47,32 @@ def _unusable(row, fansapi):
     return "not_ready" if raw.get("isReady") is not True else None
 
 
+def fansapi_policy(session, account_id):
+    """The one sale-time FansAPI decision: the account's delivery policy, not a row's job."""
+    from .provider_read_budget import native_family_clause
+    return not session.scalar(select(native_family_clause(account_id)))
+
+
+def outside(session, account_id, media_ids):
+    """The one gate on selection evidence: media verified outside the FansAPI selection; native accounts: none."""
+    import vault_import_policy
+    fansapi = fansapi_policy(session, account_id)
+    return vault_import_policy.outside_selection(session, account_id, list(media_ids)) if fansapi else set()
+
+
+def refusal(session, account_id, rows):
+    """(media_id, reason) of the first vault row the sale refuses, else None: removed, unsellable
+    kind, provider metadata (_unusable), or on FansAPI verified outside the commercial selection
+    (`outside`). Native accounts have no selection and are unchanged."""
+    fansapi, gone = fansapi_policy(session, account_id), outside(session, account_id, [r.media_id for r in rows])
+    for r in rows:
+        why = ("removed" if r.removed_at is not None else "kind" if r.kind not in {"image", "photo", "video"}
+               else _unusable(r, fansapi) or ("outside_selection" if r.media_id in gone else None))
+        if why:
+            return r.media_id, why
+    return None
+
+
 def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     """Bounded terms; send paths lock, readiness uses its read-only snapshot."""
     _id(item_id)
@@ -86,10 +112,7 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
     media_query = select(VaultItem).where(VaultItem.account_id == account_id,
         VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)
     rows = session.scalars(media_query.with_for_update(read=True) if lock else media_query).all()
-    from .provider_read_budget import native_family_clause
-    fansapi = not session.scalar(select(native_family_clause(account_id)))
-    if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"}
-                                    or _unusable(r, fansapi) for r in rows):
+    if len(rows) != len(ids) or refusal(session, account_id, rows):
         raise Refused("catalogue media unavailable")
     snapshot = {"item": {key: getattr(item, key) for key in (
         "id", "account_id", "script_id", "enabled", "kind", "label", "description_for_ai",

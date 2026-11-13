@@ -1286,6 +1286,25 @@ def _validate_item(raw: Any) -> dict:
     }
 
 
+async def _refuse_unusable_media(s, account_id: str, clean: list[dict]) -> None:
+    """Save-time twin of the sale boundary (media_delivery.refusal): an enabled single whose media
+    list is not already on a stored enabled single, over media the sale refuses, is a 422,
+    not a silent ok. Unchanged enabled singles stay saveable so one stale single never blocks
+    an unrelated edit (the sale still refuses it). Media with no vault row (vault not
+    mirrored yet) saves and stays refused at the sale."""
+    from db.models import VaultItem
+    from onlyfans_runtime.media_delivery import refusal
+    stored = {tuple(json.loads(m)) for m in (await s.scalars(select(CatalogItem.media_ids).where(
+        CatalogItem.account_id == account_id, CATALOG_IS_SINGLE, CatalogItem.enabled.is_(True)))).all()}  # decoded: writers differ in spacing
+    ids = {m for it in clean if it["enabled"] and tuple(json.loads(it["media_ids"])) not in stored for m in json.loads(it["media_ids"])}
+    if not ids:
+        return
+    hit = await s.run_sync(lambda ss: refusal(ss, account_id, ss.scalars(select(VaultItem).where(
+        VaultItem.account_id == account_id, VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)).all()))
+    if hit:
+        raise HTTPException(422, f"media {hit[0]} cannot be sold ({hit[1]}); remove it or disable its single")
+
+
 class _ItemsBody(BaseModel):
     account_id: str
     items: list[dict]
@@ -1302,6 +1321,7 @@ async def put_singles(body: _ItemsBody = Body(...)) -> dict:
     clean = [_validate_item(it) for it in body.items]
     now = datetime.utcnow()
     async with get_session() as s:
+        await _refuse_unusable_media(s, body.account_id, clean)
         await s.execute(sa_delete(CatalogItem).where(
             CatalogItem.account_id == body.account_id,
             CATALOG_IS_SINGLE))

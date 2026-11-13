@@ -17,13 +17,14 @@ Order for every attempt (any failure before step 4 means no network traffic at a
 
 Chain (ModelConfig.chain): the primary, then one regeneration on the primary that carries the rejection reasons, then
 (only when configured, OFF by default) ONE fallback model. The fallback runs ONLY after the primary failed for
-AVAILABILITY reasons (connect error, rate limit 429, 5xx, timeout); never after a refusal, an empty completion or a
-validator rejection, because that would be evading a refusal. The fallback has its own prices and reservation inside the
+AVAILABILITY reasons (connect error, rate limit 429, 5xx: proven not charged); never after a refusal, an empty completion,
+a validator rejection (that would be evading a refusal) or a timeout (it may have been charged). The fallback has its own prices and reservation inside the
 same caps and the same total-attempt bound.
 A refusal by the provider/model, or an empty completion (how DeepSeek via OpenRouter refuses), is never re-asked: it goes straight to a human, as does every other rejected or unusable
 answer (a handover plus an operator case that lists the outcomes and reasons). No canned line is ever produced. A stored
 response is reused after a crash only when it was produced from exactly the same snapshot, so a restart never pays twice
-or sends a stale answer.
+or sends a stale answer. A call whose outcome is `unknown` (timeout, lost lease, unclassified error) holds the request until
+it is reconciled: no replay, resume or fallback makes a second possibly-charged call for it.
 """
 from dataclasses import dataclass
 from datetime import timedelta
@@ -54,8 +55,9 @@ def length_verdict(verdict):
 
 
 def is_availability_failure(outcome):
-    """True when a failed call says the PROVIDER was unavailable (not that it declined or that we sent something bad)."""
-    if outcome in ('not_sent', 'timeout', 'lease_expired'):
+    """True when a failed call says the PROVIDER was unavailable (not that it declined or that we sent something bad).
+    A timeout or lost lease is NOT: it may have been charged, so it never unlocks a fallback."""
+    if outcome == 'not_sent':
         return True
     if type(outcome) is str and outcome.startswith('http_') and outcome[5:].isdigit():
         status = int(outcome[5:])
@@ -175,6 +177,7 @@ class ModelRuntime:
         chain = [(i, step, model, prefixed) for i, (step, model, prefixed) in enumerate(cfg.chain())]
         pos, dead, content_failed, fix, outcomes, refused = 0, set(), False, [], [], False
         unavailable, blocked = False, False  # primary failed for availability / failed in a way that never falls back
+        held = False  # an unreconciled unknown call: never paid for twice
         http_refused = []  # same-snapshot provider refusals a retry cannot fix (HTTP 400/401/403/404/422...)
         now = self._clock()
         for row in rows:
@@ -208,6 +211,9 @@ class ModelRuntime:
             elif row.status == 'released' and row.outcome == 'lease_expired':
                 continue  # never reached the wire: simply try that step again
             else:  # a transport-type failure: about the provider, not about the content
+                if row.status == 'unknown':
+                    held = True  # may have been charged: held until reconciled, never retried or replaced automatically
+                    continue
                 if is_availability_failure(row.outcome):
                     unavailable = True
                 else:
@@ -232,6 +238,8 @@ class ModelRuntime:
             # A refusal (or the silent empty completion DeepSeek/OpenRouter return for one) is not re-asked in other
             # words or on another model/provider route: it is human work.
             self._reject(turn, 'model_empty' if outcomes and outcomes[-1] == 'empty' else 'model_refused', outcomes, fix)
+        if held:
+            raise ModelUnavailable('a model call outcome is unknown; the request is held until it is reconciled')
         while True:
             def eligible(step):
                 position, name, model, _ = step
@@ -280,10 +288,7 @@ class ModelRuntime:
                                     outcome='provider_incomplete' if incomplete else 'timeout', error_class=exc.error_class,
                                     generation_id=getattr(exc,'generation_id',''), endpoint_sha256=getattr(exc,'endpoint_sha256',''))
                 dead.add(model); pos = chain_pos + 1
-                if incomplete:
-                    blocked = True  # an error-bearing partial response is not a fallback permission
-                else:
-                    unavailable = True  # unknown usage keeps its reservation
+                blocked = True  # may have been charged (keeps its reservation): never a fallback permission
                 continue
             except Exception as exc:  # unclassified client failure: assume it may have been charged
                 ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id, outcome='client_error',

@@ -310,16 +310,19 @@ def test_timeout_is_unknown_usage_and_keeps_its_full_reservation_until_reconcile
     assert runtime.ledger.committed(day=first.cost_day) == BOUND  # the whole upper bound stays counted
     assert [r.call_id for r in runtime.ledger.unreconciled()] == [first.call_id]
     clock.offset = timedelta(seconds=45)
-    provider = SyntheticFansProvider(message_id=9001)
-    assert engine.plan(TENANT, ACCOUNT, FAN, 1)
-    assert runtime.ledger.committed(day=first.cost_day) == BOUND + 1000  # still reserved after the retry succeeded
-    assert [r.model for r in client.requests] == ['m/primary', 'm/primary']
-    with pytest.raises(Refused, match='only an unknown'):
-        runtime.ledger.reconcile_unknown(ACCOUNT, rows(database)[1].call_id, actual_microusd=1)  # a settled call cannot be rewritten
+    with pytest.raises(ModelUnavailable, match='held'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # W3TL-01: an unknown call is never paid for twice
+    assert [r.model for r in client.requests] == ['m/primary']
     with pytest.raises(Refused, match='non-negative'):
         runtime.ledger.reconcile_unknown(ACCOUNT, first.call_id, actual_microusd=-1)
     runtime.ledger.reconcile_unknown(ACCOUNT, first.call_id, actual_microusd=2500)  # the verified invoice replaces the bound
-    assert runtime.ledger.committed(day=first.cost_day) == 2500 + 1000 and runtime.ledger.unreconciled() == []
+    assert runtime.ledger.committed(day=first.cost_day) == 2500 and runtime.ledger.unreconciled() == []
+    clock.offset = timedelta(seconds=90)  # reconciling restarts the transport cooldown
+    assert engine.plan(TENANT, ACCOUNT, FAN, 1)  # reconciled: the request may be answered again
+    assert [r.model for r in client.requests] == ['m/primary', 'm/primary']
+    assert runtime.ledger.committed(day=first.cost_day) == 2500 + 1000
+    with pytest.raises(Refused, match='only an unknown'):
+        runtime.ledger.reconcile_unknown(ACCOUNT, rows(database)[1].call_id, actual_microusd=1)  # a settled call cannot be rewritten
     store.close()
 
 
@@ -357,9 +360,14 @@ def test_transport_failure_without_fallback_keeps_request_open_and_retries_later
         engine.plan(TENANT, ACCOUNT, FAN, 1)  # inside the retry window: nothing is re-sent
     assert len(client.requests) == 1
     clock.offset = timedelta(seconds=45)
+    with pytest.raises(ModelUnavailable, match='held'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # past the cooldown: still held while the outcome is unknown
+    assert len(client.requests) == 1
+    runtime.ledger.reconcile_unknown(ACCOUNT, rows(database)[0].call_id, actual_microusd=0)
+    clock.offset = timedelta(seconds=90)
     decision = engine.plan(TENANT, ACCOUNT, FAN, 1)
     assert decision and len(client.requests) == 2
-    assert [r.status for r in rows(database)] == ['unknown', 'settled']
+    assert [r.status for r in rows(database)] == ['settled', 'settled']
     store.close()
 
 
@@ -551,6 +559,11 @@ def test_crash_after_the_wire_started_counts_as_unknown_and_waits_before_retryin
     assert (row.status, row.outcome) == ('unknown', 'lease_expired')
     assert runtime.ledger.committed(day=row.cost_day) == BOUND  # conservatively counted at the upper bound
     clock.offset = timedelta(seconds=120)
+    with pytest.raises(ModelUnavailable, match='held'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # may have reached the wire: held until reconciled
+    assert client.requests == []
+    runtime.ledger.reconcile_unknown(ACCOUNT, row.call_id, actual_microusd=0)
+    clock.offset = timedelta(seconds=240)
     assert engine.plan(TENANT, ACCOUNT, FAN, 1) and len(client.requests) == 1
     store.close()
 
@@ -974,7 +987,7 @@ def test_fallback_is_off_by_default_so_an_availability_failure_never_reaches_ano
 # ---- the fallback (Ronan decision 2026-11-07): availability failures only ---------------------------------------------
 @pytest.mark.parametrize('failure,primary_status', [
     (ModelNotSent('connect'), 'released'), (ModelHTTPStatus(429), 'released'), (ModelHTTPStatus(503), 'released'),
-    (ModelHTTPStatus(500), 'released'), (ModelOutcomeUnknown('timeout'), 'unknown')])
+    (ModelHTTPStatus(500), 'released')])  # a timeout may have been charged: never a fallback (test_w3_trace_ledger_pg)
 def test_fallback_runs_after_an_availability_failure_of_the_primary(database, failure, primary_status):
     store, authority, engine, runtime, client, _ = with_model(database, [failure, ok('from the fallback')], cfg=config(**FALLBACK))
     incoming(store, 1, 'hello')
@@ -986,8 +999,7 @@ def test_fallback_runs_after_an_availability_failure_of_the_primary(database, fa
     assert (second.model, second.chain_step, second.status, second.outcome) == ('m/fallback', 'fallback', 'settled', 'ok')
     assert [r.model for r in client.requests] == ['m/primary', 'm/fallback']
     assert client.requests[0].messages == client.requests[1].messages  # the SAME inputs went to either model
-    expected = 1000 + (BOUND if primary_status == 'unknown' else 0)   # an unknown primary keeps its reservation
-    assert runtime.ledger.committed(day=first.cost_day) == expected
+    assert runtime.ledger.committed(day=first.cost_day) == 1000
     assert (first.reserved_microusd, second.reserved_microusd) == (BOUND, FALLBACK_BOUND)  # each model has its own bound
     store.close()
 
@@ -1054,14 +1066,14 @@ def test_failures_that_are_not_availability_never_fall_back(database, failure):
 def test_total_attempts_stay_bounded_with_a_fallback_and_unknowns_stay_reserved(database):
     clock = Clock()
     store, authority, engine, runtime, client, _ = with_model(
-        database, [ModelOutcomeUnknown('timeout'), ModelOutcomeUnknown('timeout'), ok('never')], clock=clock, cfg=config(**FALLBACK))
+        database, [ModelHTTPStatus(503), ModelOutcomeUnknown('timeout'), ok('never')], clock=clock, cfg=config(**FALLBACK))
     incoming(store, 1, 'hello')
     with pytest.raises(ModelUnavailable):
-        engine.plan(TENANT, ACCOUNT, FAN, 1)          # primary timed out, fallback timed out too
+        engine.plan(TENANT, ACCOUNT, FAN, 1)          # primary unavailable, fallback timed out
     assert [r.model for r in client.requests] == ['m/primary', 'm/fallback']
     got = rows(database)
-    assert [r.status for r in got] == ['unknown', 'unknown']
-    assert runtime.ledger.committed(day=got[0].cost_day) == BOUND + FALLBACK_BOUND  # both stay reserved until reconciled
+    assert [r.status for r in got] == ['released', 'unknown']
+    assert runtime.ledger.committed(day=got[0].cost_day) == FALLBACK_BOUND  # the unknown stays reserved until reconciled
     clock.offset = timedelta(seconds=300)
     with pytest.raises(Refused, match='handed to a human'):
         engine.plan(TENANT, ACCOUNT, FAN, 1)          # two attempts is the bound: a human gets the request
@@ -1073,9 +1085,9 @@ def test_one_global_cap_covers_both_models_and_the_whole_chain(database):
     # primary reserve needs its own bound plus the largest bound for the one remaining attempt
     need = BOUND + FALLBACK_BOUND
     store, authority, engine, runtime, client, _ = with_model(
-        database, [ModelOutcomeUnknown('timeout'), ok('fits exactly')], cfg=config(daily_cap_microusd=need + 0, **FALLBACK))
+        database, [ModelHTTPStatus(503), ok('fits exactly')], cfg=config(daily_cap_microusd=need + 0, **FALLBACK))
     incoming(store, 1, 'hello')
-    assert engine.plan(TENANT, ACCOUNT, FAN, 1) and len(client.requests) == 2  # primary unknown 8600 + fallback 17200 = cap
+    assert engine.plan(TENANT, ACCOUNT, FAN, 1) and len(client.requests) == 2  # primary reserve 8600 + remaining 17200 = cap
     store.close()
 
 

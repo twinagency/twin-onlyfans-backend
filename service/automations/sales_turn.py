@@ -34,14 +34,13 @@ async def ready_shelf(lane, fan_id: int, session=None) -> set[int]:
     """``session`` lets a caller keep its own session factory (contextual_offers passes its module-level one)."""
     from .product_readiness import ready_ids
     from . import pack_sender
-    async with (session or get_session)() as s:
-        rows = (await s.execute(select(VaultItem).where(
-            VaultItem.account_id == lane.account_id, VaultItem.removed_at.is_(None),
-            VaultItem.search_text.is_not(None), VaultItem.search_text != "")
-            .order_by(VaultItem.created_at.desc()).limit(400))).scalars().all()
-    from .content_resolver import sellable
-    keep = await sellable(lane.account_id, [r.media_id for r in rows], session=session)
-    rows = [r for r in rows if r.media_id in keep]
+    from .content_resolver import sellable_window
+    # The newest 400 SELLABLE rows (G06h): refused rows are paged past, never counted against the window.
+    rows = await sellable_window(lane.account_id, select(VaultItem).where(
+        VaultItem.account_id == lane.account_id, VaultItem.removed_at.is_(None),
+        VaultItem.search_text.is_not(None), VaultItem.search_text != "")
+        .order_by(VaultItem.created_at.desc(), VaultItem.media_id.desc()), 400,
+                                 session=session or get_session)
     return ready_ids(rows, account_id=str(lane.account_id), cfg=lane.cfg,
                      bought=await pack_sender._bought_media(lane.account_id, fan_id),
                      offered=set(await pack_sender.offered_media(lane.account_id, fan_id)),

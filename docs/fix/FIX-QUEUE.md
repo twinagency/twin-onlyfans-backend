@@ -290,3 +290,4 @@ Live confirm after F3 (or F4) and after F6.
   - Campaign assert_unowned ignores provider_unlocked_media (FansAPI only, not in use) → pending review verdict.
 - LW-A1 worker started (W7LW-01/-08/-09). Fix slots: LW-A1 + NP429 r2.
 - Branches merged with target e2783bc3: G06f 50be2c87, G06g ee5900dc, W3RCB-01 fe93d24a, W7CS-01 296d97a7, G06h 5656dd4d.
+- NP429 r2 7e1a1ab5 (265 LOC; dropped cases converted): Opus DA + Flash running (/tmp/fo-np429). OQ-3R worker started (fix slot 2). Slots: LW-A1 + OQ-3R.

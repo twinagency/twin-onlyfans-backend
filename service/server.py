@@ -206,7 +206,12 @@ def _migrate_proxy_bindings_to_accounts() -> None:
             for sp in adir.glob("session_*.json"):
                 mapping[sp.name] = adir.name
     if mapping:
-        n = proxy_registry.migrate_legacy_assignments(mapping)
+        try:
+            n = proxy_registry.migrate_legacy_assignments(mapping)
+        except proxy_registry.ProxyRegistryUnreadable as e:
+            # Boot must survive; every proxy lookup refuses (503) until fixed.
+            log.error("proxy registry unreadable, skipping migration: %s", e)
+            return
         if n:
             log.info("migrated %d legacy proxy assignment(s) → account_id", n)
 
@@ -232,6 +237,15 @@ try:
         )
 except Exception:
     log.warning("FanslyAPIError handler not registered", exc_info=True)
+
+# Unreadable proxies.json: every proxy lookup raises (fail closed — never
+# "no proxy" → direct egress). Surface it as a structured 503, not a bare 500.
+@app.exception_handler(proxy_registry.ProxyRegistryUnreadable)
+async def _proxy_registry_unreadable_handler(request, exc):  # noqa: ANN001
+    return JSONResponse(status_code=503, content={
+        "ok": False, "error": "proxy_registry_unreadable", "detail": str(exc),
+        "remedy": "fix or restore service/proxies.json (re-read on every lookup)"})
+
 
 # Phase A: employees CRUD + audit log routes (read-only browse + admin).
 # Middleware registered below so every mutating call gets logged.
@@ -8304,8 +8318,8 @@ def bootstrap_session(body: _BootstrapBody = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=(
             "couldn't fetch OF signing asset through this account's proxy — check "
             "Setup → Proxies, or re-capture if OF updated"))
-    except HTTPException:
-        raise
+    except (HTTPException, proxy_registry.ProxyRegistryUnreadable):
+        raise  # registry → 503 via its handler, not a generic 500
     except Exception as e:
         log.exception("bootstrap failed")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")

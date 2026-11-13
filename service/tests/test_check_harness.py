@@ -186,7 +186,7 @@ def test_premerge_known_red_script_pins_its_terminal_exception_not_an_earlier_on
         "test_x1.py": ctx + "\n",  # terminal exception + its statement = the pin, SQLAlchemy footer after it: KNOWN-RED
         "test_x2.py": f"try:\n    {ctx}\nexcept RuntimeError:\n    raise AssertionError\n",  # chained, message-less: FAIL
         "test_x3.py": log.format(ctx, "") + "raise SystemExit('later')\n",  # pinned error logged, later exit: FAIL
-        "test_x4.py": log.format(ctx, "file=sys.stdout") + "raise SystemExit('later')\n",  # same via buffered stdout: FAIL
+        "test_x4.py": log.format(ctx, "file=sys.stdout") + "sys.stderr.write('later\\n'); sys.exit(1)\n",  # stdout block-buffered: FAIL
         "test_x5.py": log.format(ctx, "") + sql("other 7", "CREATE x") + "\n",  # earlier pin, later footer error: FAIL
         "test_x6.py": sql("pinned 7", "CREATE y") + "\n",  # same error, another statement: FAIL
         "test_x7.py": "import sys\nprint('(Background on this error at: u)'); sys.exit(1)\n"},  # footer, no exception: FAIL

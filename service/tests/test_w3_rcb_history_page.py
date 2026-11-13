@@ -97,9 +97,19 @@ def test_newest_fan_markup_only_row_refuses_the_page(tmp_path):
         _read_page([newest, older], tmp_path)
 
 
-def test_creator_markup_only_row_is_skipped_even_when_newest(tmp_path):
+# Batch5 DA D2 (major): a creator's newest markup-only row skipped would make the older fan message
+# (already answered by a human) the latest event and re-arm a reply: refuse (fail closed, as before #129).
+def test_newest_creator_markup_only_row_refuses_the_page(tmp_path):
     newest = native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')
     older = native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")
-    page = _read_page([newest, older], tmp_path)
-    assert [event.message_id for event in page.events] == [10] and page.skipped_inbound == ()
+    with pytest.raises(NativeProtocolError):
+        _read_page([newest, older], tmp_path)
+
+
+def test_creator_markup_only_row_below_a_newer_kept_row_is_skipped(tmp_path):
+    newer = native_message(30, owner=OWNER, text="<p>Synthetic newer inbound</p>")
+    creator = native_message(20, owner=OWNER, outgoing=True, text='<p><img src="x"></p>')
+    older = native_message(10, owner=OWNER, text="<p>Synthetic older inbound</p>")
+    page = _read_page([newer, creator, older], tmp_path)
+    assert [event.message_id for event in page.events] == [30, 10] and page.skipped_inbound == ()
     assert page.next_before == 10

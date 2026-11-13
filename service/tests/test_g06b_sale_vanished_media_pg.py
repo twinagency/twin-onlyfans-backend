@@ -110,7 +110,7 @@ def test_unknown_selection_is_transient_and_still_sells(database, change):
 
 
 # DSF3: scripts_api.put_singles refuses, at save time, the media the sale boundary would refuse.
-DRM_VIDEO='{"id": 22, "type": "video", "isReady": true}'   # no progressive full URL
+DRM_VIDEO='{"id": 22, "type": "video", "isReady": true}'   # no progressive full URL: sellable (OQ-3)
 
 
 def put_singles(database, monkeypatch, media, enabled=True, extra=None):
@@ -158,14 +158,20 @@ def test_put_singles_refuses_media_the_sale_refuses(database, monkeypatch, raw, 
     store.close()
 
 
-def test_put_singles_fansapi_drm_refused_native_drm_saves(database, monkeypatch):
+def test_put_singles_drm_saves_fansapi_not_ready_refused(database, monkeypatch):
+    """OQ-3 (owner 2026-11-13): DRM sells on both transports; FansAPI still refuses not isReady true."""
     from fastapi import HTTPException
     from test_real_transport_pg import real_policy
     store,authority=seed_raw(database,DRM_VIDEO)
     assert put_singles(database,monkeypatch,[21,22])=={"status":"ok","items":1}   # native: DRM offerable
     real_policy(database,authority)
     assert put_singles(database,monkeypatch,[21,22],enabled=False)["status"]=="ok"   # unchanged enabled ones skip
-    with pytest.raises(HTTPException,match=r"media 22 cannot be sold \(drm\)"):
+    assert put_singles(database,monkeypatch,[21,22])=={"status":"ok","items":1}   # FansAPI: DRM offerable
+    assert put_singles(database,monkeypatch,[21,22],enabled=False)["status"]=="ok"
+    with database[1].begin() as c:
+        c.execute(text("UPDATE vault_items SET raw_json=:r WHERE account_id=:a AND media_id=22"),
+                  {"r":'{"id": 22, "type": "video"}',"a":ACCOUNT})
+    with pytest.raises(HTTPException,match=r"media 22 cannot be sold \(not_ready\)"):
         put_singles(database,monkeypatch,[21,22])
     assert put_singles(database,monkeypatch,[21])["status"]=="ok"   # route-level: the save is accepted
     store.close()

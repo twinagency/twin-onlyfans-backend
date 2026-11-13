@@ -313,20 +313,13 @@ def protected_source(raw):
     return bool(raw.get("drm") or isinstance(files, dict) and files.get("drm"))
 
 
-def fansapi_drm(kind, raw):
-    """FansAPI video with a DRM marker or no progressive https full URL (files
-    missing included). FansAPI never offers it (OQ-3); native DRM stays offerable.
-    Curation keys "FansAPI" on the row's sync job; sale (media_delivery) on the
-    account's current delivery policy."""
-    return kind == "video" and (https_url(raw.get("files"), "full") is None or protected_source(raw))
-
-
 def _ready(row, observation, job, connection, binding):
     """Whether a verified native vault identity may be curated for an offer.
 
     The native message body contains vault media IDs, never CDN source URLs.
     Native protected videos legitimately have no progressive full-file URL.
-    FansAPI imports never offer DRM videos (OQ-3). Playback has its own
+    DRM videos are offerable on both transports (OQ-3, owner 2026-11-13:
+    sent by vault media id, no file URL needed). Playback has its own
     source/cache checks in vault_video; it grants no offer rights.
     """
     if row.removed_at is not None:
@@ -355,8 +348,6 @@ def _ready(row, observation, job, connection, binding):
         return False, "readiness_unknown"
     if reason or raw.get("isReady") is not True:
         return False, "not_ready"
-    if fansapi and fansapi_drm(row.kind, raw):
-        return False, "drm"
     return True, None
 
 

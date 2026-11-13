@@ -23,6 +23,8 @@ from fans_api_adapter.vault_sync import sync_vault, create_catalogue_item
 from onlyfans_runtime.store import Refused, utcnow
 
 DRM_VIDEO = dict(type='video', files={'thumb': {'url': 'https://cdn.example/t.jpg'}, 'full': {'url': None}})
+DRM_MARKED = dict(type='video', drm={'manifest': 'synthetic'},
+                  files={'thumb': {'url': 'https://cdn.example/t.jpg'}, 'full': {'url': 'https://cdn.example/v.mp4'}})
 
 
 def setup(database, script):
@@ -47,15 +49,24 @@ def listing(items):
                                                        "hasMore": offset + limit < len(items)}})
 
 
-# L3-01/L3-02: not-ready / error / cannot_view / DRM items retained with removed_at NULL are accepted
-# by vault_sync's own catalogue creator. Invariant: never offered (OQ-1 all items, OQ-3 DRM not offered).
-@pytest.mark.parametrize("flags", [dict(isReady=False), dict(hasError=True), dict(canView=False), DRM_VIDEO],
-                         ids=["not_ready", "error", "cannot_view", "drm"])
-def test_w1_l3_01_02_unready_or_drm_item_cannot_become_catalogue_item(database, flags):
+# L3-01/L3-02: not-ready / error / cannot_view items retained with removed_at NULL are accepted
+# by vault_sync's own catalogue creator. Invariant: never offered (OQ-1 all items).
+@pytest.mark.parametrize("flags", [dict(isReady=False), dict(hasError=True), dict(canView=False)],
+                         ids=["not_ready", "error", "cannot_view"])
+def test_w1_l3_01_02_unready_item_cannot_become_catalogue_item(database, flags):
     store, wire = setup(database, listing([_item(11), _item(12, **flags)]))
     assert sync_vault(store, TENANT, ACCOUNT, wire)["complete"]
     with pytest.raises(Refused):
         create_catalogue_item(store, TENANT, ACCOUNT, [12], price_cents=500, label="x", description_for_ai="x")
+    store.close()
+
+
+# OQ-3 (owner 2026-11-13): a ready DRM video is sold by vault media id (no file URL), so it curates.
+@pytest.mark.parametrize("flags", [DRM_VIDEO, DRM_MARKED], ids=["no_full_url", "drm_marker"])
+def test_oq3_ready_drm_video_becomes_catalogue_item(database, flags):
+    store, wire = setup(database, listing([_item(11), _item(12, **flags)]))
+    assert sync_vault(store, TENANT, ACCOUNT, wire)["complete"]
+    assert create_catalogue_item(store, TENANT, ACCOUNT, [12], price_cents=500, label="x", description_for_ai="x")
     store.close()
 
 

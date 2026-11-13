@@ -256,6 +256,33 @@ fi
 [ "$BUILD_ONLY" = 0 ] || { echo "built $TAG = $IMAGE_ID"; exit 0; }
 echo "docker_host=${DOCKER_HOST:-local}" >> "$BUILD_RECORD/manifest.txt"
 
+# Q14 must run against a frozen dashboard, BFF/backend and PostgreSQL. The expected dashboard artifact is an explicit
+# input (DASHBOARD_IMAGE digest + DASHBOARD_COMMIT) that THIS host verifies from its own image store; the receipt is
+# only accepted when it names exactly that backend/dashboard pair. A receipt can never choose its own dashboard.
+browser_check() {
+  browser_problem=""
+  if [ -z "${DASHBOARD_IMAGE:-}" ] || [ -z "${DASHBOARD_COMMIT:-}" ]; then
+    browser_problem="Q14 expected dashboard image/commit not supplied"
+  elif ! [[ "$DASHBOARD_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$DASHBOARD_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    browser_problem="Q14 expected dashboard image/commit must be an immutable digest and a full commit"
+  elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{.Id}}' 2>/dev/null || true)" != "$DASHBOARD_IMAGE" ]; then
+    browser_problem="Q14 expected dashboard image is not in the local image store"
+  elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" != "$DASHBOARD_COMMIT" ]; then
+    browser_problem="Q14 dashboard image revision label differs from DASHBOARD_COMMIT"
+  elif [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
+    browser_problem="Q14 exact-artifact browser receipt missing"
+  fi
+  if [ -n "$browser_problem" ]; then
+    FAILED=1
+    printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "$browser_problem" - | tee -a "$RESULTS"
+  elif ! "${IMG_RUN[@]}" -v "$BROWSER_QUALIFICATION_RECEIPT:/browser-receipt.json:ro" --entrypoint python "$IMAGE_ID" /app/ops/verify-browser-receipt.py /browser-receipt.json "$IMAGE_ID" "$DASHBOARD_IMAGE" "$DASHBOARD_COMMIT" > "$BUILD_RECORD/browser-receipt-check.log" 2>&1; then
+    FAILED=1
+    printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 receipt invalid or backend/dashboard artifact mismatch" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
+  else
+    printf '%s\t%s\t%s\t%s\n' browser 0 "Q14 exact-artifact receipt verified" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
+  fi
+}
+
 if [ "${#COMBINE_DIRS[@]}" -gt 0 ]; then
   FAILED=0
   RESULTS=$BUILD_RECORD/results.tsv; printf 'suite\texit\tsummary\tlog\n' > "$RESULTS"
@@ -358,32 +385,6 @@ for required in "${REQUIRED_SUITES[@]}"; do
     printf '%s\t%s\t%s\t%s\n' "$required" INCOMPLETE "required group omitted" - | tee -a "$RESULTS"
   fi
 done
-# Q14 must run against a frozen dashboard, BFF/backend and PostgreSQL. The expected dashboard artifact is an explicit
-# input (DASHBOARD_IMAGE digest + DASHBOARD_COMMIT) that THIS host verifies from its own image store; the receipt is
-# only accepted when it names exactly that backend/dashboard pair. A receipt can never choose its own dashboard.
-browser_check() {
-  browser_problem=""
-  if [ -z "${DASHBOARD_IMAGE:-}" ] || [ -z "${DASHBOARD_COMMIT:-}" ]; then
-    browser_problem="Q14 expected dashboard image/commit not supplied"
-  elif ! [[ "$DASHBOARD_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$DASHBOARD_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-    browser_problem="Q14 expected dashboard image/commit must be an immutable digest and a full commit"
-  elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{.Id}}' 2>/dev/null || true)" != "$DASHBOARD_IMAGE" ]; then
-    browser_problem="Q14 expected dashboard image is not in the local image store"
-  elif [ "$(docker image inspect "$DASHBOARD_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" != "$DASHBOARD_COMMIT" ]; then
-    browser_problem="Q14 dashboard image revision label differs from DASHBOARD_COMMIT"
-  elif [ -z "${BROWSER_QUALIFICATION_RECEIPT:-}" ] || [ ! -s "${BROWSER_QUALIFICATION_RECEIPT:-}" ]; then
-    browser_problem="Q14 exact-artifact browser receipt missing"
-  fi
-  if [ -n "$browser_problem" ]; then
-    FAILED=1
-    printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "$browser_problem" - | tee -a "$RESULTS"
-  elif ! "${IMG_RUN[@]}" -v "$BROWSER_QUALIFICATION_RECEIPT:/browser-receipt.json:ro" --entrypoint python "$IMAGE_ID" /app/ops/verify-browser-receipt.py /browser-receipt.json "$IMAGE_ID" "$DASHBOARD_IMAGE" "$DASHBOARD_COMMIT" > "$BUILD_RECORD/browser-receipt-check.log" 2>&1; then
-    FAILED=1
-    printf '%s\t%s\t%s\t%s\n' browser INCOMPLETE "Q14 receipt invalid or backend/dashboard artifact mismatch" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
-  else
-    printf '%s\t%s\t%s\t%s\n' browser 0 "Q14 exact-artifact receipt verified" "$BUILD_RECORD/browser-receipt-check.log" | tee -a "$RESULTS"
-  fi
-}
 browser_check
 printf 'qualification_exit=%s\n' "$FAILED" >> "$BUILD_RECORD/manifest.txt"
 echo "done: $TAG = $IMAGE_ID ; records in $BUILD_RECORD ; exit=$FAILED"

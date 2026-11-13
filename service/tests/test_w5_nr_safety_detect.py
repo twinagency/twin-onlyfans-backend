@@ -64,7 +64,7 @@ BENIGN = ["I'm 15 minutes away", "i have two kids and a busy week", "im 25", "i 
           "wear a teeny bikini", "I am 15 seconds away", "I'm 15 pounds heavier", "I turned 17 in 2005", "12 year old whiskey",
           "my 16 year old son", "I'm 16 days sober", "my car is 15 years old", "be there in 15 secs",
           "my stepbrother is visiting", "I'm one.", "I'm one of them", "I'm 15m away", "my son just turned 16.",
-          "she just turned 16", "I am visiting my stepsister", "I'm with my stepsister at the mall", "my stepsis is 18",
+          "she just turned 16", "I am visiting my stepsister this weekend", "I'm with my stepsister at the mall", "my stepsis is 18",
           "my stepsister got a new job as a nurse", "my stepbrother will be visiting", "my older stepsister got a new job",
           "my teenager got a new job", "my teenager is visiting", "my stepsis is 25"]
 DISCLOSURE = ["i'm a minor", "I'm a 16-year-old", "im a sixteen-year-old", "I'm 16 y.o", "im 16yrs", "I am under-age",

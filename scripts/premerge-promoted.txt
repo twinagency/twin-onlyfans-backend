@@ -63,4 +63,5 @@ service/tests/test_w1_fans_api_adapter_pg.py
 service/tests/test_w2_conversation_engine_sale_drm_pg.py
 service/tests/test_g06b_sale_vanished_media_pg.py
 service/tests/test_f2d_proxies_fail_closed.py
+service/tests/test_g06s_sqlite_singles_save.py
 service/tests/test_g06d_automation_sale_gate.py

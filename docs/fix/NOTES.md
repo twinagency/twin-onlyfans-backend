@@ -226,3 +226,4 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 ## 2026-11-13 G06 DeepSeek final
 - DSF1 blocker real: sync upserts classify-rejected items; sale only refused isReady False. Fix f74eb1d3: FansAPI sale needs isReady True; raw None exempt. Red 2/13 → green 13/13; 7 FansAPI sale suites 115 passed (measured). Sonnet delta: CLOSED, none new.
 - DSF2 (vanished via existing items, pre-existing) + DSF3 (put_singles creation gate) → G06b. Re-gate at f74eb1d3 running.
+- G06 split (324 LOC > 300 cap): #110 closed; #111 core @2ca2d578 → **48f7fc56** (merge 27); #112 G06c DSF1 (tree == gated f74eb1d3) → **31d09390** (merge 28). Gate f74eb1d3: fast GREEN 593s, 0 skipped (measured). Fable merge-28 consult sent (restart-sweep, pre-existing blocker policy, queue order).

@@ -36,10 +36,7 @@ SOLD = {"native": {1, 5, 6, 8}, "fansapi": {1, 5}, "fastt_sqlite": {1, 5, 6, 8}}
 def _opener(media, previews, price_cents=1500):
     """The exact payload `vault_arc.plan_jobs` books for a feed-only priced opener."""
     day = {"media_ids": media, "preview_media_ids": previews, "caption": "synthetic caption"}
-    payload = vault_arc._post_job(day, price_cents)
-    # Pick the whole pool: isolates the gate from the runner's media_count sampling.
-    payload["posts"][0].update(media_count=len(media), preview_media_count=max(len(previews), 1))
-    return payload
+    return vault_arc._post_job(day, price_cents)   # unmodified: batch5 F1 (was patched with media_count)
 
 
 @pytest.fixture(params=["native", "fansapi", "fastt_sqlite"])  # fastt_sqlite: init_db schema, no policy table
@@ -141,12 +138,16 @@ def test_refused_terminal_post_still_books_the_repost_cycle(lane):
 
 
 def test_priced_opener_samples_only_sellable_media(lane):
-    """Default media_count=1 samples one id: a refused pick must not sink a post that had a sellable one."""
-    payload = vault_arc._post_job({"media_ids": [2, 3, 4, 7, 1], "caption": "c"}, 1500)
+    """A rotation pool (default media_count=1, not an arc day) samples one id: a refused pick must not
+    sink a post that had a sellable one. The arc day itself is a whole set and refuses (batch5 F1)."""
+    payload = {"posts": [{"text": "c", "media_files": [2, 3, 4, 7, 1], "price": 15.0}]}
     for _ in range(8):
         lane.posts.clear()
         asyncio.run(auto_posts.run(ACC, payload, run_id=1))
         assert [p["media_files"] for p in lane.posts] == [[1]]
+    lane.posts.clear()
+    out = asyncio.run(auto_posts.run(ACC, _opener([2, 3, 4, 7, 1], []), run_id=1))
+    assert out["reason"] == "media_not_sellable" and lane.posts == []
 
 
 
@@ -155,3 +156,20 @@ def test_priced_post_with_a_refused_folder_pick_skips(lane, monkeypatch):
     monkeypatch.setattr(auto_posts, "pick_media", lambda spec, client: [1, 2] if spec.get("media_files") else [])
     out = asyncio.run(auto_posts.run(ACC, _opener([1], []), run_id=1))
     assert (out["status"], out["reason"]) == ("skipped", "media_not_sellable") and lane.posts == []
+
+
+@pytest.mark.parametrize("media,previews", [([1, 5, 6], []), ([1, 5], [5])], ids=["no-preview", "preview"])
+def test_booked_opener_sells_the_whole_day_every_fire(lane, media, previews):
+    """Batch5 F1 (major, sale): the booked payload sold 1 of N items at the full day price, and with a
+    preview could sample only the free teaser (no_sellable_media). Every fire posts the whole set."""
+    media = [m for m in media if m in lane.want]
+    for run in range(12):
+        out = asyncio.run(auto_posts.run(ACC, _opener(media, previews), run_id=run))
+        assert out["status"] == "ok", out
+    assert all(sorted(p["media_files"]) == sorted(media) and p["previews"] == previews and p["price"] == 15.0
+               for p in lane.posts) and len(lane.posts) == 12
+
+
+def test_free_recap_payload_is_unchanged():
+    assert vault_arc._post_job({"media_ids": [1, 5], "preview_media_ids": [5]}, 0) == {
+        "posts": [{"text": "", "media_files": [1, 5], "price": 0}]}

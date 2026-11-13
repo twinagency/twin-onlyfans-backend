@@ -28,7 +28,7 @@ class MessagePage:
     # Oldest provider row id read, including rows the reader skipped; the
     # next cursor. None keeps the legacy min(event ids) cursor.
     next_before: int | None = None
-    # Fan-authored rows the reader skipped (tip/unsent/deleted): Store._skipped_input.
+    # Fan-authored rows the reader skipped (tip/unsent/deleted, or markup-only below newer fan text): Store._skipped_input.
     skipped_inbound: tuple[int, ...] = ()
 
 

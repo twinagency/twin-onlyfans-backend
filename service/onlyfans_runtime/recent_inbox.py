@@ -40,7 +40,7 @@ class HeadState:
     discovery_cursor: str | None = None
     pending: deque = field(default_factory=deque)
     heads: dict = field(default_factory=dict)
-    failed: dict = field(default_factory=dict)  # fan -> Failed
+    failed: dict = field(default_factory=dict)  # fan -> Failed; count 0 = settled head, not a failure
     last_head_at: object = None
     failures: int = 0
 
@@ -82,7 +82,7 @@ def _enqueue(state, fans, heads, *, priority, now):
 
 
 def _waiting(state, fan, head, now):
-    """True while a failed fan backs off. A changed non-None head clears it."""
+    """True while a failed fan backs off or its settled head (count 0) is held. A changed non-None head clears it."""
     rec = state.failed.get(fan)
     if rec is not None and head is not None and rec.head != head:
         del state.failed[fan]
@@ -245,7 +245,8 @@ def poll_recent(store, tenant, account, reader, *, connection_revision=None, clo
                 head = state.heads.get(fan)
                 # Read from the top down past the head: if it is still missing (e.g. a tip with no
                 # conversation state) re-reading cannot help. Settle it (count 0) until the head changes.
-                if head is not None and (not page.has_more or page.next_before is not None and page.next_before <= head):
+                # A page with no rows at all (next_before None) proves nothing: re-read.
+                if head is not None and page.next_before is not None and (not page.has_more or page.next_before <= head):
                     state.failed[fan] = Failed(head, 0, clock() + MAX_FAN_BACKOFF_SECONDS)
             state.pending.popleft()
         # Keep catching arrivals below the first page, but bound this queue and

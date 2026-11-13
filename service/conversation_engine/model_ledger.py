@@ -99,8 +99,7 @@ class ModelLedger:
                 r.status, r.outcome, r.error_class, r.updated_at = 'unknown', 'lease_expired', 'lease_expired', now
 
     def sweep(self, account, request_id, generation=None):
-        """Expire lapsed leases; without `generation`, across the whole request (a lost call of an older generation
-        becomes unknown too, so `rows()` hands it over instead of a new paid call)."""
+        """Expire lapsed leases (whole request unless `generation`): a lost older-generation call turns unknown, not re-asked."""
         with Session(self.engine) as s, s.begin():
             q = select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
                 OfEngineModelCall.request_id == request_id, OfEngineModelCall.status.in_(('reserved', 'calling')))

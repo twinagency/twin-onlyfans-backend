@@ -927,7 +927,8 @@ def _reconcile_provider_event(store, tenant, account, item_id, body):
 
 
 _REPROJECTABLE_DETAILS = ('deletion_mapping_missing_or_ambiguous', 'deletion_binding_unproven',
-                          'deletion_epoch_unproven', 'pilot_fan_scope_changed')
+                          'deletion_epoch_unproven', 'pilot_fan_scope_changed',
+                          'send_stop_failed')  # G-DS: re-drive re-runs the provider safety stop
 
 
 def projection_resolution_key(binding, epoch, event_key):

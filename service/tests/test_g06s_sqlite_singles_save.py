@@ -1,8 +1,8 @@
 """G06s: put_singles on the legacy SQLite relay (Fastt boot never creates of_delivery_policy).
 
 #117's save-time refusal asked the delivery policy unconditionally, so every enabled single over
-mirrored media 500'd with `no such table: of_delivery_policy`. No policy table = no FansAPI
-selection = native contract; the removed/kind/unusable gates still refuse."""
+mirrored media 500'd with `no such table: of_delivery_policy`. On SQLite only, no policy table =
+no FansAPI selection = native contract; the vault-row gates (here: removed) still refuse."""
 import asyncio
 import json
 from contextlib import asynccontextmanager
@@ -50,11 +50,16 @@ def run(tmp_path, monkeypatch, vault):
             return await api.put_singles(api._ItemsBody(account_id=ACCOUNT, items=[item]))
         finally:
             await engine.dispose()
-    return asyncio.run(go())
+    out = asyncio.run(go())
+    check = create_engine(f"sqlite:///{path}")
+    with Session(check) as s:
+        out["saved"] = [(r.media_ids, r.enabled) for r in s.query(CatalogItem).filter_by(account_id=ACCOUNT)]
+    check.dispose()
+    return out
 
 
 def test_g06s_sqlite_singles_save_over_mirrored_media(tmp_path, monkeypatch):
-    assert run(tmp_path, monkeypatch, [(11, "video", False)]) == {"status": "ok", "items": 1}
+    assert run(tmp_path, monkeypatch, [(11, "video", False)]) == {"status": "ok", "items": 1, "saved": [("[11]", True)]}
 
 
 def test_g06s_sqlite_singles_save_still_refuses_removed_media(tmp_path, monkeypatch):

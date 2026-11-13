@@ -48,11 +48,11 @@ def _unusable(row, fansapi):
 
 
 def fansapi_policy(session, account_id):
-    """The one sale-time FansAPI decision: the account's delivery policy, not a row's job. A store
-    without the policy table (the Fastt SQLite relay never creates it) has no FansAPI selection."""
+    """The one sale-time FansAPI decision: the account's delivery policy, not a row's job. The Fastt
+    SQLite relay never creates the policy table: no FansAPI selection there. PostgreSQL always asks."""
     from sqlalchemy import inspect
     from .provider_read_budget import native_family_clause
-    if not inspect(session.connection()).has_table("of_delivery_policy"):
+    if session.get_bind().dialect.name == "sqlite" and not inspect(session.connection()).has_table("of_delivery_policy"):
         return False
     return not session.scalar(select(native_family_clause(account_id)))
 

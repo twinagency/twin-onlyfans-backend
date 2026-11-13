@@ -1142,7 +1142,7 @@ class MoxyService:
                             case.owner=case.owner or assigned
                 event.status='held';event.reason=reason;return event_id
             try:snap=snapshot(s,account,event.fan_id,event)
-            except Refused as exc:self._evidence_hold(s,account,event,exc);return event_id
+            except Refused as exc:_evidence_hold(s,account,event,exc);return event_id
             source=json.loads(event.payload_json).get('source_message_id')
             if source and event.kind in {'turn','welcome'}:
                 incoming=[m for m in snap['history'] if m['direction']=='in']
@@ -1293,18 +1293,11 @@ class MoxyService:
         try:
             if digest(snapshot(s,account,e.fan_id,e))==e.snapshot_hash:return False
             e.status='stale';e.reason='moxy_snapshot_changed'
-        except Refused as exc:self._evidence_hold(s,account,e,exc)
+        except Refused as exc:_evidence_hold(s,account,e,exc)
         return True
 
-    def _evidence_hold(self,s,account,event,exc):
-        """Refused snapshot (unreadable ownership evidence): hold this fan's event; other fans proceed.
-        Surfaced like a prompt-build failure (diagnostic + the fan's moxy_technical operator case)."""
-        event.status='held';event.reason=str(exc)[:128]
-        diagnose(s,account,'context_failure',event=event,error_type=type(exc).__name__)
-        owner=s.get(MoxyAccount,account)
-        if owner is not None:self._technical_attention(s,owner,event)
-
-    def _technical_attention(self,s,owner,event):
+    @staticmethod
+    def _technical_attention(s,owner,event):
         from onlyfans_runtime.operator_cases import open_case
         payload=json.loads(event.payload_json)
         first=s.get(MoxyEvent,(event.account_id,payload['correction_of'])) if payload.get('correction_of') else None
@@ -1388,7 +1381,7 @@ class MoxyService:
                         diagnose(s,account,'late_completion_cost_reconciled',event=event)
                         continue
                     try:fresh=snapshot(s,account,event.fan_id,event)
-                    except Refused as exc:self._evidence_hold(s,account,event,exc);continue
+                    except Refused as exc:_evidence_hold(s,account,event,exc);continue
                     if event.snapshot_hash!=digest(fresh):
                         event.status='stale';event.reason='moxy_snapshot_changed'
                     else:
@@ -1545,6 +1538,15 @@ def surface_campaign_recovery(s,account,owner):
             origin='detector',scope='offer',owner=assigned)
 
 
+def _evidence_hold(s,account,event,exc):
+    """Refused snapshot (unreadable ownership evidence): hold this fan's event; other fans proceed.
+    Surfaced like a prompt-build failure (diagnostic + the fan's moxy_technical operator case)."""
+    event.status='held';event.reason=str(exc)[:128]
+    diagnose(s,account,'context_failure',event=event,error_type=type(exc).__name__)
+    owner=s.get(MoxyAccount,account)
+    if owner is not None:MoxyService._technical_attention(s,owner,event)
+
+
 def current(s,intent):
     owner=s.get(MoxyAccount,intent.account_id)
     if owner is None:return intent.moxy_event_id is None
@@ -1565,7 +1567,8 @@ def current(s,intent):
     if decision['action'] in {'invite','offer','resend','alternative','continue'}:
         from onlyfans_runtime.operator_cases import policy_facts
         if any(scope in {'all','commercial'} for _,scope in policy_facts(s,intent.account_id,intent.fan_id)[2]):return False
-    snap=snapshot(s,intent.account_id,intent.fan_id,event)
+    try:snap=snapshot(s,intent.account_id,intent.fan_id,event)
+    except Refused:return False  # unreadable evidence: not current; the step tick holds the event
     return digest(snap)==event.snapshot_hash and decision['text']==intent.body
 
 
@@ -1576,13 +1579,15 @@ def delivered(s,intent):
     if e.status=='done' or e.reason==RETIRED_UNCONFIRMED_TEXT:return
     from .parts import active, has_remaining, continuation_unchanged, plan, index
     d=active(e)
-    continuation_ok=True
+    continuation_ok=True;refused=None
     # A completed single-message reply needs no continuation snapshot. Keep the
     # extra consistency read only for a tail we may actually dispatch.
     if index(e)+1<len(plan(json.loads(e.decision_json))):
         before=json.loads(e.snapshot_json)
-        after=snapshot(s,intent.account_id,intent.fan_id,e,ignore_outgoing_ids=(intent.provider_message_id,))
-        continuation_ok=continuation_unchanged(before,after,intent.provider_message_id,d,account_id=intent.account_id,session=s)
+        try:
+            after=snapshot(s,intent.account_id,intent.fan_id,e,ignore_outgoing_ids=(intent.provider_message_id,))
+            continuation_ok=continuation_unchanged(before,after,intent.provider_message_id,d,account_id=intent.account_id,session=s)
+        except Refused as exc:continuation_ok=False;refused=exc  # the landed receipt is still recorded below
     payload=json.loads(e.payload_json)
     progress=payload.setdefault('_moxy_delivery',{'receipts':[]})
     progress['receipts'].append({'intent_id':intent.intent_id,'message_id':intent.provider_message_id})
@@ -1613,10 +1618,12 @@ def delivered(s,intent):
             payload['_moxy_conversation_progress']={'version':1,'unanswered_input_ids':original['unanswered_input_ids']}
             e.payload_json=canonical(payload)
     if remaining:
-        if not continuation_ok:
+        if refused is not None:_evidence_hold(s,intent.account_id,e,refused)
+        elif not continuation_ok:
             e.status='stale';e.reason='moxy_conversation_interrupted'
         else:
             e.status='ready';e.intent_id=None
-            snap=snapshot(s,intent.account_id,intent.fan_id,e)
-            e.snapshot_json=canonical(snap);e.snapshot_hash=digest(snap)
+            try:snap=snapshot(s,intent.account_id,intent.fan_id,e)
+            except Refused as exc:_evidence_hold(s,intent.account_id,e,exc)
+            else:e.snapshot_json=canonical(snap);e.snapshot_hash=digest(snap)
 

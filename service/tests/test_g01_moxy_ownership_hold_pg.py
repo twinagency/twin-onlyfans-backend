@@ -49,3 +49,31 @@ def test_g01_02_corrupt_ownership_for_one_fan_holds_only_that_fans_event(databas
         assert s.scalar(select(func.count()).select_from(OfOperatorCase).where(
             OfOperatorCase.account_id == ACCOUNT, OfOperatorCase.fan_id == HEALTHY)) == 0
     store.close()
+
+
+def test_flg2_01_corrupt_evidence_after_a_landed_part_keeps_the_receipt_and_holds_the_tail(database, monkeypatch):
+    """A two-part reply whose first part lands while the fan's ownership evidence turns unreadable: the receipt is
+    still projected (dispatch 'accepted', no rollback) and only the tail is held for an operator."""
+    from onlyfans_runtime.text_delivery import SyntheticTextTransport
+    from test_onlyfans_foundation_pg import event
+    engine, store, service, authority, _, _ = setup(database, monkeypatch)
+    store.record(TENANT, ACCOUNT, event(mid=2, body='How was your day?')); store.drain(TENANT, ACCOUNT)
+    identity = service.add_event(TENANT, ACCOUNT, 101, 'turn', 'flg2-01', {'source_message_id': 2})
+    service.prepare(TENANT, ACCOUNT, identity, model(decision(text='Long one.', messages=[
+        {'text': 'Long one.', 'media': False}, {'text': 'Yours?', 'media': False}])))
+    first = service.queue(TENANT, ACCOUNT, identity)
+
+    def corrupt(_dispatch):
+        with Session(engine) as s, s.begin():
+            s.add(Message(account_id=ACCOUNT, fan_id=101, message_id=990201, direction='out', media_ids='[7101,',
+                          price_cents=7500, is_paid=True, created_at=utcnow()))
+    assert authority.dispatch(TENANT, ACCOUNT, first, SyntheticTextTransport(ACCOUNT, message_id=9001, on_send=corrupt)) == 'accepted'
+    with Session(engine) as s:
+        e = s.get(MoxyEvent, (ACCOUNT, identity))
+        assert (e.status, e.reason) == ('held', 'ownership evidence unavailable')
+        import json
+        assert [r['message_id'] for r in json.loads(e.payload_json)['_moxy_delivery']['receipts']] == [9001]
+        assert [c.category for c in s.scalars(select(OfOperatorCase).where(
+            OfOperatorCase.account_id == ACCOUNT, OfOperatorCase.fan_id == 101))] == ['moxy_technical']
+    assert service.step(TENANT, ACCOUNT, model(decision())) == 0  # held tail is not retried
+    store.close()

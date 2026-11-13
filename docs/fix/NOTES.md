@@ -241,3 +241,10 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
 - **G08 MERGED #113 → 7e817be2 (merge 29).** Gate GREEN 802s at 431942d2 (m); 296 LOC. Local target ff'd. G08b queued (major).
 - G06b finals: Codex CF1 P2 (unchanged-single skip compared raw JSON; create_catalog_single "[21,22]" vs _validate_item "[21, 22]") red (m) → decoded tuples, 64450404; 4 tests that relied on the bug now disable the seed. DS final major = CF1; DS minor (delete+recreate same list) rejected (wholesale replace, sale still refuses). Target merged in 5d816417 (280+18). Gate running (55662).
 - F2d worker started (Claude3 opus high, worktree; fix/F2d-proxies-fail-closed off 7e817be2).
+
+## Batch rwl 1 (supervisor 2026-11-13, 11:2xZ cadence)
+- Range 18027498..7e817be2 = #109 cf3095d7 (G07) · #111 48f7fc56 (G06) · #112 31d09390 (G06 DSF1) · #113 7e817be2 (G08); +699/−183. Frozen /tmp/batch1-frozen; scope /tmp/batch1/SCOPE.md.
+- Lenses: Opus correctness + Opus structure (cross-PR focus) + codex review --base 18027498 + DeepSeek Flash. Codex-DA skipped: each PR already had its own codex-DA; batch = interaction review.
+- Batch blk/money findings = HARD BARRIER before next stack restart / promotion / send re-enable. Counter restarts at 7e817be2 (next batch: 4 merges or ~600 LOC: HARN-5, G06b, F2d, …).
+- Slots: 0 delegated fix workers running (HARN-5/G06b/F2d driven inline) → slot free for supervisor's W7 L2; 1 fix worker (G02-01) once the 2 running gates finish (machine load).
+- F2d: DS r1 (counts as Flash) on d51dc6f7: blocker+2 major+1 minor, all already closed by 51a2ba05 (in-place save, boot OSError, try-read + symlink/dir, entry routing-field check); host/port type check rejected (bad host fails the request, not direct egress; i). Q1 (i): client-build failure takes the existing FileNotFoundError path (executor propagates; transaction_ingest → None), no new tight loop.

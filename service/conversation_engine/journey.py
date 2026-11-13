@@ -183,8 +183,9 @@ def signals(text, config=None):
     value = _norm(text)
     config = config or _CONFIG
     found = set()
+    from .minor_signal import minor_match
     from .safety_context import sensitive_match
-    if sensitive_match(_BANNED_FAN, value):
+    if sensitive_match(_BANNED_FAN, value) or minor_match(value):
         found.add('platform_banned')
     if identity_question(value):
         found.add('identity')

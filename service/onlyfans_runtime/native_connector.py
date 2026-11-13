@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import html
 import json
 import logging
 import os
@@ -20,7 +21,7 @@ from of_signer import sign
 from .loopback_transport import (
     LoopbackPeerHandle, LoopbackTextTransport, _request_once, from_server,
 )
-from .native_protocol import API_PATH, MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, load, message, request
+from .native_protocol import API_PATH, MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, history_text, load, message, request
 from .store import PAGE_LIMIT, Refused, _id
 from .text_delivery import Dispatch, TextAuthority, _stamp
 from .worker import ChatPage, MessagePage
@@ -52,11 +53,20 @@ def _synthetic_headers(port, path, owner_id):
     return {**headers, "user-id": str(owner_id)}
 
 
+_TAG = re.compile(r"<[^<>]*>")
+
+
 def _skip_reason(row, *, owner_id, fan_id):
     """Name a well-formed, in-scope row on the skip whitelist, else None.
 
-    Only explicit tip/unsent/deleted flags are skipped: the history Event has
-    no tip and these rows carry no conversation text. Every other row the
+    Explicit tip/unsent/deleted flags are skipped: the history Event has no
+    tip and these rows carry no conversation text. A row with no media, no
+    price and no visible text whose sole defect is unsupported history markup
+    (e.g. a bare inline image tag) is skipped too, so one odd older body never
+    blocks newer inbound; messages() still refuses when such a fan row has no
+    newer fan text on the page. A row whose markup wraps visible text still
+    refuses: the protocol never silently loses fan words. A skipped creator row
+    is not stored (accepted: no text, no media, no price). Every other row the
     strict parser rejects still refuses the whole page.
     """
     try:
@@ -75,7 +85,24 @@ def _skip_reason(row, *, owner_id, fan_id):
         return "unsent"
     if row.get("isDeleted") is True:
         return "deleted"
-    return None
+    text = row.get("text")
+    try:
+        if type(text) is not str or len(text.encode()) > 20000:
+            return None
+    except UnicodeError:
+        return None  # lone surrogate: message() refuses it as a protocol error
+    if html.unescape(_TAG.sub("", text)).strip():
+        return None  # visible text behind unsupported markup: refuse, never drop it
+    try:
+        history_text(text)
+        return None
+    except NativeProtocolError:
+        pass
+    try:
+        event = message({**row, "text": "x"}, owner_id=owner_id, fan_id=fan_id, history=True)
+    except NativeProtocolError:
+        return None
+    return "formatting" if not event.media_ids and event.price_cents == 0 else None
 
 
 _SKIP_LOG_SECONDS = 60.0
@@ -199,12 +226,16 @@ class NativeLoopbackConnector:
                 # Only whitelisted, in-scope rows are skipped; any other
                 # unsupported or malformed row still refuses the page.
                 reason = _skip_reason(row, owner_id=self._handle.owner_id, fan_id=fan_id)
-                if reason is None:
+                fan_row = _id(row["fromUser"]["id"]) == fan_id if reason is not None else False
+                # A fan's markup-only row with no newer fan text kept on this page
+                # would leave the engine replying to an older message: refuse.
+                if reason is None or reason == "formatting" and fan_row and not any(
+                        event.direction == "in" for event in events):
                     raise
                 skipped[reason] = skipped.get(reason, 0) + 1
                 indexes.append(index)
                 ids.append(_id(row["id"]))
-                if _id(row["fromUser"]["id"]) == fan_id:
+                if fan_row:
                     inbound.append(_id(row["id"]))
                 continue
             kept.append(row); events.append(event); ids.append(event.message_id)

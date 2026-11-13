@@ -144,3 +144,5 @@ Started 2026-11-12. Team head = origin/claude/commercial-r0-r3-20261111 a253c84c
   - G01a fix/G01a-webhook-scope 43e8ef5a (W3FA-03; 3 files +182/−7; 6/6 green, m)
   - G01b fix/G01b-ownership-strict d7aeed45 (W2S-02 + Moxy per-fan hold + relay lenient; 6 files +154/−13; 8/8 green, m)
 - rwl r2 on both (Opus + Flash) running. F4 r3 worker started (slot 2; F0d is slot 1). native_pilot_service: base red, 62 s (m).
+
+- 02:5xZ G01b r2 fix 75f7b602 (/tmp/fix-g01b): G01R2-01 held evidence event -> diagnose + one moxy_technical case (method _evidence_hold); G01R2-02 test: 2nd step no retry, no model call, case once. 29/29 g01b+moxy_integrated+w2_sale green (measured); mutation drop-case -> red (measured). Awaiting Flash r2 (4f1e1aaf), F0d, F4 r3.

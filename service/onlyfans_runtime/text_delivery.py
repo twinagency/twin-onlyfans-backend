@@ -1463,7 +1463,8 @@ class TextAuthority:
                            or getattr(exc, "status_code", None) == 401
                            or type(exc).__name__ == "NativeAuthenticationError")
             throttled = (isinstance(exc, ProviderThrottled)
-                         or getattr(exc, "status_code", None) == 429)
+                         or getattr(exc, "status_code", None) == 429
+                         or type(exc).__name__ == "NativeRateLimitError")
             if throttled and not auth_failed:
                 # D429 (same policy as the Fans API path): the POST already left, so a 429 is pacing evidence
                 # only, never proof of non-delivery. Cool down, then fall through to UNKNOWN (held, never replayed).

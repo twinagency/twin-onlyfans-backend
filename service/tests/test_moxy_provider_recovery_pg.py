@@ -82,6 +82,9 @@ def test_legacy_ready_rate_limit_retry_is_held_not_resent(database,monkeypatch):
         event=s.get(MoxyEvent,(ACCOUNT,identity))
         assert event.status=='held' and event.reason=='provider_delivery_unconfirmed'
         assert len(s.scalars(select(OfTextIntent).where(OfTextIntent.moxy_event_id==identity)).all())==1
+        from db.onlyfans_case_models import OfOperatorCase
+        assert s.scalar(select(OfOperatorCase).where(OfOperatorCase.account_id==ACCOUNT,
+            OfOperatorCase.category=='moxy_technical')) is not None, 'unconfirmed hold must reach an operator'
     assert fresh.calls==[]
     store.close()
 
@@ -106,7 +109,7 @@ def test_authentication_rejection_is_owned_hold_and_never_retried(database,monke
 
 
 @pytest.mark.parametrize('mutation',['price','fan_constraint','off'])
-def test_rate_limit_recovery_revalidates_before_new_attempt(database,monkeypatch,mutation):
+def test_rate_limit_recovery_holds_never_reattempts(database,monkeypatch,mutation):
     import json
     from db.models import CatalogItem
     from db.onlyfans_moxy_models import MoxyFan

@@ -1296,6 +1296,14 @@ class MoxyService:
         except Refused as exc:_evidence_hold(s,account,e,exc)
         return True
 
+    def _hold_unconfirmed(self,s,account,e):
+        # Possible delivery: hold for an operator (campaigns surface via surface_campaign_recovery).
+        if json.loads(e.payload_json).get('campaign_id'):
+            e.status='held';e.reason='campaign_provider_recovery_required';return
+        e.status='held';e.reason='provider_delivery_unconfirmed';e.updated_at=utcnow()
+        self._technical_attention(s,s.get(MoxyAccount,account),e)
+        diagnose(s,account,'provider_delivery_unconfirmed',event=e)
+
     @staticmethod
     def _technical_attention(s,owner,event):
         from onlyfans_runtime.operator_cases import open_case
@@ -1442,8 +1450,7 @@ class MoxyService:
                     elif evidence.startswith('fastt-rate-limited:'):
                         # Legacy rows only (D429: a 429 now stays unknown). A 429 after the POST never proved
                         # non-delivery, so hold for an operator; never re-dispatch (possible double send).
-                        e.status='held';e.reason=('campaign_provider_recovery_required'
-                            if json.loads(e.payload_json).get('campaign_id') else 'provider_delivery_unconfirmed')
+                        self._hold_unconfirmed(s,account,e)
                     else:
                         e.status='stale';e.reason=intent.reason
                 elif intent and intent.status in {'cancelled','refused'}:
@@ -1451,8 +1458,7 @@ class MoxyService:
             # Pre-D429 rate-limit re-sends left 'ready' are held too: their 429 proved nothing either.
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready',
                     MoxyEvent.reason=='provider_rate_limit_retry')):
-                e.status='held';e.reason=('campaign_provider_recovery_required'
-                    if json.loads(e.payload_json).get('campaign_id') else 'provider_delivery_unconfirmed')
+                self._hold_unconfirmed(s,account,e)
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready')):
                 self._invalidated(s,account,e)
             s.flush()

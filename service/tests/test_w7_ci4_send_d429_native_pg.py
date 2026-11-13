@@ -51,3 +51,25 @@ def test_w7_ci4_send_429_after_wire_start_is_never_auto_resent(database, monkeyp
             f'D429: Moxy prepared {len(intents)} intents for one reply after a post-wire 429 '
             f'(auto re-send of a possibly delivered message)')
     store.close()
+
+
+def test_w7cs01_native_rate_limit_error_after_wire_is_unknown_and_cools_down(database, monkeypatch):
+    # Opus-final W7CS-01 minor: NativeRateLimitError (no status_code) must count as throttled -> cooldown.
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    from onlyfans_runtime.provider_connector import NativeRateLimitError
+    from datetime import timedelta
+    from onlyfans_runtime.store import utcnow
+
+    def _native_429(dispatch):
+        raise NativeRateLimitError(retry_after=120)
+
+    engine, store, service, authority, claim, settings = setup(database, monkeypatch)
+    identity, _ = run(service, engine, decision())
+    first = service.queue(TENANT, ACCOUNT, identity)
+    authority.dispatch(TENANT, ACCOUNT, first, SyntheticTextTransport(ACCOUNT, on_send=_native_429))
+    with Session(engine) as s:
+        assert s.get(OfTextIntent, (ACCOUNT, first)).status == 'unknown'
+        policy = s.get(OfDeliveryPolicy, ACCOUNT)
+        until = policy.provider_cooldown_until or policy.next_dispatch_at  # concurrent vs serial admission
+        assert until is not None and until.replace(tzinfo=None) > utcnow().replace(tzinfo=None) + timedelta(seconds=60), until
+    store.close()

@@ -5,7 +5,7 @@ page is read again; canonical ingress provides durable deduplication. Archive
 cursors and high-water marks are never advanced by this lane.
 """
 from .provider_read_budget import is_rate_limit
-from collections import deque
+from collections import deque, namedtuple
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from db.models import Message, OfConversationState
 from db.onlyfans_models import OfIngress, OfRecovery
 from .provider_read_budget import acquire, current, release, ReadDeferred
-from .store import PAGE_LIMIT, MAX_PENDING, Refused, utcnow
+from .store import PAGE_LIMIT, MAX_PENDING, Refused, utcnow, valid_skipped
 
 INTERVAL_SECONDS = 10
 PAGES_PER_TURN = 4
@@ -27,6 +27,7 @@ FAILED_FAN_RETRY_SECONDS = 60
 # A failing fan backs off 60 s, 120 s, ... capped here; never parked for good.
 MAX_FAN_BACKOFF_SECONDS = 1800
 _STATES_LOCK = threading.Lock()
+Failed = namedtuple("Failed", "head count due")
 
 
 class BadConversationPage(Exception):
@@ -39,14 +40,14 @@ class HeadState:
     discovery_cursor: str | None = None
     pending: deque = field(default_factory=deque)
     heads: dict = field(default_factory=dict)
-    failed: dict = field(default_factory=dict)  # fan -> (head, count, retry_due)
+    failed: dict = field(default_factory=dict)  # fan -> Failed
     last_head_at: object = None
     failures: int = 0
 
     def backed_off(self, now=None):
         """Conversations currently waiting out a failed-read backoff."""
         now = time.monotonic() if now is None else now
-        return sum(due > now for _, _, due in self.failed.values())
+        return sum(rec.due > now for rec in self.failed.values())
 
 
 def _enqueue(state, fans, heads, *, priority, now):
@@ -77,25 +78,24 @@ def _enqueue(state, fans, heads, *, priority, now):
     # Evicted only when unread for a full max backoff past due, so a reset count
     # restarts after a gap >= MAX_FAN_BACKOFF_SECONDS (rate holds) and records
     # are bounded by the fans read in the last 2 * MAX_FAN_BACKOFF_SECONDS.
-    state.failed = {fan: rec for fan, rec in state.failed.items() if rec[2] + MAX_FAN_BACKOFF_SECONDS > now}
+    state.failed = {fan: rec for fan, rec in state.failed.items() if rec.due + MAX_FAN_BACKOFF_SECONDS > now}
 
 
 def _waiting(state, fan, head, now):
     """True while a failed fan backs off. A changed non-None head clears it."""
     rec = state.failed.get(fan)
-    if rec is not None and head is not None and rec[0] != head:
+    if rec is not None and head is not None and rec.head != head:
         del state.failed[fan]
         return False
-    return rec is not None and rec[2] > now
+    return rec is not None and rec.due > now
 
 
 def _fail(state, fan, now):
-    """Record one failed read; return (count, delay). A None hint never resets."""
-    seen, count, _ = state.failed.pop(fan, (None, 0, 0))
-    head = state.heads.get(fan, seen)
-    count = count + 1 if head == seen or head is None else 1
+    """Record one failed read; return (count, delay). Only _waiting resets (new non-None head)."""
+    rec = state.failed.get(fan, Failed(None, 0, 0))
+    count = rec.count + 1
     delay = min(FAILED_FAN_RETRY_SECONDS * 2 ** min(count - 1, 16), MAX_FAN_BACKOFF_SECONDS)
-    state.failed[fan] = (head if head is not None else seen, count, now + delay)
+    state.failed[fan] = Failed(state.heads.get(fan, rec.head), count, now + delay)
     return count, delay
 
 
@@ -146,9 +146,7 @@ def _validated(fan, page):
     offers = [item.normalized() for item in page.observations]
     if any(item.source_kind != "message" or item.fan_id != fan or item.source_id not in ids for item in offers):
         raise Refused("inbox offer outside message page")
-    skipped = page.skipped_inbound  # Store._skipped_input's only refusal, checked before any fence
-    if type(skipped) is not tuple or any(type(i) is not int for i in skipped):
-        raise Refused("invalid skipped rows")
+    valid_skipped(page.skipped_inbound)  # Store._skipped_input's only refusal, checked before any fence
     return events, ids, offers
 
 

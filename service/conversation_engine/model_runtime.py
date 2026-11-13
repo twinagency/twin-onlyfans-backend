@@ -25,7 +25,8 @@ answer (a handover plus an operator case that lists the outcomes and reasons). N
 response is reused after a crash only when it was produced from exactly the same snapshot, so a restart never pays twice
 or sends a stale answer. A call whose outcome is unresolved (timeout, lost lease, partial or unclassified failure) may have
 been charged: the request goes to a human at once, in the live pass and on any replay, and the call keeps its full
-reservation. No retry, resume or fallback makes a second possibly-charged call for it.
+reservation. No retry, resume or fallback makes a second possibly-charged call for it (a stored same-snapshot answer
+is still reused: that makes no call).
 """
 from dataclasses import dataclass
 from datetime import timedelta
@@ -167,7 +168,7 @@ class ModelRuntime:
     def propose(self, turn):
         cfg, ledger = self.config, self.ledger
         profile = self._preflight(turn)
-        ledger.sweep(turn.account, turn.request_id, turn.generation)
+        ledger.sweep(turn.account, turn.request_id)  # request-wide: see ModelLedger.sweep
         rows, unresolved = ledger.rows(turn.account, turn.request_id, turn.generation)  # unresolved: any generation
         observed_seq = rows[-1].seq if rows else -1
         jctx = self._judge_context(turn, profile)

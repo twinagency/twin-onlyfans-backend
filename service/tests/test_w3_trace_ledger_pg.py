@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from test_onlyfans_foundation_pg import database  # noqa: F401
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT, unthrottle
 from test_engine_simulated_journey_pg import incoming
-from test_engine_model_pg import BOUND, FALLBACK, Clock, _cases, _make_request, _reserve, config, ok, rows, with_model
+from test_engine_model_pg import BOUND, FALLBACK, Clock, _cases, _expire, _make_request, _reserve, config, ok, rows, with_model
 from conversation_engine.model_client import ModelBudgetExhausted, ModelIncompleteResponse, ModelOutcomeUnknown
 from db.onlyfans_engine_models import OfEngineRequest
 from onlyfans_runtime.store import Refused
@@ -70,6 +70,22 @@ def test_w3_an_unknown_call_of_another_generation_also_hands_over(database):
         engine.plan(TENANT, ACCOUNT, FAN, 1)  # this pass plans generation 0
     assert client.requests == []
     _handed_over_once(database, ['timeout'])
+    store.close()
+
+
+def test_w3_a_lost_lease_of_another_generation_also_hands_over(database):
+    # a worker died mid-call on an older generation: the sweep is request-wide, so that call is unknown, never re-asked
+    clock = Clock()
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('must not be asked')], clock=clock)
+    incoming(store, 1, 'hello')
+    request_id = _make_request(database, engine, runtime, client)
+    _reserve(runtime, database, request_id, calling=True, worker='w-old', generation=1)
+    _expire(database)
+    clock.offset = timedelta(seconds=1)
+    with pytest.raises(Refused, match=HANDED):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # this pass plans generation 0
+    assert client.requests == []
+    _handed_over_once(database, ['lease_expired'])
     store.close()
 
 

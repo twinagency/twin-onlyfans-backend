@@ -98,11 +98,15 @@ class ModelLedger:
             elif r.status == 'calling':
                 r.status, r.outcome, r.error_class, r.updated_at = 'unknown', 'lease_expired', 'lease_expired', now
 
-    def sweep(self, account, request_id, generation):
+    def sweep(self, account, request_id, generation=None):
+        """Expire lapsed leases; without `generation`, across the whole request (a lost call of an older generation
+        becomes unknown too, so `rows()` hands it over instead of a new paid call)."""
         with Session(self.engine) as s, s.begin():
-            rows = list(s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
-                OfEngineModelCall.request_id == request_id, OfEngineModelCall.generation == generation,
-                OfEngineModelCall.status.in_(('reserved', 'calling'))).with_for_update()))
+            q = select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
+                OfEngineModelCall.request_id == request_id, OfEngineModelCall.status.in_(('reserved', 'calling')))
+            if generation is not None:
+                q = q.where(OfEngineModelCall.generation == generation)
+            rows = list(s.scalars(q.with_for_update()))
             before = sum(1 for r in rows if r.status in ('reserved', 'calling'))
             self._expire(s, rows, self.clock())
             return before - sum(1 for r in rows if r.status in ('reserved', 'calling'))

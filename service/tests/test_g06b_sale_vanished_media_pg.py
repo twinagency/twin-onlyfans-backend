@@ -166,7 +166,7 @@ def test_put_singles_fansapi_drm_refused_native_drm_saves(database, monkeypatch)
     assert put_singles(database,monkeypatch,[21,22],enabled=False)["status"]=="ok"   # unchanged enabled ones skip
     with pytest.raises(HTTPException,match=r"media 22 cannot be sold \(drm\)"):
         put_singles(database,monkeypatch,[21,22])
-    assert put_singles(database,monkeypatch,[21])["status"]=="ok"
+    assert put_singles(database,monkeypatch,[21])["status"]=="ok"   # route-level: the save is accepted
     store.close()
 
 

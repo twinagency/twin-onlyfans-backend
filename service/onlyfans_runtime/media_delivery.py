@@ -53,16 +53,21 @@ def fansapi_policy(session, account_id):
     return not session.scalar(select(native_family_clause(account_id)))
 
 
+def outside(session, account_id, media_ids):
+    """The one gate on selection evidence: media verified outside the FansAPI selection; native accounts: none."""
+    import vault_import_policy
+    fansapi = fansapi_policy(session, account_id)
+    return vault_import_policy.outside_selection(session, account_id, list(media_ids)) if fansapi else set()
+
+
 def refusal(session, account_id, rows):
     """(media_id, reason) of the first vault row the sale refuses, else None: removed, unsellable
     kind, provider metadata (_unusable), or on FansAPI verified outside the commercial selection
-    (vault_import_policy.outside_selection). Native accounts have no selection and are unchanged."""
-    import vault_import_policy
-    fansapi = fansapi_policy(session, account_id)
-    outside = vault_import_policy.outside_selection(session, account_id, [r.media_id for r in rows]) if fansapi else set()
+    (`outside`). Native accounts have no selection and are unchanged."""
+    fansapi, gone = fansapi_policy(session, account_id), outside(session, account_id, [r.media_id for r in rows])
     for r in rows:
         why = ("removed" if r.removed_at is not None else "kind" if r.kind not in {"image", "photo", "video"}
-               else _unusable(r, fansapi) or ("outside_selection" if r.media_id in outside else None))
+               else _unusable(r, fansapi) or ("outside_selection" if r.media_id in gone else None))
         if why:
             return r.media_id, why
     return None

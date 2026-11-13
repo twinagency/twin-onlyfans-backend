@@ -1287,8 +1287,8 @@ def _validate_item(raw: Any) -> dict:
 
 
 async def _refuse_unusable_media(s, account_id: str, clean: list[dict]) -> None:
-    """Save-time twin of the sale boundary (media_delivery.refusal): an enabled single whose
-    media is new or changed (or that is newly enabled) over media the sale refuses is a 422,
+    """Save-time twin of the sale boundary (media_delivery.refusal): an enabled single whose media
+    list is not already on a stored enabled single, over media the sale refuses, is a 422,
     not a silent ok. Unchanged enabled singles stay saveable so one stale single never blocks
     an unrelated edit (the sale still refuses it). Media with no vault row (vault not
     mirrored yet) saves and stays refused at the sale."""

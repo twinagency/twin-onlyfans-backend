@@ -246,7 +246,7 @@ def test_fallback_never_after_refusal_and_only_after_availability_failure(full):
         for i, c in enumerate(calls):
             if c['outcome'] in {'refusal', 'empty'}:
                 assert not [x for x in calls[i + 1:] if x['chain_step'] == 'fallback']
-    assert fallback_calls == run['totals']['calls_fallback'] >= 3
+    assert fallback_calls == run['totals']['calls_fallback'] >= 2
     # refusal on the primary: ONE call, no fallback, no retry, handed to a human
     refusal = turn(run, 'p2', 3)
     assert [(c['chain_step'], c['outcome']) for c in refusal['model_calls']] == [('primary', 'refusal')] and not refusal['sent']
@@ -258,12 +258,13 @@ def test_fallback_never_after_refusal_and_only_after_availability_failure(full):
     both = turn(run, 'p4', 9)
     assert [(c['chain_step'], c['outcome']) for c in both['model_calls']] == [('primary', 'http_429'), ('fallback', 'refusal')]
     assert not both['sent'] and any(c['category'] == 'model_handover' for c in both['cases'])
-    # rate limit, fallback answers; unknown outcome keeps its reservation, fallback answers
+    # rate limit, fallback answers; unknown outcome keeps its reservation and goes to a human, no fallback (G08)
     limited = turn(run, 'p1', 4)
     assert [(c['chain_step'], c['outcome'], c['status']) for c in limited['model_calls']] == [('primary', 'http_429', 'released'), ('fallback', 'ok', 'settled')]
     assert limited['sent']
     unknown = turn(run, 'p2', 9)
-    assert [(c['chain_step'], c['status']) for c in unknown['model_calls']] == [('primary', 'unknown'), ('fallback', 'settled')]
+    assert [(c['chain_step'], c['status']) for c in unknown['model_calls']] == [('primary', 'unknown')] and not unknown['sent']
+    assert any(c['reason'] == 'model_outcome_unknown' for c in unknown['cases'])
     assert unknown['model_calls'][0]['reserved_microusd'] > 0 and unknown['model_calls'][0]['actual_microusd'] is None
     assert run['totals']['unknown_calls'] == 1 and run['totals']['reserved_microusd_if_unknown'] == unknown['model_calls'][0]['reserved_microusd']
 

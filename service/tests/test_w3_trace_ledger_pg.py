@@ -60,32 +60,21 @@ def test_w3_replay_after_an_unknown_outcome_makes_no_second_call_and_opens_no_se
     store.close()
 
 
-def test_w3_an_unknown_call_of_another_generation_also_hands_over(database):
-    store, authority, engine, runtime, client, _ = with_model(database, [ok('must not be asked')])
-    incoming(store, 1, 'hello')
-    request_id = _make_request(database, engine, runtime, client)
-    r = _reserve(runtime, database, request_id, calling=True, worker='w-old', generation=1)
-    runtime.ledger.mark_unknown(ACCOUNT, r.call_id, 'w-old', outcome='timeout', error_class='timeout')
-    with pytest.raises(Refused, match=HANDED):
-        engine.plan(TENANT, ACCOUNT, FAN, 1)  # this pass plans generation 0
-    assert client.requests == []
-    _handed_over_once(database, ['timeout'])
-    store.close()
-
-
-def test_w3_a_lost_lease_of_another_generation_also_hands_over(database):
-    # a worker died mid-call on an older generation: the sweep is request-wide, so that call is unknown, never re-asked
+@pytest.mark.parametrize('lost', [False, True])  # recorded timeout / worker died mid-call (the sweep is request-wide)
+def test_w3_an_unresolved_call_of_another_generation_also_hands_over(database, lost):
     clock = Clock()
     store, authority, engine, runtime, client, _ = with_model(database, [ok('must not be asked')], clock=clock)
     incoming(store, 1, 'hello')
     request_id = _make_request(database, engine, runtime, client)
-    _reserve(runtime, database, request_id, calling=True, worker='w-old', generation=1)
-    _expire(database)
-    clock.offset = timedelta(seconds=1)
+    r = _reserve(runtime, database, request_id, calling=True, worker='w-old', generation=1)
+    if lost:
+        _expire(database); clock.offset = timedelta(seconds=1)
+    else:
+        runtime.ledger.mark_unknown(ACCOUNT, r.call_id, 'w-old', outcome='timeout', error_class='timeout')
     with pytest.raises(Refused, match=HANDED):
         engine.plan(TENANT, ACCOUNT, FAN, 1)  # this pass plans generation 0
     assert client.requests == []
-    _handed_over_once(database, ['lease_expired'])
+    _handed_over_once(database, ['lease_expired' if lost else 'timeout'])
     store.close()
 
 

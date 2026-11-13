@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from capture_owner import check_capture_owner
+
 HERE = Path(__file__).resolve().parent
 SESSIONS_DIR = HERE / "sessions"
 ACCOUNTS_DIR = SESSIONS_DIR / "accounts"
@@ -141,6 +143,12 @@ def migrate_legacy() -> dict[str, Any]:
             if not uid:
                 continue
             uid = str(uid)
+            try:
+                check_capture_owner(f"of-{uid}", uid, s.get("cookies") or [])
+            except ValueError:
+                # Not one OnlyFans login (no auth_id, or another login's): a capture
+                # _adopt_into_account refused stays here and is never filed or activated (F1b).
+                continue
             adir = account_dir(uid)
             adir.mkdir(parents=True, exist_ok=True)
             target = adir / sp.name

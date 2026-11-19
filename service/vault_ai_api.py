@@ -21,7 +21,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException, Query
 from sqlalchemy import case, delete, func, or_, select, update
@@ -39,6 +39,7 @@ import vault_sweep
 # NOTE: the OF payload-shape readers (`still_url`, `giphy_dm_id`) are NOT imported
 # here — `vault_frames` owns "which url in a payload is the picture" now, and this
 # module reaches them through it.
+from vault_search import build_search_text, corrected_search_text, exact_tag_filter
 from auth import assert_account_owned
 from db.engine import get_session
 from db.models import (
@@ -490,6 +491,7 @@ async def local_items(
     of_folder_id: int | None = Query(None),
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    tag: Annotated[list[str] | None, Query()] = None,
 ) -> dict[str, Any]:
     """Read the LOCAL mirror. Same {list, hasMore} shape as /api/of/v2/vault/media
     so the frontend swaps data source transparently. Search is a local LIKE-scan
@@ -498,6 +500,11 @@ async def local_items(
     date, then …-3,-2,-1 (so -1 is dead last)."""
     assert_account_owned(account_id)
     q = (query or "").strip().lower()
+    legacy_search = (
+        func.coalesce(VaultItem.search_text, "") + " " + func.coalesce(VaultItem.description, "")
+        + " " + func.coalesce(VaultItem.tags, "") + " " + func.coalesce(VaultItem.video_description, "")
+        + " " + func.coalesce(VaultItem.of_terms, "")
+    )
 
     def _apply_common(st):
         if type and type != "all":
@@ -505,20 +512,16 @@ async def local_items(
         if q:
             like = f"%{q}%"
             st = st.where(
-                func.lower(func.coalesce(VaultItem.search_text, "")).like(like)
-                | func.lower(func.coalesce(VaultItem.description, "")).like(like)
-                | func.lower(func.coalesce(VaultItem.tags, "")).like(like)
-                | func.lower(func.coalesce(VaultItem.video_description, "")).like(like)
-                # of_terms = OF's own vault-search matches (harvested by /search-of),
-                # folded per item as a JSON array e.g. ["ass","boobs"]. OF indexes
-                # hidden caption/content text the media dict never exposes, so this
-                # is the ONLY way our local search becomes a superset of OF's.
-                | func.lower(func.coalesce(VaultItem.of_terms, "")).like(like)
+                func.lower(corrected_search_text(VaultItem, dialect, legacy_search)).like(like)
             )
+        for value in tag or []:
+            if value.strip():
+                st = st.where(exact_tag_filter(VaultItem, value))
         return st
 
     out: list[dict[str, Any]] = []
     async with get_session() as s:
+        dialect = s.get_bind().dialect.name
         if internal_folder_id is not None:
             mo = VaultFolderItem.manual_order
             bucket = case((mo.is_(None), 1), (mo >= 0, 0), else_=2)
@@ -2798,21 +2801,6 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     nsfw = bool(data.get("nsfw")) if data.get("nsfw") is not None else None
     sellable = bool(data.get("sellable")) if data.get("sellable") is not None else None
     is_video = item.kind == "video"
-    # Fold the V2 taxonomy into the local search blob too, so a search for
-    # "pulled_aside" or "solo_toy" hits even though those never appear in the
-    # prose. `beats` carries the clip's progression, which is often the only
-    # place a mid-clip act is named at all.
-    v2_terms: list[str] = []
-    for key in ("acts", "body_focus", "toys", "clothing_items", "beats"):
-        v2_terms += [str(x) for x in (data.get(key) or []) if str(x).strip()]
-    for key in ("clothing_state", "penetration", "position", "setting",
-                "camera", "primary_folder"):
-        if data.get(key):
-            v2_terms.append(str(data[key]))
-    search_text = " ".join([desc, *tags, *v2_terms]).lower()
-
-    # Human edits win: never overwrite an effective field the operator locked.
-    locked = set(load_json(item.locked_fields_json, []))
     # Stamp WHICH variant produced this row: a v1 row is a candidate for a later
     # v2 re-scan, and without the stamp "already described" is ambiguous.
     data = {**data, "_prompt_version": ("v1" if str(prompt_version) == "v1" else "v2"),
@@ -2834,51 +2822,46 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     #     overwrite the model's answer with the operator's and erase the
     #     evidence that a re-run happened at all.
     #
-    # The flags are a different reading of the SAME image, so they stay valid
-    # across a re-describe. A locked dispute fix outranks model and carried alike.
-    prev = load_json(item.ai_fields_json, {}) or {}
-    for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1"):
-        if key in prev:
-            data[key] = prev[key]
-    for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():
-        if key not in locked or key not in vault_ai_fix.FIXABLE:
-            continue
-        if val is None:
-            data.pop(key, None)
-        else:
-            data[key] = val
-    vals: dict[str, Any] = {
-        "describe_status": "described",
-        "describe_model": used_model,
-        "describe_call_id": result.call_id if result else None,
-        "describe_generated_at": datetime.utcnow(),
-        "ai_fields_json": json.dumps(data, ensure_ascii=False, default=str),
-        "frames_sampled": len(got.images) if is_video else None,
-    }
-    if "tip_vault_flag" not in locked:
-        vals["tip_vault_flag"] = sellable
-    if "tags" not in locked:
-        vals["tags"] = json.dumps(tags)
-    if "explicitness_tier" not in locked:
-        vals["explicitness_tier"] = str(tier) if tier else None
-    if "description" not in locked:
-        if is_video:
-            vals["video_description"] = desc
-        else:
-            vals["description"] = desc
-    if "search_text" not in locked:
-        vals["search_text"] = search_text
-
     async with get_session() as s:
-        # A concurrent backfill may have assigned folders while vision ran.
-        # Carry its marker from the current row, not just the earlier snapshot.
-        current_fields = await s.scalar(select(VaultItem.ai_fields_json).where(
-            VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
-        current_fields = load_json(current_fields, {}) or {}
-        if isinstance(current_fields, dict) and current_fields.get("_auto_folders_v1") is True:
-            data["_auto_folders_v1"] = True
-            vals["ai_fields_json"] = json.dumps(data, ensure_ascii=False, default=str)
+        # Re-read locks under the write lock: an operator may have corrected
+        # this item while the vision request was running.
+        current = await s.scalar(select(VaultItem).where(
+            VaultItem.account_id == account_id, VaultItem.media_id == media_id
+        ).with_for_update())
+        if current is None:
+            return {"media_id": media_id, "ok": False, "status": "not_in_mirror"}
+        locked = set(load_json(current.locked_fields_json, []) or [])
+        prev = load_json(current.ai_fields_json, {}) or {}
+        for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
+                    "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1"):
+            if key in prev:
+                data[key] = prev[key]
+        for key, val in (load_json(current.operator_overrides_json, {}) or {}).items():
+            if key not in locked or key not in vault_ai_fix.FIXABLE:
+                continue
+            if val is None:
+                data.pop(key, None)
+            else:
+                data[key] = val
+        vals = {
+            "describe_status": "described",
+            "describe_model": used_model,
+            "describe_call_id": result.call_id if result else None,
+            "describe_generated_at": datetime.utcnow(),
+            "ai_fields_json": json.dumps(data, ensure_ascii=False, default=str),
+            "frames_sampled": len(got.images) if is_video else None,
+        }
+        if "tip_vault_flag" not in locked:
+            vals["tip_vault_flag"] = sellable
+        if "tags" not in locked:
+            vals["tags"] = json.dumps(tags)
+        if "explicitness_tier" not in locked:
+            vals["explicitness_tier"] = str(tier) if tier else None
+        if "description" not in locked:
+            vals["video_description" if is_video else "description"] = desc
+        if "search_text" not in locked:
+            vals["search_text"] = build_search_text(current, vals)
+
         await s.execute(
             update(VaultItem)
             .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -3276,8 +3259,8 @@ async def _harvest_query(account_id: str, q: str, client: Any = None) -> dict[st
         offset += 40
 
     async with get_session() as s:
-        for mid in matched:
-            item = await s.get(VaultItem, (account_id, mid))
+        for mid in sorted(set(matched)):
+            item = await s.get(VaultItem, (account_id, mid), with_for_update=True)
             if item is None:
                 continue
             terms = set(load_json(item.of_terms, []))
@@ -3623,7 +3606,7 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail={"error": "no_editable_fields"})
 
     async with get_session() as s:
-        item = await s.get(VaultItem, (account_id, media_id))
+        item = await s.get(VaultItem, (account_id, media_id), with_for_update=True)
         if item is None:
             raise HTTPException(
                 status_code=404, detail={"error": "not_in_mirror", "media_id": media_id}
@@ -3680,6 +3663,8 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
                                                     default=str)
         col_vals["operator_overrides_json"] = json.dumps(overrides, ensure_ascii=False)
         col_vals["locked_fields_json"] = json.dumps(sorted(locked))
+        if {"tags", "description"} & edits.keys():
+            col_vals["search_text"] = build_search_text(item, col_vals)
         await s.execute(
             update(VaultItem)
             .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)

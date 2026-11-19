@@ -63,6 +63,8 @@ import re
 
 from sqlalchemy import case, func, literal, or_, select
 
+from vault_search import corrected_search_text
+
 import vault_pack_picker
 import vault_scripts                    # is_solo — one definition of "she is alone"
 from db.engine import get_session
@@ -177,19 +179,25 @@ async def _described_pool(account_id: str, seen: set[int],
     """
     terms = [t for t in (terms or []) if t]
     async with get_session() as s:
-        q = select(VaultItem.media_id, VaultItem.kind, VaultItem.search_text,
-                   VaultItem.description, VaultItem.video_description).where(
-            VaultItem.account_id == str(account_id),
-            VaultItem.removed_at.is_(None),
+        dialect = s.get_bind().dialect.name
+        text = corrected_search_text(
+            VaultItem, dialect,
+            func.coalesce(func.nullif(VaultItem.search_text, ""),
+                          func.nullif(VaultItem.description, ""), VaultItem.video_description, ""),
+        )
+        q = select(VaultItem.media_id, VaultItem.kind, text).where(
+            VaultItem.account_id == str(account_id), VaultItem.removed_at.is_(None),
         )
         if media_kind in MEDIA_KINDS:
             q = q.where(VaultItem.kind == media_kind)
         if terms:
-            blob = func.lower(
+            blob = func.lower(corrected_search_text(
+                VaultItem, dialect,
                 func.coalesce(VaultItem.search_text, "")
                 + " " + func.coalesce(VaultItem.description, "")
                 + " " + func.coalesce(VaultItem.video_description, "")
-                + " " + func.coalesce(VaultItem.ai_fields_json, ""))
+                + " " + func.coalesce(VaultItem.ai_fields_json, ""),
+            ))
             q = q.where(or_(*[blob.like(f"%{t}%") for t in terms]))
         # 🚨 RANK IN SQL, so the LIMIT keeps the most RELEVANT rows.
         #
@@ -219,8 +227,7 @@ async def _described_pool(account_id: str, seen: set[int],
             # rather than refusing a fan who genuinely asked for something.
             log.info("retrieval miss account=%s terms=%s — broad fallback",
                      account_id, terms[:6])
-            broad = select(VaultItem.media_id, VaultItem.kind, VaultItem.search_text,
-                           VaultItem.description, VaultItem.video_description).where(
+            broad = select(VaultItem.media_id, VaultItem.kind, text).where(
                 VaultItem.account_id == str(account_id),
                 VaultItem.removed_at.is_(None))
             if media_kind in MEDIA_KINDS:
@@ -241,10 +248,10 @@ async def _described_pool(account_id: str, seen: set[int],
     # LIMIT. `seen` is still filtered here because it is a per-fan set, not a
     # property of the corpus.
     out: list[tuple[int, str]] = []
-    for mid, _kind, search_text, desc, vdesc in rows:
+    for mid, _kind, search_text in rows:
         if int(mid) in seen:
             continue
-        text = " ".join(str(search_text or desc or vdesc or "").split())
+        text = " ".join(str(search_text or "").split())
         # 🚨 OF fills `search_text` with the bare KIND WORD for media it has no
         # prose for: 699 audio rows on this roster read exactly "audio", and 26
         # gifs read "gif". That is a placeholder, not a description — it tells

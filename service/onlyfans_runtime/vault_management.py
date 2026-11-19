@@ -24,6 +24,7 @@ from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_vault_models import OfVaultObservation, OfVaultProductCreate, OfVaultSyncJob
 from vault_mirror import MIRROR_REFRESH_FIELDS, row_values
 from vault_ai_effective import effective_value
+from vault_search import corrected_search_text
 from .content_management import digest, editable, validate_patch
 from .native_context import canonical
 from .native_protocol import MAX_VAULT_BYTES, NativeProtocolError, load
@@ -251,9 +252,12 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         if search:
             # Search existing metadata owners. Treat LIKE metacharacters as
             # literal user text; no provider request or additional analyzer.
-            query = query.where(or_(*(func.lower(func.coalesce(field, "")).contains(search, autoescape=True)
-                for field in [VaultItem.search_text, VaultItem.description, VaultItem.video_description,
-                              VaultItem.tags, VaultItem.notes, VaultItem.operator_overrides_json])))
+            legacy_search = func.coalesce(VaultItem.search_text, "")
+            for field in (VaultItem.description, VaultItem.video_description, VaultItem.tags,
+                          VaultItem.notes, VaultItem.operator_overrides_json):
+                legacy_search = legacy_search + " " + func.coalesce(field, "")
+            haystack = corrected_search_text(VaultItem, s.get_bind().dialect.name, legacy_search)
+            query = query.where(func.lower(haystack).contains(search, autoescape=True))
         summary = None
         if include_summary:
             summary = _library_summary(s, account, all_assets, query)

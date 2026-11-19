@@ -3,6 +3,7 @@ import asyncio, io, json, os, sys, tempfile, contextlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 TMP = tempfile.mkdtemp()
@@ -168,5 +169,75 @@ async def main():
     check(await llm_client._tenant_api_key(ACCOUNT, prov, "describe_media") == "test-key", "env key used")
 
 
-asyncio.run(main())
+
+async def verify_tag_correction():
+    from automations.content_resolver import _described_pool
+
+    old, new = "obsolete label", "black shorts"
+    async with get_session() as s:
+        s.add(VaultItem(
+            account_id=ACCOUNT, media_id=90, kind="photo", created_at=NOW,
+            description="black outfit", tags=json.dumps([old]),
+            ai_fields_json=json.dumps({"tags": [old], "clothing_items": ["shorts"]}),
+            search_text=f"black outfit {old}",
+        ))
+        s.add(VaultItem(
+            account_id=ACCOUNT, media_id=91, kind="photo", created_at=NOW,
+            description=old, tags=json.dumps([old]), search_text=old,
+        ))
+
+    async def ids(**kwargs):
+        result = await api.local_items(
+            account_id=ACCOUNT, type="all", sort="newest", query=None,
+            internal_folder_id=None, of_folder_id=None, limit=100, offset=0, **kwargs,
+        )
+        return {item["id"] for item in result["list"]}
+
+    with patch.object(api, "assert_account_owned"):
+        result = await api.edit_item(90, {"account_id": ACCOUNT, "fields": {"tags": [new]}})
+        check(result["item"]["tags"] == [new] and "tags" in result["locked"], result)
+        async with get_session() as s:
+            row = await s.get(VaultItem, (ACCOUNT, 90))
+            check(new in row.search_text and old not in row.search_text, row.search_text)
+            # An older edit or stale analyzer cache must not win even when it
+            # still contains the removed text.
+            row.search_text = f"black outfit {old}"
+
+        check(90 in await ids(tag=[new]), "the new exact tag finds the item")
+        check(await ids(tag=[old]) == {91}, "the removed exact tag finds only the valid match")
+        check(90 not in await ids(tag=[new, old]), "two exact tags must both match")
+        for query, expected in ((old, {91}), (new, {90})):
+            response = await api.local_items(
+                account_id=ACCOUNT, type="all", sort="newest", query=query,
+                internal_folder_id=None, of_folder_id=None, limit=100, offset=0,
+            )
+            check({item["id"] for item in response["list"]} == expected, query)
+
+    old_matches = await _described_pool(ACCOUNT, set(), "photo", [old])
+    check([mid for mid, _ in old_matches] == [91], "seller ignores the stale model tag")
+    new_matches = await _described_pool(ACCOUNT, set(), "photo", [new])
+    check([mid for mid, _ in new_matches] == [90], "seller retrieves the corrected tag")
+    check(old not in new_matches[0][1], "stale tag is absent from the seller's shortlist text")
+
+    async def stale_analyzer(**kwargs):
+        body = json.dumps({"description": "black outfit", "tags": [old], "explicitness": "sfw"})
+        return SimpleNamespace(content=body, call_id=78, cost_cents=0)
+
+    with patch.object(llm_client, "chat", stale_analyzer):
+        result = await api._describe_one(ACCOUNT, 90, model=cv.DEFAULT_MODEL)
+        check(result["ok"], result)
+    async with get_session() as s:
+        row = await s.get(VaultItem, (ACCOUNT, 90))
+        check(json.loads(row.tags) == [new], "re-describe preserves the operator's tag")
+        check(new in row.search_text and old not in row.search_text,
+              "re-describe cannot restore the removed tag in the search cache")
+
+
+
+async def verify():
+    await main()
+    await verify_tag_correction()
+
+
+asyncio.run(verify())
 print(f"ok {COUNT} checks")

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from db.models import VaultItem,VaultFolder,VaultFolderItem
 from db.onlyfans_vault_edit_models import OfVaultEdit
 from vault_ai_effective import effective_value,project_operator_text
+from vault_search import build_search_text
 from .configuration import object_value
 from .native_context import canonical
 from .store import Refused,utcnow
@@ -121,6 +122,7 @@ def edit_asset(store,tenant,account,media_id,*,patch,expected_fingerprint,comman
         for field,value in patch.items():project_operator_text(field,value,overrides,locked,columns)
         for field,value in columns.items():setattr(row,field,value)
         row.operator_overrides_json=canonical(overrides);row.locked_fields_json=canonical(sorted(locked))
+        row.search_text = build_search_text(row, {})
         after=asset_view(row)
         if after["fingerprint"]==before["fingerprint"]:raise InvalidVault("No asset change was needed.")
         return _record(s,runtime,command_key,request_hash,actor,"asset_edit",media,before,after)
